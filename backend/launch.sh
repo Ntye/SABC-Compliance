@@ -69,10 +69,12 @@ if command -v lsof &>/dev/null; then
     fi
 fi
 
-# Run — use the venv's uvicorn directly; no need to source activate
+# Run — --app-dir src adds src/ to sys.path so all intra-package
+# imports (config, core.*, modules.*, infrastructure.*, interface.*)
+# resolve correctly.
 UVICORN="$ROOT/.venv/bin/uvicorn"
 if [ "${ENVIRONMENT:-development}" = "production" ]; then
-    exec "$UVICORN" src.main:app --host 0.0.0.0 --port "$PORT"
+    exec "$UVICORN" main:app --app-dir "$ROOT/src" --host 0.0.0.0 --port "$PORT"
 else
-    exec "$UVICORN" src.main:app --host 0.0.0.0 --port "$PORT" --reload
+    exec "$UVICORN" main:app --app-dir "$ROOT/src" --host 0.0.0.0 --port "$PORT" --reload
 fi
