@@ -83,10 +83,13 @@ export default function AddVmPage() {
     }
   }
 
-  const sshKey = form.ssh_key_path || '~/.ssh/id_rsa'
+  const sshKey = form.ssh_key_path || './keys/ansible_id_rsa'
   const sshUser = form.ssh_user || 'ansible'
 
-  const setupCmd = `# 1. Create the ansible user on the target server
+  const setupCmd = `# 0. If you see "REMOTE HOST IDENTIFICATION HAS CHANGED", clear the cached entry first:
+ssh-keygen -R ${form.ip || '<server-ip>'}
+
+# 1. Create the ansible user on the target server
 ssh root@${form.ip || '<server-ip>'} "
   useradd -m -s /bin/bash ${sshUser}
   mkdir -p /home/${sshUser}/.ssh
@@ -94,8 +97,10 @@ ssh root@${form.ip || '<server-ip>'} "
   chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh
 "
 
-# 2. Copy the platform's public key
-ssh-copy-id -i ${sshKey}.pub ${sshUser}@${form.ip || '<server-ip>'}
+# 2. Copy the PLATFORM key (backend/keys/ansible_id_rsa.pub) — not your personal ~/.ssh key
+ssh-copy-id -i ${sshKey}.pub \\
+  -o StrictHostKeyChecking=no \\
+  ${sshUser}@${form.ip || '<server-ip>'}
 
 # 3. Grant passwordless sudo
 ssh root@${form.ip || '<server-ip>'} "
