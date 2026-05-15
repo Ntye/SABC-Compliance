@@ -36,6 +36,9 @@ sudo apt-get install python3.11 python3.11-venv python3-pip lsof
 python3 --version   # must be 3.11 or higher
 ```
 
+> **Tip:** `launch.sh` uses `python -m pip` internally (not the `pip` binary directly),
+> so it works even on systems where the venv doesn't create a `pip` symlink.
+
 ---
 
 ## Manual Launch (without launch.sh)

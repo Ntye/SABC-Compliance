@@ -21,8 +21,9 @@ fi
 # Install deps if needed
 if ! "$ROOT/.venv/bin/python" -c "import fastapi" 2>/dev/null; then
     echo "Installing dependencies..."
-    "$ROOT/.venv/bin/pip" install -q --upgrade pip
-    "$ROOT/.venv/bin/pip" install -q -r "$ROOT/requirements.txt"
+    "$ROOT/.venv/bin/python" -m ensurepip --upgrade 2>/dev/null || true
+    "$ROOT/.venv/bin/python" -m pip install -q --upgrade pip
+    "$ROOT/.venv/bin/python" -m pip install -q -r "$ROOT/requirements.txt"
 fi
 
 # Create directories
