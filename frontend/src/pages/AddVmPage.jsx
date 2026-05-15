@@ -50,6 +50,7 @@ export default function AddVmPage() {
   const [form, setForm] = useState(DEFAULT_FORM)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null) // { success: bool, node?, error? }
+  const [bootstrapUser, setBootstrapUser] = useState('root')
 
   function set(field) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))
@@ -85,30 +86,31 @@ export default function AddVmPage() {
 
   const sshKey = form.ssh_key_path || './keys/ansible_id_rsa'
   const sshUser = form.ssh_user || 'ansible'
+  const bUser = bootstrapUser || 'root'
+  const sudoPrefix = bUser === 'root' ? '' : 'sudo '
 
   const setupCmd = `# 0. If you see "REMOTE HOST IDENTIFICATION HAS CHANGED", clear the cached entry first:
 ssh-keygen -R ${form.ip || '<server-ip>'}
 
-# 1. Create the ansible user (via root SSH)
-ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
-  useradd -m -s /bin/bash ${sshUser} 2>/dev/null || true
-  mkdir -p /home/${sshUser}/.ssh
-  chmod 700 /home/${sshUser}/.ssh
-  chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh
+# 1. Create the ${sshUser} user (connect as ${bUser})
+ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
+  ${sudoPrefix}useradd -m -s /bin/bash ${sshUser} 2>/dev/null || true
+  ${sudoPrefix}mkdir -p /home/${sshUser}/.ssh
+  ${sudoPrefix}chmod 700 /home/${sshUser}/.ssh
+  ${sudoPrefix}chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh
 "
 
-# 2. Install the PLATFORM key — pipe it through root (no password needed for ${sshUser})
-#    Run this from your backend/ directory
-cat ${sshKey}.pub | ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
-  tee -a /home/${sshUser}/.ssh/authorized_keys
-  chmod 600 /home/${sshUser}/.ssh/authorized_keys
-  chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh/authorized_keys
+# 2. Install the PLATFORM key — run from backend/ directory
+cat ${sshKey}.pub | ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
+  ${sudoPrefix}tee -a /home/${sshUser}/.ssh/authorized_keys
+  ${sudoPrefix}chmod 600 /home/${sshUser}/.ssh/authorized_keys
+  ${sudoPrefix}chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh/authorized_keys
 "
 
 # 3. Grant passwordless sudo
-ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
-  echo '${sshUser} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${sshUser}
-  chmod 440 /etc/sudoers.d/${sshUser}
+ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
+  echo '${sshUser} ALL=(ALL) NOPASSWD:ALL' | ${sudoPrefix}tee /etc/sudoers.d/${sshUser}
+  ${sudoPrefix}chmod 440 /etc/sudoers.d/${sshUser}
 "`
 
   const verifyCmd = `ssh -i ${sshKey} \\
@@ -252,16 +254,29 @@ ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
           <Terminal size={14} className="text-console-accent" />
           <h3 className="text-[13px] font-semibold text-console-text">SSH Setup Helper</h3>
         </div>
-        <p className="text-[12px] text-console-muted mb-5 leading-relaxed">
+        <p className="text-[12px] text-console-muted mb-4 leading-relaxed">
           The platform connects to each server over SSH using the ansible user and key-based authentication.
-          Run these commands on your target server before registering it above.
+          Run these commands from your <span className="font-mono text-console-text">backend/</span> directory before registering.
         </p>
+        <div className="mb-5">
+          <label className="block text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-1.5">
+            Your admin user on this server
+          </label>
+          <input
+            value={bootstrapUser}
+            onChange={(e) => setBootstrapUser(e.target.value)}
+            placeholder="root / debian / ubuntu / ec2-user"
+            className="w-full px-3 py-2 text-[12px] font-mono bg-console-surface border border-white/10 rounded-lg outline-none text-console-text placeholder:text-console-muted focus:border-white/30 transition-colors"
+          />
+          <p className="text-[10px] text-console-muted mt-1">
+            The user you SSH into this server as today (must have sudo or be root). The commands below update automatically.
+          </p>
+        </div>
         <CodeBlock label="1 — Create user + authorize key" code={setupCmd} />
         <CodeBlock label="2 — Verify connection (run from this machine)" code={verifyCmd} />
         <p className="text-[11px] text-console-muted mt-2">
-          Run all commands from the <span className="font-mono text-console-text">backend/</span> directory.
-          The platform key is at <span className="font-mono text-console-text">keys/ansible_id_rsa.pub</span> — never use your personal <span className="font-mono text-console-text">~/.ssh</span> key.
-          Step 2 pipes the key through root so no ansible password is required.
+          The platform key is <span className="font-mono text-console-text">keys/ansible_id_rsa.pub</span> — never your personal <span className="font-mono text-console-text">~/.ssh</span> key.
+          Step 2 pipes it through your admin session so the ansible user never needs a password.
         </p>
       </div>
     </div>
