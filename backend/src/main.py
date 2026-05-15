@@ -178,22 +178,8 @@ return safe empty responses. Every endpoint works in stub mode.
         allow_headers=["*"],
     )
     app.add_middleware(RateLimitMiddleware, max_per_minute=200)
-
-    # Auth middleware needs audit_repo — attached in lifespan via app.state
-    # We add AuditMiddleware lazily using a wrapper that reads app.state
-    class _LazyAuditMiddleware(AuditMiddleware):
-        def __init__(self, app_):
-            # Don't call super().__init__ yet — no audit_repo
-            from starlette.middleware.base import BaseHTTPMiddleware
-            BaseHTTPMiddleware.__init__(self, app_)
-            self._audit = None
-
-        async def dispatch(self, request, call_next):
-            if self._audit is None:
-                self._audit = request.app.state.audit_repo
-            return await super().dispatch(request, call_next)
-
-    app.add_middleware(_LazyAuditMiddleware)
+    # AuditMiddleware reads audit_repo from request.app.state (set in lifespan)
+    app.add_middleware(AuditMiddleware)
 
     # Register error handlers
     error_map = {

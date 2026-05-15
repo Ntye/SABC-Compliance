@@ -12,14 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, audit_repo) -> None:
-        super().__init__(app)
-        self._audit = audit_repo
+    """Reads audit_repo from request.app.state — no constructor arg needed."""
 
     async def dispatch(self, request: Request, call_next):
         start = time.monotonic()
         response = await call_next(request)
         duration_ms = int((time.monotonic() - start) * 1000)
+
+        audit_repo = getattr(request.app.state, "audit_repo", None)
+        if audit_repo is None:
+            return response
 
         api_key_name = None
         x_key = request.headers.get("X-API-Key", "")
@@ -36,7 +38,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
             "duration_ms": duration_ms,
             "api_key_name": api_key_name,
         }
-        asyncio.create_task(self._audit.save(entry))
+        asyncio.create_task(audit_repo.save(entry))
         return response
 
 
@@ -46,7 +48,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._max = max_per_minute
         self._counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
-        asyncio.create_task(self._clear_loop())
+        self._cleaner_started = False
 
     async def _clear_loop(self) -> None:
         while True:
@@ -55,6 +57,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 self._counts.clear()
 
     async def dispatch(self, request: Request, call_next):
+        if not self._cleaner_started:
+            self._cleaner_started = True
+            asyncio.create_task(self._clear_loop())
+
         ip = request.client.host if request.client else "unknown"
         async with self._lock:
             self._counts[ip] = self._counts.get(ip, 0) + 1
