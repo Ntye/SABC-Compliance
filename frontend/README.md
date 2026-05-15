@@ -176,7 +176,7 @@ The sidebar footer contains a link to `{gatewayUrl}/docs` which opens the FastAP
 |---------|--------|--------------|
 | 0 — Scaffolding | ✅ Done | All config files |
 | 1 — Auth | ✅ Done | LoginPage, ApiKeysPage, Shell, Sidebar, Header |
-| 2 — Node Registry | 🔜 Next | NodesPage, AddVmPage |
+| 2 — Node Registry | ✅ Done | NodesPage, AddVmPage |
 | 3 — Jobs | 🔜 | JobsPage (WebSocket log stream) |
 | 4 — Compliance | 🔜 | CompliancePage |
 | 5 — Rules | 🔜 | PuppetRulesPage (4-step stepper) |

@@ -138,6 +138,27 @@ curl -H "X-API-Key: bdc_<hex>" http://localhost:3000/auth/keys
 
 ---
 
+## API Endpoints (Feature 2 — Node Registry)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/nodes` | any | List nodes (filter by `status`, `os_family`) |
+| `POST` | `/nodes` | operator | Register a new node (tests SSH + detects OS) |
+| `GET` | `/nodes/{id}` | any | Get node by UUID or hostname |
+| `PATCH` | `/nodes/{id}` | operator | Update hostname, description, tags, SSH settings |
+| `DELETE` | `/nodes/{id}` | admin | Permanently remove a node |
+| `POST` | `/nodes/{id}/ping` | operator | Ping one node, update its status |
+| `POST` | `/nodes/ping-all` | operator | Ping every node concurrently |
+
+### Node Registration Flow
+1. SSH connectivity tested (`ssh … echo OK`, 8 s timeout)
+2. OS detected via `cat /etc/os-release` (15 s timeout)
+3. OS family mapped: `rhel|centos|rocky|almalinux|fedora` → `RedHat`, `debian|ubuntu` → `Debian`
+4. Node saved with `status: reachable` only after both steps succeed
+5. If SSH fails → `422` with the exact SSH error message
+
+---
+
 ## Interactive API Docs
 
 | URL | Description |
@@ -214,7 +235,7 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 |---------|--------|-------------|
 | 0 — Scaffolding | ✅ Done | Project structure, config, tooling |
 | 1 — Auth | ✅ Done | Login, API keys, users, JWT |
-| 2 — Node Registry | 🔜 Next | Register servers, SSH ping, OS detection |
+| 2 — Node Registry | ✅ Done | Register servers, SSH ping, OS detection |
 | 3 — Jobs | 🔜 | Ansible provisioning, WebSocket log stream |
 | 4 — Compliance | 🔜 | Puppet/Wazuh integration, webhook, remediation |
 | 5 — Rules | 🔜 | Puppet compliance rules library |
