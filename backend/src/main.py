@@ -26,7 +26,13 @@ from modules.auth.usecases import (
     RevokeApiKeyUseCase,
 )
 from core.events import EventBus
+from infrastructure.ssh.adapter import SshClientAdapter
+from modules.nodes.usecases import (
+    DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
+    PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
+)
 from interface.http.routes import auth as auth_routes
+from interface.http.routes import nodes as nodes_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -94,6 +100,28 @@ async def lifespan(app: FastAPI):
 
     # -- WebSocket manager (stub) --
     ws_manager = WebSocketManager(job_repo)
+
+    # -- SSH client --
+    ssh_client = SshClientAdapter(settings.ssh_key_path)
+
+    # -- Node use cases --
+    register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)
+    get_node_uc = GetNodeUseCase(node_repo)
+    list_nodes_uc = ListNodesUseCase(node_repo)
+    ping_node_uc = PingNodeUseCase(node_repo, ssh_client)
+    ping_all_uc = PingAllNodesUseCase(node_repo, ssh_client)
+    update_node_uc = UpdateNodeUseCase(node_repo)
+    delete_node_uc = DeleteNodeUseCase(node_repo)
+
+    nodes_routes.set_use_cases(
+        register_uc=register_node_uc,
+        get_uc=get_node_uc,
+        list_uc=list_nodes_uc,
+        ping_uc=ping_node_uc,
+        ping_all_uc=ping_all_uc,
+        update_uc=update_node_uc,
+        delete_uc=delete_node_uc,
+    )
 
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
@@ -198,6 +226,7 @@ return safe empty responses. Every endpoint works in stub mode.
 
     # Include routers
     app.include_router(auth_routes.router)
+    app.include_router(nodes_routes.router)
 
     # Health stub (minimal — full implementation in Feature 6)
     from fastapi import APIRouter
