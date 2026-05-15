@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import re
+import socket
 import uuid
 from datetime import datetime
 
@@ -44,6 +45,8 @@ class RegisterNodeUseCase:
             raise SSHConnectError(error or "SSH connection failed")
 
         os_family, os_name, os_version = await self._detect_os(ip, ssh_port, ssh_user, ssh_key_path)
+        fqdn = await self._get_fqdn(ip, ssh_port, ssh_user, ssh_key_path)
+        dns_resolves = await self._check_dns(hostname, ip)
 
         now = datetime.utcnow()
         node = Node(
@@ -56,6 +59,8 @@ class RegisterNodeUseCase:
             os_family=os_family,
             os_name=os_name,
             os_version=os_version,
+            fqdn=fqdn,
+            dns_resolves=dns_resolves,
             description=data.get("description"),
             tags=data.get("tags", []),
             status="reachable",
@@ -92,6 +97,23 @@ class RegisterNodeUseCase:
         os_name = fields.get("PRETTY_NAME") or fields.get("NAME")
         os_version = fields.get("VERSION_ID")
         return os_family, os_name, os_version
+
+    async def _get_fqdn(self, ip: str, port: int, user: str, key_path: str | None) -> str | None:
+        stdout, _, _ = await self._ssh.run_command(
+            ip, port, user, key_path, "hostname -f 2>/dev/null || hostname"
+        )
+        fqdn = stdout.strip()
+        return fqdn if fqdn else None
+
+    async def _check_dns(self, hostname: str, expected_ip: str) -> bool:
+        loop = asyncio.get_event_loop()
+        try:
+            results = await loop.run_in_executor(
+                None, lambda: socket.getaddrinfo(hostname, None)
+            )
+            return any(r[4][0] == expected_ip for r in results)
+        except Exception:
+            return False
 
 
 class GetNodeUseCase:

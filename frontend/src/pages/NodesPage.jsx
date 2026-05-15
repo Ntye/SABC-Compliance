@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
 import { deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -177,8 +177,17 @@ export default function NodesPage() {
                     {/* Hostname */}
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{node.hostname}</div>
+                      {node.fqdn && node.fqdn !== node.hostname && (
+                        <div className="text-[11px] font-mono text-gray-400 truncate max-w-[200px]">{node.fqdn}</div>
+                      )}
                       {node.description && (
-                        <div className="text-[11px] text-gray-400 truncate max-w-[180px]">{node.description}</div>
+                        <div className="text-[11px] text-gray-400 truncate max-w-[200px]">{node.description}</div>
+                      )}
+                      {node.dns_resolves === false && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
+                          <span className="text-[10px] text-amber-600 font-medium">DNS not resolving</span>
+                        </div>
                       )}
                     </td>
                     {/* IP */}

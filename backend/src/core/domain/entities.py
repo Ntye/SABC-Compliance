@@ -18,6 +18,8 @@ class Node:
     description: str | None = None
     tags: list[str] = field(default_factory=list)
     status: str = "registered"
+    fqdn: str | None = None
+    dns_resolves: bool | None = None
     puppet_enrolled: bool = False
     wazuh_enrolled: bool = False
     inspec_installed: bool = False

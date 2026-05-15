@@ -22,6 +22,8 @@ class NodeResponse(BaseModel):
     os_family: str | None = None
     os_name: str | None = None
     os_version: str | None = None
+    fqdn: str | None = None
+    dns_resolves: bool | None = None
     description: str | None = None
     tags: list[str]
     status: str
@@ -87,6 +89,8 @@ def _to_response(node) -> NodeResponse:
         os_family=node.os_family,
         os_name=node.os_name,
         os_version=node.os_version,
+        fqdn=node.fqdn,
+        dns_resolves=node.dns_resolves,
         description=node.description,
         tags=node.tags,
         status=node.status,

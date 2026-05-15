@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, MetaData, String, Table, Text, select, delete, update, func
+    Column, Integer, MetaData, String, Table, Text, select, delete, update, func, text
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -32,6 +32,8 @@ nodes_table = Table(
     Column("os_family", Text),
     Column("os_name", Text),
     Column("os_version", Text),
+    Column("fqdn", Text),
+    Column("dns_resolves", Integer),
     Column("description", Text),
     Column("tags", Text, default="[]"),
     Column("status", Text, default="registered"),
@@ -156,6 +158,11 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
+            except Exception:
+                pass  # column already exists
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory
 
@@ -177,6 +184,8 @@ class NodeRepository(INodeRepository):
             os_family=row.os_family,
             os_name=row.os_name,
             os_version=row.os_version,
+            fqdn=getattr(row, 'fqdn', None),
+            dns_resolves=None if getattr(row, 'dns_resolves', None) is None else bool(row.dns_resolves),
             description=row.description,
             tags=json.loads(row.tags or "[]"),
             status=row.status or "registered",
@@ -199,6 +208,8 @@ class NodeRepository(INodeRepository):
             "os_family": node.os_family,
             "os_name": node.os_name,
             "os_version": node.os_version,
+            "fqdn": node.fqdn,
+            "dns_resolves": None if node.dns_resolves is None else int(node.dns_resolves),
             "description": node.description,
             "tags": json.dumps(node.tags),
             "status": node.status,
