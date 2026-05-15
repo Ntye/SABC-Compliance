@@ -17,6 +17,17 @@ REMEDIATION_TRIGGERED = "remediation.triggered"
 REMEDIATION_COMPLETED = "remediation.completed"
 
 
+class Events:
+    """Namespace so use cases can write Events.NODE_REGISTERED instead of bare constants."""
+    NODE_REGISTERED = NODE_REGISTERED
+    JOB_STARTED = JOB_STARTED
+    JOB_LOG_LINE = JOB_LOG_LINE
+    JOB_COMPLETED = JOB_COMPLETED
+    COMPLIANCE_VIOLATION_DETECTED = COMPLIANCE_VIOLATION_DETECTED
+    REMEDIATION_TRIGGERED = REMEDIATION_TRIGGERED
+    REMEDIATION_COMPLETED = REMEDIATION_COMPLETED
+
+
 class EventBus(IEventBus):
     def __init__(self) -> None:
         self._handlers: dict[str, list[Callable]] = {}
