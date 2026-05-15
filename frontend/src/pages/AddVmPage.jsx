@@ -89,21 +89,24 @@ export default function AddVmPage() {
   const setupCmd = `# 0. If you see "REMOTE HOST IDENTIFICATION HAS CHANGED", clear the cached entry first:
 ssh-keygen -R ${form.ip || '<server-ip>'}
 
-# 1. Create the ansible user on the target server
-ssh root@${form.ip || '<server-ip>'} "
-  useradd -m -s /bin/bash ${sshUser}
+# 1. Create the ansible user (via root SSH)
+ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
+  useradd -m -s /bin/bash ${sshUser} 2>/dev/null || true
   mkdir -p /home/${sshUser}/.ssh
   chmod 700 /home/${sshUser}/.ssh
   chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh
 "
 
-# 2. Copy the PLATFORM key (backend/keys/ansible_id_rsa.pub) — not your personal ~/.ssh key
-ssh-copy-id -i ${sshKey}.pub \\
-  -o StrictHostKeyChecking=no \\
-  ${sshUser}@${form.ip || '<server-ip>'}
+# 2. Install the PLATFORM key — pipe it through root (no password needed for ${sshUser})
+#    Run this from your backend/ directory
+cat ${sshKey}.pub | ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
+  tee -a /home/${sshUser}/.ssh/authorized_keys
+  chmod 600 /home/${sshUser}/.ssh/authorized_keys
+  chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh/authorized_keys
+"
 
 # 3. Grant passwordless sudo
-ssh root@${form.ip || '<server-ip>'} "
+ssh -o StrictHostKeyChecking=no root@${form.ip || '<server-ip>'} "
   echo '${sshUser} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${sshUser}
   chmod 440 /etc/sudoers.d/${sshUser}
 "`
@@ -256,8 +259,9 @@ ssh root@${form.ip || '<server-ip>'} "
         <CodeBlock label="1 — Create user + authorize key" code={setupCmd} />
         <CodeBlock label="2 — Verify connection (run from this machine)" code={verifyCmd} />
         <p className="text-[11px] text-console-muted mt-2">
-          The platform's public key is at <span className="font-mono text-console-text">./keys/ansible_id_rsa.pub</span>.
-          Copy its contents into <span className="font-mono text-console-text">/home/{sshUser}/.ssh/authorized_keys</span> if ssh-copy-id is not available.
+          Run all commands from the <span className="font-mono text-console-text">backend/</span> directory.
+          The platform key is at <span className="font-mono text-console-text">keys/ansible_id_rsa.pub</span> — never use your personal <span className="font-mono text-console-text">~/.ssh</span> key.
+          Step 2 pipes the key through root so no ansible password is required.
         </p>
       </div>
     </div>
