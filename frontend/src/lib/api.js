@@ -151,6 +151,10 @@ export async function deleteNode(id) {
   return request('DELETE', `/nodes/${id}`)
 }
 
+export async function checkNodeDns(id) {
+  return request('POST', `/nodes/${id}/check-dns`)
+}
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export async function listJobs(limit = 50) {

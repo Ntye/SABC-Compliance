@@ -28,7 +28,7 @@ from modules.auth.usecases import (
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
 from modules.nodes.usecases import (
-    DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
+    CheckNodeDnsUseCase, DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from interface.http.routes import auth as auth_routes
@@ -112,6 +112,11 @@ async def lifespan(app: FastAPI):
     ping_all_uc = PingAllNodesUseCase(node_repo, ssh_client)
     update_node_uc = UpdateNodeUseCase(node_repo)
     delete_node_uc = DeleteNodeUseCase(node_repo)
+    check_dns_uc = CheckNodeDnsUseCase(
+        node_repo, ssh_client,
+        settings.puppet_master_host,
+        settings.wazuh_manager_host,
+    )
 
     nodes_routes.set_use_cases(
         register_uc=register_node_uc,
@@ -121,6 +126,7 @@ async def lifespan(app: FastAPI):
         ping_all_uc=ping_all_uc,
         update_uc=update_node_uc,
         delete_uc=delete_node_uc,
+        check_dns_uc=check_dns_uc,
     )
 
     # -- Attach audit repo to middleware --

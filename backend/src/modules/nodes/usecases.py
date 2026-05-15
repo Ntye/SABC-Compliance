@@ -20,6 +20,35 @@ async def _resolve_node(repo: INodeRepository, id_or_hostname: str) -> Node:
     return node
 
 
+async def _check_dns_local(hostname: str, expected_ip: str) -> bool:
+    """Check whether this machine can resolve hostname to expected_ip."""
+    loop = asyncio.get_event_loop()
+    try:
+        results = await loop.run_in_executor(
+            None, lambda: socket.getaddrinfo(hostname, None)
+        )
+        return any(r[4][0] == expected_ip for r in results)
+    except Exception:
+        return False
+
+
+async def _noop() -> None:
+    return None
+
+
+async def _check_dns_remote(ssh: ISSHClient, node: Node, target_hostname: str) -> bool | None:
+    """SSH into node and check whether it can resolve target_hostname."""
+    cmd = f"getent hosts {target_hostname} > /dev/null 2>&1 && echo DNS_OK || echo DNS_FAIL"
+    stdout, _, rc = await ssh.run_command(
+        node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path, cmd
+    )
+    if "DNS_OK" in stdout:
+        return True
+    if "DNS_FAIL" in stdout:
+        return False
+    return None
+
+
 class RegisterNodeUseCase:
     def __init__(self, node_repository: INodeRepository, ssh_client: ISSHClient, event_bus: IEventBus) -> None:
         self._repo = node_repository
@@ -46,7 +75,7 @@ class RegisterNodeUseCase:
 
         os_family, os_name, os_version = await self._detect_os(ip, ssh_port, ssh_user, ssh_key_path)
         fqdn = await self._get_fqdn(ip, ssh_port, ssh_user, ssh_key_path)
-        dns_resolves = await self._check_dns(hostname, ip)
+        dns_resolves = await _check_dns_local(hostname, ip)
 
         now = datetime.utcnow()
         node = Node(
@@ -105,16 +134,6 @@ class RegisterNodeUseCase:
         fqdn = stdout.strip()
         return fqdn if fqdn else None
 
-    async def _check_dns(self, hostname: str, expected_ip: str) -> bool:
-        loop = asyncio.get_event_loop()
-        try:
-            results = await loop.run_in_executor(
-                None, lambda: socket.getaddrinfo(hostname, None)
-            )
-            return any(r[4][0] == expected_ip for r in results)
-        except Exception:
-            return False
-
 
 class GetNodeUseCase:
     def __init__(self, node_repository: INodeRepository) -> None:
@@ -147,6 +166,7 @@ class PingNodeUseCase:
         latency_ms = round((loop.time() - start) * 1000, 1)
         if ok:
             node.mark_reachable()
+            node.dns_resolves = await _check_dns_local(node.hostname, node.ip)
         else:
             node.mark_unreachable()
         node.updated_at = datetime.utcnow()
@@ -158,6 +178,7 @@ class PingNodeUseCase:
             "latency_ms": latency_ms if ok else None,
             "error": error,
             "status": node.status,
+            "dns_resolves": node.dns_resolves,
         }
 
 
@@ -173,6 +194,7 @@ class PingAllNodesUseCase:
             ok, _ = await self._ssh.test_connectivity(node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path)
             if ok:
                 node.mark_reachable()
+                node.dns_resolves = await _check_dns_local(node.hostname, node.ip)
             else:
                 node.mark_unreachable()
             node.updated_at = datetime.utcnow()
@@ -197,6 +219,82 @@ class PingAllNodesUseCase:
 
         await asyncio.gather(*[self._repo.update(n) for n in updated], return_exceptions=True)
         return {"total": len(nodes), "reachable": reachable, "unreachable": unreachable, "errors": errors}
+
+
+class CheckNodeDnsUseCase:
+    """
+    Multi-directional DNS check for a node:
+      1. backend → node hostname  (this machine resolves the node)
+      2. node → backend hostname  (node resolves the platform server)
+      3. node → puppet master     (node can reach Puppet by name — required for agent enrollment)
+      4. node → wazuh manager     (node can reach Wazuh by name — required for agent enrollment)
+    """
+    def __init__(
+        self,
+        node_repository: INodeRepository,
+        ssh_client: ISSHClient,
+        puppet_master_host: str | None,
+        wazuh_manager_host: str | None,
+    ) -> None:
+        self._repo = node_repository
+        self._ssh = ssh_client
+        self._puppet_host = puppet_master_host
+        self._wazuh_host = wazuh_manager_host
+
+    async def execute(self, id_or_hostname: str) -> dict:
+        node = await _resolve_node(self._repo, id_or_hostname)
+        backend_hostname = socket.gethostname()
+
+        backend_to_node, node_to_backend, node_to_puppet, node_to_wazuh = await asyncio.gather(
+            _check_dns_local(node.hostname, node.ip),
+            _check_dns_remote(self._ssh, node, backend_hostname),
+            _check_dns_remote(self._ssh, node, self._puppet_host) if self._puppet_host else _noop(),
+            _check_dns_remote(self._ssh, node, self._wazuh_host) if self._wazuh_host else _noop(),
+        )
+
+        node.dns_resolves = backend_to_node
+        node.updated_at = datetime.utcnow()
+        await self._repo.update(node)
+
+        checks = {
+            "backend_to_node": {
+                "ok": backend_to_node,
+                "from": backend_hostname,
+                "to": node.hostname,
+                "description": "Platform server resolves this node's hostname",
+            },
+            "node_to_backend": {
+                "ok": node_to_backend,
+                "from": node.hostname,
+                "to": backend_hostname,
+                "description": "Node resolves the platform server's hostname",
+            },
+            "node_to_puppet": {
+                "ok": node_to_puppet,
+                "from": node.hostname,
+                "to": self._puppet_host,
+                "description": "Node resolves the Puppet master hostname (required for agent enrollment)",
+            },
+            "node_to_wazuh": {
+                "ok": node_to_wazuh,
+                "from": node.hostname,
+                "to": self._wazuh_host,
+                "description": "Node resolves the Wazuh manager hostname (required for agent enrollment)",
+            },
+        }
+        all_ok = all(
+            v["ok"] is True
+            for v in checks.values()
+            if v["to"] is not None
+        )
+        return {
+            "node_id": node.id,
+            "hostname": node.hostname,
+            "ip": node.ip,
+            "fqdn": node.fqdn,
+            "checks": checks,
+            "all_ok": all_ok,
+        }
 
 
 class UpdateNodeUseCase:

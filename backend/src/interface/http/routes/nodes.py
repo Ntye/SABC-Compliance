@@ -56,6 +56,22 @@ class UpdateNodeRequest(BaseModel):
     ssh_key_path: str | None = None
 
 
+class DnsCheckEntry(BaseModel):
+    ok: bool | None
+    from_host: str | None = None
+    to: str | None = None
+    description: str
+
+
+class DnsCheckResponse(BaseModel):
+    node_id: str
+    hostname: str
+    ip: str
+    fqdn: str | None = None
+    checks: dict[str, DnsCheckEntry]
+    all_ok: bool
+
+
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
 _register_uc = None
@@ -65,10 +81,15 @@ _ping_uc = None
 _ping_all_uc = None
 _update_uc = None
 _delete_uc = None
+_check_dns_uc = None
 
 
-def set_use_cases(register_uc, get_uc, list_uc, ping_uc, ping_all_uc, update_uc, delete_uc) -> None:
-    global _register_uc, _get_uc, _list_uc, _ping_uc, _ping_all_uc, _update_uc, _delete_uc
+def set_use_cases(
+    register_uc, get_uc, list_uc, ping_uc, ping_all_uc,
+    update_uc, delete_uc, check_dns_uc,
+) -> None:
+    global _register_uc, _get_uc, _list_uc, _ping_uc, _ping_all_uc
+    global _update_uc, _delete_uc, _check_dns_uc
     _register_uc = register_uc
     _get_uc = get_uc
     _list_uc = list_uc
@@ -76,6 +97,7 @@ def set_use_cases(register_uc, get_uc, list_uc, ping_uc, ping_all_uc, update_uc,
     _ping_all_uc = ping_all_uc
     _update_uc = update_uc
     _delete_uc = delete_uc
+    _check_dns_uc = check_dns_uc
 
 
 def _to_response(node) -> NodeResponse:
@@ -128,7 +150,7 @@ async def register_node(
 ):
     """
     Register a Linux server. Tests SSH connectivity and detects OS before saving.
-    Returns 422 if SSH fails.
+    Also captures FQDN and checks DNS resolution. Returns 422 if SSH fails.
     """
     try:
         node = await _register_uc.execute(body.model_dump())
@@ -143,7 +165,7 @@ async def register_node(
 
 @router.post("/ping-all", summary="Ping all registered nodes")
 async def ping_all(principal: AuthPrincipal = Depends(require_operator)):
-    """Test SSH connectivity for every registered node concurrently."""
+    """Test SSH connectivity for every registered node concurrently. Also refreshes DNS resolution status."""
     return await _ping_all_uc.execute()
 
 
@@ -182,8 +204,41 @@ async def delete_node(id: str, principal: AuthPrincipal = Depends(require_admin)
 
 @router.post("/{id}/ping", summary="Ping a single node")
 async def ping_node(id: str, principal: AuthPrincipal = Depends(require_operator)):
-    """Test SSH connectivity for one node and update its status."""
+    """Test SSH connectivity for one node, update its status, and refresh DNS resolution."""
     try:
         return await _ping_uc.execute(id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{id}/check-dns", response_model=DnsCheckResponse, summary="Run full multi-directional DNS check")
+async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_operator)):
+    """
+    Runs four DNS checks:
+    - Platform server → node hostname (backend resolves the node)
+    - Node → platform server hostname (node resolves the backend)
+    - Node → Puppet master hostname (required for Puppet agent enrollment)
+    - Node → Wazuh manager hostname (required for Wazuh agent enrollment)
+
+    Updates dns_resolves on the node and returns per-check results with descriptions.
+    """
+    try:
+        result = await _check_dns_uc.execute(id)
+        return DnsCheckResponse(
+            node_id=result["node_id"],
+            hostname=result["hostname"],
+            ip=result["ip"],
+            fqdn=result["fqdn"],
+            checks={
+                k: DnsCheckEntry(
+                    ok=v["ok"],
+                    from_host=v.get("from"),
+                    to=v.get("to"),
+                    description=v["description"],
+                )
+                for k, v in result["checks"].items()
+            },
+            all_ok=result["all_ok"],
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
