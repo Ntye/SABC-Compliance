@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   BarChart2,
+  Cpu,
   FileCode,
   Key,
   List,
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { path: '/overview', label: 'Overview', icon: BarChart2 },
   { path: '/nodes', label: 'Node Registry', icon: Server },
   { path: '/add-vm', label: 'Add VM', icon: PlusCircle },
+  { path: '/infrastructure', label: 'Infrastructure', icon: Cpu },
   { path: '/jobs', label: 'Jobs', icon: Terminal },
   { path: '/compliance', label: 'Compliance', icon: ShieldCheck },
   { path: '/rules', label: 'Puppet Rules', icon: FileCode },

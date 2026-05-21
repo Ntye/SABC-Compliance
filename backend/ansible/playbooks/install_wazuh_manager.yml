@@ -1,0 +1,37 @@
+---
+# Stub playbook — real implementation in Feature 7
+- name: Install Wazuh Manager
+  hosts: target
+  become: yes
+  tasks:
+    - name: Verify system requirements
+      command: echo "Checking OS and resources..."
+      changed_when: false
+
+    - name: Add Wazuh repository
+      command: echo "Configuring Wazuh repository for {{ ansible_distribution }}..."
+      changed_when: false
+
+    - name: Install wazuh-manager package
+      command: echo "Installing wazuh-manager..."
+      changed_when: false
+
+    - name: Install filebeat package
+      command: echo "Installing filebeat for log forwarding..."
+      changed_when: false
+
+    - name: Configure wazuh-manager
+      command: echo "Writing /var/ossec/etc/ossec.conf..."
+      changed_when: false
+
+    - name: Enable and start wazuh-manager service
+      command: echo "Starting wazuh-manager service..."
+      changed_when: false
+
+    - name: Open firewall ports 1514 1515 55000
+      command: echo "Opening agent (1514/1515) and API (55000) ports..."
+      changed_when: false
+
+    - name: Verify Wazuh API is reachable
+      command: echo "Wazuh manager ready at {{ inventory_hostname }}:55000"
+      changed_when: false

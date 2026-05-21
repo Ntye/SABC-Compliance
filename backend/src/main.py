@@ -2,7 +2,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,13 +10,13 @@ from fastapi.responses import JSONResponse
 
 from config import get_settings
 from core.errors import (
-    ConflictError, DomainError, ExternalServiceError, ForbiddenError,
+    ConflictError, ExternalServiceError, ForbiddenError,
     NotFoundError, SSHConnectError, UnauthorizedError, ValidationError,
 )
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceRepository,
-    JobRepository, NodeRepository, RuleRepository, UserRepository,
-    create_db,
+    JobRepository, NodeRepository, PlatformConfigRepository,
+    RuleRepository, UserRepository, create_db,
 )
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
@@ -27,12 +26,19 @@ from modules.auth.usecases import (
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
+from infrastructure.ansible.adapter import AnsibleAdapter
 from modules.nodes.usecases import (
     CheckNodeDnsUseCase, DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
+from modules.provisioning.usecases import (
+    CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
+    InstallServiceUseCase, ListJobsUseCase, SetMasterHostUseCase, StartJobUseCase,
+)
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
+from interface.http.routes import infrastructure as infrastructure_routes
+from interface.http.routes import jobs as jobs_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -67,6 +73,7 @@ async def lifespan(app: FastAPI):
     user_repo = UserRepository(session_factory)
     audit_repo = AuditRepository(session_factory)
     rule_repo = RuleRepository(session_factory)
+    platform_config_repo = PlatformConfigRepository(session_factory)
 
     # -- Event bus --
     event_bus = EventBus()
@@ -84,7 +91,6 @@ async def lifespan(app: FastAPI):
     list_users_uc = ListUsersUseCase(user_repo)
     change_password_uc = ChangePasswordUseCase(user_repo)
 
-    # -- Wire auth routes --
     auth_routes.set_use_cases(
         authenticate_uc=authenticate_uc,
         decode_jwt_uc=decode_jwt_uc,
@@ -98,11 +104,12 @@ async def lifespan(app: FastAPI):
         change_password_uc=change_password_uc,
     )
 
-    # -- WebSocket manager (stub) --
+    # -- WebSocket manager --
     ws_manager = WebSocketManager(job_repo)
 
-    # -- SSH client --
+    # -- SSH + Ansible clients --
     ssh_client = SshClientAdapter(settings.ssh_key_path)
+    ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path)
 
     # -- Node use cases --
     register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)
@@ -129,10 +136,48 @@ async def lifespan(app: FastAPI):
         check_dns_uc=check_dns_uc,
     )
 
+    # -- Provisioning / infrastructure use cases --
+    get_infra_status_uc = GetInfrastructureStatusUseCase(
+        platform_config_repo,
+        settings.puppet_master_host,
+        settings.wazuh_manager_host,
+        settings.puppet_master_port,
+        settings.wazuh_api_port,
+    )
+    set_master_host_uc = SetMasterHostUseCase(
+        platform_config_repo,
+        settings.puppet_master_port,
+        settings.wazuh_api_port,
+    )
+    start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
+    list_jobs_uc = ListJobsUseCase(job_repo)
+    get_job_uc = GetJobUseCase(job_repo)
+    cancel_job_uc = CancelJobUseCase(job_repo, ansible)
+
+    install_puppet_master_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
+    install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
+    install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
+    install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+
+    infrastructure_routes.set_use_cases(
+        get_status_uc=get_infra_status_uc,
+        set_master_uc=set_master_host_uc,
+        install_puppet_master_uc=install_puppet_master_uc,
+        install_wazuh_manager_uc=install_wazuh_manager_uc,
+        install_puppet_agent_uc=install_puppet_agent_uc,
+        install_wazuh_agent_uc=install_wazuh_agent_uc,
+    )
+    jobs_routes.set_use_cases(
+        list_uc=list_jobs_uc,
+        get_uc=get_job_uc,
+        cancel_uc=cancel_job_uc,
+        ws_manager=ws_manager,
+    )
+
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
-    # -- Bootstrap admin user --
+    # -- Bootstrap --
     try:
         user_creds = await init_admin_user_uc.execute()
         if user_creds:
@@ -145,7 +190,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Admin user bootstrap: %s", exc)
 
-    # -- Bootstrap admin API key --
     try:
         key_result = await init_api_key_uc.execute()
         if key_result:
@@ -161,7 +205,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # -- Shutdown --
     await engine.dispose()
     logger.info("Shutdown complete")
 
@@ -185,17 +228,14 @@ Wazuh detects a violation → webhook → Puppet remediation → recorded result
 Two methods accepted on all protected endpoints:
 - `X-API-Key: bdc_...` — machine-to-machine API key
 - `Authorization: Bearer <jwt>` — user session token (from POST /auth/login)
-
-### Stub Mode
-When `PUPPET_MASTER_HOST` / `WAZUH_MANAGER_HOST` are not set, all external calls
-return safe empty responses. Every endpoint works in stub mode.
         """,
         lifespan=lifespan,
         openapi_tags=[
             {"name": "Health", "description": "Platform health checks"},
             {"name": "Auth", "description": "Authentication — API keys and user login"},
             {"name": "Nodes", "description": "Linux server node registry"},
-            {"name": "Jobs", "description": "Ansible provisioning jobs"},
+            {"name": "Infrastructure", "description": "Puppet and Wazuh infrastructure setup"},
+            {"name": "Jobs", "description": "Ansible provisioning jobs and log streaming"},
             {"name": "Compliance", "description": "Compliance reports and remediation"},
             {"name": "Rules", "description": "Puppet compliance rules library"},
             {"name": "Audit", "description": "HTTP audit log"},
@@ -212,10 +252,8 @@ return safe empty responses. Every endpoint works in stub mode.
         allow_headers=["*"],
     )
     app.add_middleware(RateLimitMiddleware, max_per_minute=200)
-    # AuditMiddleware reads audit_repo from request.app.state (set in lifespan)
     app.add_middleware(AuditMiddleware)
 
-    # Register error handlers
     error_map = {
         NotFoundError: 404,
         ConflictError: 409,
@@ -230,17 +268,16 @@ return safe empty responses. Every endpoint works in stub mode.
         async def _handler(request, exc, sc=status_code):
             return JSONResponse({"error": str(exc), "code": exc.code}, status_code=sc)
 
-    # Include routers
     app.include_router(auth_routes.router)
     app.include_router(nodes_routes.router)
+    app.include_router(infrastructure_routes.router)
+    app.include_router(jobs_routes.router)
 
-    # Health stub (minimal — full implementation in Feature 6)
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])
 
     @health_router.get("/health", summary="Platform health check")
     async def health():
-        """Returns health status for all platform services."""
         return {
             "status": "up",
             "services": {
@@ -252,7 +289,6 @@ return safe empty responses. Every endpoint works in stub mode.
         }
 
     app.include_router(health_router)
-
     return app
 
 

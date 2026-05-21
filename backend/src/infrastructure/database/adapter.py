@@ -14,7 +14,8 @@ from core.domain.entities import (
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceRepository,
-    IJobRepository, INodeRepository, IRuleRepository, IUserRepository,
+    IJobRepository, INodeRepository, IPlatformConfigRepository,
+    IRuleRepository, IUserRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,13 @@ audit_log_table = Table(
     Column("user_agent", Text),
     Column("duration_ms", Integer),
     Column("api_key_name", Text),
+)
+
+platform_config_table = Table(
+    "platform_config", metadata,
+    Column("key", Text, primary_key=True),
+    Column("value", Text),
+    Column("updated_at", Text),
 )
 
 rules_table = Table(
@@ -695,3 +703,40 @@ class RuleRepository(IRuleRepository):
         async with self._session() as s:
             await s.execute(delete(rules_table).where(rules_table.c.id == id))
             await s.commit()
+
+
+# ── Platform Config Repository ────────────────────────────────────────────────
+
+class PlatformConfigRepository(IPlatformConfigRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def get(self, key: str) -> str | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(platform_config_table).where(platform_config_table.c.key == key)
+            )).first()
+            return row.value if row else None
+
+    async def set(self, key: str, value: str) -> None:
+        async with self._session() as s:
+            existing = (await s.execute(
+                select(platform_config_table).where(platform_config_table.c.key == key)
+            )).first()
+            ts = datetime.utcnow().isoformat()
+            if existing:
+                await s.execute(
+                    update(platform_config_table)
+                    .where(platform_config_table.c.key == key)
+                    .values(value=value, updated_at=ts)
+                )
+            else:
+                await s.execute(
+                    platform_config_table.insert().values(key=key, value=value, updated_at=ts)
+                )
+            await s.commit()
+
+    async def get_all(self) -> dict[str, str]:
+        async with self._session() as s:
+            rows = (await s.execute(select(platform_config_table))).all()
+            return {r.key: r.value for r in rows}

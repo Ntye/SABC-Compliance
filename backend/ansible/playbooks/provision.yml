@@ -1,0 +1,32 @@
+---
+# Stub playbook — real implementation in Feature 7
+- name: Baseline Provisioning
+  hosts: target
+  become: yes
+  tasks:
+    - name: Gather facts
+      setup:
+
+    - name: Update package cache
+      command: echo "Updating package index..."
+      changed_when: false
+
+    - name: Install baseline packages
+      command: echo "Installing curl git vim net-tools..."
+      changed_when: false
+
+    - name: Configure NTP synchronisation
+      command: echo "Configuring chrony/systemd-timesyncd..."
+      changed_when: false
+
+    - name: Configure SSH hardening
+      command: echo "Hardening /etc/ssh/sshd_config..."
+      changed_when: false
+
+    - name: Configure system logging
+      command: echo "Configuring rsyslog..."
+      changed_when: false
+
+    - name: Apply kernel security parameters
+      command: echo "Writing /etc/sysctl.d/99-bdc-security.conf..."
+      changed_when: false

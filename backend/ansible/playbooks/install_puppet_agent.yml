@@ -1,0 +1,35 @@
+---
+# Stub playbook — real implementation in Feature 7
+- name: Install Puppet Agent
+  hosts: target
+  become: yes
+  vars:
+    puppet_master: "{{ puppet_master_host | default('puppet') }}"
+  tasks:
+    - name: Verify system requirements
+      command: echo "Checking OS and resources..."
+      changed_when: false
+
+    - name: Add Puppet Platform repository
+      command: echo "Configuring Puppet repository for {{ ansible_distribution }}..."
+      changed_when: false
+
+    - name: Install puppet-agent package
+      command: echo "Installing puppet-agent..."
+      changed_when: false
+
+    - name: Configure puppet.conf
+      command: echo "Setting server = {{ puppet_master }} in puppet.conf..."
+      changed_when: false
+
+    - name: Enable and start puppet service
+      command: echo "Starting puppet agent service..."
+      changed_when: false
+
+    - name: Submit CSR to Puppet master
+      command: echo "Sending certificate signing request to {{ puppet_master }}..."
+      changed_when: false
+
+    - name: Run initial Puppet catalog
+      command: echo "Running: puppet agent --test"
+      changed_when: false

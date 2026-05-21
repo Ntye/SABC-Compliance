@@ -1,0 +1,37 @@
+---
+# Stub playbook — real implementation in Feature 7
+- name: Install Puppet Master
+  hosts: target
+  become: yes
+  tasks:
+    - name: Verify system requirements
+      command: echo "Checking OS and resources..."
+      changed_when: false
+
+    - name: Add Puppet Platform repository
+      command: echo "Configuring Puppet repository for {{ ansible_distribution }}..."
+      changed_when: false
+
+    - name: Install puppetserver package
+      command: echo "Installing puppetserver..."
+      changed_when: false
+
+    - name: Configure puppet.conf
+      command: echo "Writing /etc/puppetlabs/puppet/puppet.conf..."
+      changed_when: false
+
+    - name: Enable and start puppetserver service
+      command: echo "Starting puppetserver service..."
+      changed_when: false
+
+    - name: Open firewall ports 8140 and 8143
+      command: echo "Opening ports 8140 (agents) and 8143 (API)..."
+      changed_when: false
+
+    - name: Generate Puppet CA certificate
+      command: echo "Initialising Puppet CA..."
+      changed_when: false
+
+    - name: Verify Puppet API is reachable
+      command: echo "Puppet master ready at {{ inventory_hostname }}:8140"
+      changed_when: false

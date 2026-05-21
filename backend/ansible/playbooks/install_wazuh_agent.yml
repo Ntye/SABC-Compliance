@@ -1,0 +1,35 @@
+---
+# Stub playbook — real implementation in Feature 7
+- name: Install Wazuh Agent
+  hosts: target
+  become: yes
+  vars:
+    wazuh_manager: "{{ wazuh_manager_host | default('wazuh') }}"
+  tasks:
+    - name: Verify system requirements
+      command: echo "Checking OS and resources..."
+      changed_when: false
+
+    - name: Add Wazuh repository
+      command: echo "Configuring Wazuh repository for {{ ansible_distribution }}..."
+      changed_when: false
+
+    - name: Install wazuh-agent package
+      command: echo "Installing wazuh-agent..."
+      changed_when: false
+
+    - name: Configure ossec.conf
+      command: echo "Setting manager_address = {{ wazuh_manager }}..."
+      changed_when: false
+
+    - name: Enable and start wazuh-agent service
+      command: echo "Starting wazuh-agent service..."
+      changed_when: false
+
+    - name: Register agent with Wazuh manager
+      command: echo "Running agent registration against {{ wazuh_manager }}:1515..."
+      changed_when: false
+
+    - name: Verify agent active connection
+      command: echo "Agent registered and connected to {{ wazuh_manager }}"
+      changed_when: false

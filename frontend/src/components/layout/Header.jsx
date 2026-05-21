@@ -8,6 +8,7 @@ const PAGE_TITLES = {
   '/overview': 'Overview',
   '/nodes': 'Node Registry',
   '/add-vm': 'Add VM',
+  '/infrastructure': 'Infrastructure',
   '/jobs': 'Jobs',
   '/compliance': 'Compliance',
   '/rules': 'Puppet Rules',

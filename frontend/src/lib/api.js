@@ -165,12 +165,31 @@ export async function getJob(id) {
   return request('GET', `/jobs/${id}`)
 }
 
-export async function getJobLogs(id, since = 0) {
-  return request('GET', `/jobs/${id}/logs?since=${since}`)
+export async function cancelJob(id) {
+  return request('POST', `/jobs/${id}/cancel`)
 }
 
-export async function createJob(data) {
-  return request('POST', '/provision', data)
+export function jobWsUrl(id) {
+  return getGatewayUrl().replace(/^http/, 'ws') + `/jobs/${id}/ws`
+}
+
+// ── Infrastructure ────────────────────────────────────────────────────────────
+
+export async function getInfrastructureStatus() {
+  return request('GET', '/infrastructure/status')
+}
+
+export async function setPuppetMasterHost(host) {
+  return request('POST', '/infrastructure/puppet-master', { host })
+}
+
+export async function setWazuhManagerHost(host) {
+  return request('POST', '/infrastructure/wazuh-manager', { host })
+}
+
+export async function installService(service, nodeId) {
+  // service: 'puppet-master' | 'wazuh-manager' | 'puppet-agent' | 'wazuh-agent'
+  return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId })
 }
 
 // ── Compliance ────────────────────────────────────────────────────────────────
