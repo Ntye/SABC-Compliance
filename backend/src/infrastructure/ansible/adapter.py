@@ -65,7 +65,7 @@ STUB_STEPS: dict[str, list[str]] = {
 class AnsibleAdapter:
     def __init__(self, ansible_dir: str, ssh_key_path: str, packages_dir: str = "") -> None:
         self._ansible_dir = os.path.abspath(ansible_dir)
-        self._ssh_key_path = ssh_key_path
+        self._ssh_key_path = os.path.abspath(ssh_key_path)
         self._packages_dir = os.path.abspath(packages_dir) if packages_dir else ""
         self._running: dict[str, asyncio.subprocess.Process] = {}
 
@@ -144,7 +144,8 @@ class AnsibleAdapter:
             return False
 
     async def _write_inventory(self, node) -> str:
-        key = node.ssh_key_path or self._ssh_key_path
+        raw_key = node.ssh_key_path or self._ssh_key_path
+        key = os.path.abspath(raw_key)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
             if node:
                 f.write(

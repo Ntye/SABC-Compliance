@@ -1,7 +1,16 @@
 ---
-# Installs Puppet Server (open source 8) on the target node.
-# Airgap mode: place .deb/.rpm packages in backend/packages/puppet-master/
-# Online mode: downloads from apt.puppet.com / yum.puppet.com automatically.
+# Installs Puppet Server on the target node.
+#
+# Airgap modes (checked in order, first match wins):
+#   1. TARBALL  — puppet-enterprise*.tar.gz in packages/puppet-master/
+#                 Runs the PE silent installer.
+#   2. PACKAGES — puppetserver*.deb or puppetserver*.rpm in packages/puppet-master/
+#                 Uploaded and installed with apt/yum.
+#                 Also looks for openjdk*.deb/rpm for the Java dependency.
+#                 Optional: puppet*-release*.deb/rpm installs the repo package
+#                 locally instead of downloading it (for partially-connected envs).
+#   3. ONLINE   — no local files found; downloads repo + packages from internet.
+#
 - name: Install Puppet Server
   hosts: target
   become: yes
@@ -11,164 +20,243 @@
     puppet_version: "8"
     puppet_server_port: 8140
     puppet_server_memory: "512m"
-    # packages_dir is injected by AnsibleAdapter from backend/packages/
+    # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 
   tasks:
     # ── Airgap detection ──────────────────────────────────────────────────────
-    - name: Find offline puppetserver packages on controller
+    - name: Find PE installer tarball on controller
       find:
         paths: "{{ puppet_pkg_dir }}"
-        patterns:
-          - "puppetserver*.deb"
-          - "puppetserver*.rpm"
+        patterns: "puppet-enterprise*.tar.gz"
+      register: pe_tarball
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Find puppetserver .deb/.rpm packages on controller
+      find:
+        paths: "{{ puppet_pkg_dir }}"
+        patterns: ["puppetserver*.deb", "puppetserver*.rpm"]
       register: puppet_offline_pkgs
       delegate_to: localhost
       become: no
       failed_when: false
 
-    - name: Find offline Java packages on controller
+    - name: Find Java packages on controller
       find:
         paths: "{{ puppet_pkg_dir }}"
-        patterns:
-          - "openjdk*.deb"
-          - "openjdk*.rpm"
-          - "java*.deb"
-          - "java*.rpm"
+        patterns: ["openjdk*.deb", "openjdk*.rpm", "java*.deb", "java*.rpm"]
       register: java_offline_pkgs
       delegate_to: localhost
       become: no
       failed_when: false
 
-    - name: Set airgap mode
+    - name: Find local Puppet release package on controller
+      find:
+        paths: "{{ puppet_pkg_dir }}"
+        patterns: ["puppet*-release*.deb", "puppet*-release*.rpm"]
+      register: puppet_release_pkg
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Determine installation mode
       set_fact:
-        puppet_airgap: "{{ puppet_offline_pkgs.files | length > 0 }}"
+        install_mode: >-
+          {{ 'tarball'   if pe_tarball.files          | length > 0
+             else 'packages' if puppet_offline_pkgs.files | length > 0
+             else 'online' }}
 
     - name: Report installation mode
       debug:
-        msg: >-
-          Mode: {{ 'AIRGAP — using packages from ' + puppet_pkg_dir
-                   if puppet_airgap
-                   else 'ONLINE — downloading from apt.puppet.com / yum.puppet.com' }}
+        msg: "Installation mode: {{ install_mode | upper }} ({{ puppet_pkg_dir }})"
 
-    # ── Java (required by puppetserver) — online ──────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 1 — TARBALL (Puppet Enterprise)
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Upload PE tarball to node
+      copy:
+        src: "{{ pe_tarball.files[0].path }}"
+        dest: "/tmp/{{ pe_tarball.files[0].path | basename }}"
+      when: install_mode == 'tarball'
+
+    - name: Extract PE tarball
+      unarchive:
+        src: "/tmp/{{ pe_tarball.files[0].path | basename }}"
+        dest: /tmp/
+        remote_src: yes
+      when: install_mode == 'tarball'
+
+    - name: Run PE silent installer
+      shell: |
+        set -e
+        INSTALLER_DIR=$(find /tmp -maxdepth 1 -type d -name 'puppet-enterprise*' | head -1)
+        cd "$INSTALLER_DIR"
+        ./puppet-enterprise-installer -c /dev/null -y
+      register: pe_install
+      when: install_mode == 'tarball'
+
+    - name: Show PE installer output (last 10 lines)
+      debug:
+        msg: "{{ pe_install.stdout_lines[-10:] | default([]) }}"
+      when: install_mode == 'tarball'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 2 — PACKAGES (.deb / .rpm)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Java (Debian, packages mode) ────────────────────────────────────────────
+    - name: Upload Java packages to node (packages mode, Debian)
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    - name: Install Java from local .deb
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    # Java (RedHat, packages mode) ────────────────────────────────────────────
+    - name: Upload Java packages to node (packages mode, RedHat)
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    - name: Install Java from local .rpm
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    # puppetserver (Debian, packages mode) ────────────────────────────────────
+    - name: Upload puppetserver .deb to node
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    - name: Install puppetserver from local .deb
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    # puppetserver (RedHat, packages mode) ────────────────────────────────────
+    - name: Upload puppetserver .rpm to node
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    - name: Install puppetserver from local .rpm
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 3 — ONLINE  (+ optional local release package)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Java (online) ───────────────────────────────────────────────────────────
     - name: Install Java 17 (Debian, online)
       apt:
         name: openjdk-17-jre-headless
         state: present
         update_cache: yes
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
     - name: Install Java 17 (RedHat, online)
       yum:
         name: java-17-openjdk-headless
         state: present
-      when:
-        - ansible_os_family == 'RedHat'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
-    # ── Java — airgap ─────────────────────────────────────────────────────────
-    - name: Upload Java packages to node (airgap)
+    # Puppet repo setup — use local release pkg if present, else download ─────
+    - name: Upload local Puppet release .deb to node
       copy:
-        src: "{{ item.path }}"
-        dest: "/tmp/{{ item.path | basename }}"
-      loop: "{{ java_offline_pkgs.files | default([]) }}"
-      when: puppet_airgap
-
-    - name: Install Java from local .deb (airgap, Debian)
-      apt:
-        deb: "/tmp/{{ item.path | basename }}"
-      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+        src: "{{ puppet_release_pkg.files[0].path }}"
+        dest: /tmp/puppet-release.deb
       when:
-        - puppet_airgap
+        - install_mode == 'online'
         - ansible_os_family == 'Debian'
+        - puppet_release_pkg.files | length > 0
 
-    - name: Install Java from local .rpm (airgap, RedHat)
-      yum:
-        name: "/tmp/{{ item.path | basename }}"
-        state: present
-      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
-      when:
-        - puppet_airgap
-        - ansible_os_family == 'RedHat'
-
-    # ── Puppet Server — online ────────────────────────────────────────────────
-    - name: Download Puppet {{ puppet_version }} release package (Debian)
+    - name: Download Puppet {{ puppet_version }} release package (Debian, no local copy)
       get_url:
         url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
         dest: /tmp/puppet-release.deb
         timeout: 60
       when:
+        - install_mode == 'online'
         - ansible_os_family == 'Debian'
-        - not puppet_airgap
+        - puppet_release_pkg.files | length == 0
 
     - name: Install Puppet release package (Debian)
       apt:
         deb: /tmp/puppet-release.deb
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
     - name: Install puppetserver (Debian, online)
       apt:
         name: puppetserver
         state: present
         update_cache: yes
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
-    - name: Add Puppet {{ puppet_version }} repo (RedHat, online)
+    - name: Upload local Puppet release .rpm to node
+      copy:
+        src: "{{ puppet_release_pkg.files[0].path }}"
+        dest: /tmp/puppet-release.rpm
+      when:
+        - install_mode == 'online'
+        - ansible_os_family == 'RedHat'
+        - puppet_release_pkg.files | length > 0
+
+    - name: Install local Puppet release .rpm (RedHat)
+      yum:
+        name: /tmp/puppet-release.rpm
+        state: present
+      when:
+        - install_mode == 'online'
+        - ansible_os_family == 'RedHat'
+        - puppet_release_pkg.files | length > 0
+
+    - name: Add Puppet {{ puppet_version }} repo from internet (RedHat, no local copy)
       yum:
         name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
         state: present
       when:
+        - install_mode == 'online'
         - ansible_os_family == 'RedHat'
-        - not puppet_airgap
+        - puppet_release_pkg.files | length == 0
 
     - name: Install puppetserver (RedHat, online)
       yum:
         name: puppetserver
         state: present
-      when:
-        - ansible_os_family == 'RedHat'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
-    # ── Puppet Server — airgap ────────────────────────────────────────────────
-    - name: Upload puppetserver packages to node (airgap)
-      copy:
-        src: "{{ item.path }}"
-        dest: "/tmp/{{ item.path | basename }}"
-      loop: "{{ puppet_offline_pkgs.files | default([]) }}"
-      when: puppet_airgap
-
-    - name: Install puppetserver from local .deb (airgap, Debian)
-      apt:
-        deb: "/tmp/{{ item.path | basename }}"
-      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
-      when:
-        - puppet_airgap
-        - ansible_os_family == 'Debian'
-
-    - name: Install puppetserver from local .rpm (airgap, RedHat)
-      yum:
-        name: "/tmp/{{ item.path | basename }}"
-        state: present
-      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
-      when:
-        - puppet_airgap
-        - ansible_os_family == 'RedHat'
-
-    # ── Configuration ─────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # CONFIGURE + START  (all modes, open-source puppet only; PE already done)
+    # ══════════════════════════════════════════════════════════════════════════
     - name: Set JVM heap for puppetserver (Debian)
       lineinfile:
         path: /etc/default/puppetserver
         regexp: '^JAVA_ARGS='
         line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
         create: yes
-      when: ansible_os_family == 'Debian'
+      when: install_mode != 'tarball' and ansible_os_family == 'Debian'
 
     - name: Set JVM heap for puppetserver (RedHat)
       lineinfile:
@@ -176,7 +264,7 @@
         regexp: '^JAVA_ARGS='
         line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
         create: yes
-      when: ansible_os_family == 'RedHat'
+      when: install_mode != 'tarball' and ansible_os_family == 'RedHat'
 
     - name: Ensure puppet config directory exists
       file:
@@ -199,9 +287,7 @@
         - { section: 'server', key: 'vardir',      value: '/opt/puppetlabs/server/data/puppetserver' }
         - { section: 'server', key: 'logdir',      value: '/var/log/puppetlabs/puppetserver' }
         - { section: 'server', key: 'rundir',      value: '/var/run/puppetlabs/puppetserver' }
-        - { section: 'server', key: 'pidfile',     value: '/var/run/puppetlabs/puppetserver/puppetserver.pid' }
 
-    # ── Firewall ──────────────────────────────────────────────────────────────
     - name: Allow Puppet Server port (ufw)
       ufw:
         rule: allow
@@ -219,7 +305,6 @@
       when: ansible_os_family == 'RedHat'
       ignore_errors: yes
 
-    # ── Service ───────────────────────────────────────────────────────────────
     - name: Enable and start puppetserver
       service:
         name: puppetserver
@@ -239,4 +324,4 @@
 
     - name: Puppet Server ready
       debug:
-        msg: "Puppet Server installed and listening on port {{ puppet_server_port }} — version {{ puppet_ver.stdout }}"
+        msg: "Puppet Server installed ({{ install_mode }}) — version {{ puppet_ver.stdout }} — listening on :{{ puppet_server_port }}"

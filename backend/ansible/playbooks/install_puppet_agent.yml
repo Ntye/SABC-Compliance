@@ -1,7 +1,16 @@
 ---
-# Installs Puppet Agent (open source 8) on the target node and connects it
-# to the Puppet master.  puppet_master_host is injected from platform config.
-# Airgap mode: place puppet-agent .deb/.rpm in backend/packages/puppet-agent/
+# Installs Puppet Agent on the target node and connects it to the Puppet master.
+# puppet_master_host is injected from platform config.
+#
+# Airgap modes (checked in order):
+#   1. PACKAGES — puppet-agent*.deb or *.rpm in packages/puppet-agent/
+#                 Uploaded and installed directly.
+#   2. LOCAL-REPO — puppet*-release*.deb/rpm in packages/puppet-agent/ but no
+#                   agent package.  Installs the release pkg from local copy to
+#                   add the apt/yum source, then installs puppet-agent from the
+#                   now-configured repo (still needs internet to the repo itself).
+#   3. ONLINE   — no local files; downloads release pkg + puppet-agent from internet.
+#
 - name: Install Puppet Agent
   hosts: target
   become: yes
@@ -10,101 +19,158 @@
   vars:
     puppet_version: "8"
     puppet_master: "{{ puppet_master_host | default('puppet') }}"
-    # packages_dir is injected by AnsibleAdapter from backend/packages/
+    # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     agent_pkg_dir: "{{ packages_dir }}/puppet-agent"
 
   tasks:
     # ── Airgap detection ──────────────────────────────────────────────────────
-    - name: Find offline puppet-agent packages on controller
+    - name: Find puppet-agent packages on controller
       find:
         paths: "{{ agent_pkg_dir }}"
-        patterns:
-          - "puppet-agent*.deb"
-          - "puppet-agent*.rpm"
+        patterns: ["puppet-agent*.deb", "puppet-agent*.rpm"]
       register: agent_offline_pkgs
       delegate_to: localhost
       become: no
       failed_when: false
 
-    - name: Set airgap mode
+    - name: Find local Puppet release package on controller
+      find:
+        paths: "{{ agent_pkg_dir }}"
+        patterns: ["puppet*-release*.deb", "puppet*-release*.rpm"]
+      register: puppet_release_pkg
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Determine installation mode
       set_fact:
-        puppet_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
+        install_mode: >-
+          {{ 'packages'   if agent_offline_pkgs.files | length > 0
+             else 'local-repo' if puppet_release_pkg.files | length > 0
+             else 'online' }}
 
     - name: Report installation mode
       debug:
-        msg: >-
-          Installing Puppet agent → master: {{ puppet_master }}
-          ({{ 'AIRGAP' if puppet_airgap else 'ONLINE' }})
+        msg: "Installing Puppet agent → master: {{ puppet_master }} (mode: {{ install_mode | upper }})"
 
-    # ── Install — online (Debian/Ubuntu) ──────────────────────────────────────
-    - name: Download Puppet {{ puppet_version }} release package (Debian)
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 1 — PACKAGES (full offline)
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Upload puppet-agent .deb to node
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    - name: Install puppet-agent from local .deb
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'Debian'
+
+    - name: Upload puppet-agent .rpm to node
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    - name: Install puppet-agent from local .rpm
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 2 — LOCAL-REPO (release package on disk, agent from repo)
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Upload local Puppet release .deb to node
+      copy:
+        src: "{{ puppet_release_pkg.files[0].path }}"
+        dest: /tmp/puppet-release.deb
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'Debian'
+
+    - name: Install Puppet release package from local copy (Debian)
+      apt:
+        deb: /tmp/puppet-release.deb
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'Debian'
+
+    - name: Install puppet-agent via repo (Debian, local-repo mode)
+      apt:
+        name: puppet-agent
+        state: present
+        update_cache: yes
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'Debian'
+
+    - name: Upload local Puppet release .rpm to node
+      copy:
+        src: "{{ puppet_release_pkg.files[0].path }}"
+        dest: /tmp/puppet-release.rpm
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'RedHat'
+
+    - name: Install Puppet release package from local copy (RedHat)
+      yum:
+        name: /tmp/puppet-release.rpm
+        state: present
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'RedHat'
+
+    - name: Install puppet-agent via repo (RedHat, local-repo mode)
+      yum:
+        name: puppet-agent
+        state: present
+      when:
+        - install_mode == 'local-repo'
+        - ansible_os_family == 'RedHat'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 3 — ONLINE
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Download Puppet {{ puppet_version }} release package (Debian, online)
       get_url:
         url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
         dest: /tmp/puppet-release.deb
         timeout: 60
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
-    - name: Install Puppet release package (Debian)
+    - name: Install Puppet release package (Debian, online)
       apt:
         deb: /tmp/puppet-release.deb
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
     - name: Install puppet-agent (Debian, online)
       apt:
         name: puppet-agent
         state: present
         update_cache: yes
-      when:
-        - ansible_os_family == 'Debian'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
 
-    # ── Install — online (RedHat/Rocky) ──────────────────────────────────────
-    - name: Add Puppet {{ puppet_version }} repo (RedHat, online)
+    - name: Add Puppet {{ puppet_version }} repo from internet (RedHat, online)
       yum:
         name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
         state: present
-      when:
-        - ansible_os_family == 'RedHat'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
     - name: Install puppet-agent (RedHat, online)
       yum:
         name: puppet-agent
         state: present
-      when:
-        - ansible_os_family == 'RedHat'
-        - not puppet_airgap
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
-    # ── Install — airgap ─────────────────────────────────────────────────────
-    - name: Upload puppet-agent packages to node (airgap)
-      copy:
-        src: "{{ item.path }}"
-        dest: "/tmp/{{ item.path | basename }}"
-      loop: "{{ agent_offline_pkgs.files | default([]) }}"
-      when: puppet_airgap
-
-    - name: Install puppet-agent from local .deb (airgap, Debian)
-      apt:
-        deb: "/tmp/{{ item.path | basename }}"
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
-      when:
-        - puppet_airgap
-        - ansible_os_family == 'Debian'
-
-    - name: Install puppet-agent from local .rpm (airgap, RedHat)
-      yum:
-        name: "/tmp/{{ item.path | basename }}"
-        state: present
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
-      when:
-        - puppet_airgap
-        - ansible_os_family == 'RedHat'
-
-    # ── Configure puppet.conf ─────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # CONFIGURE + FIRST RUN  (all modes)
+    # ══════════════════════════════════════════════════════════════════════════
     - name: Ensure puppet config directory exists
       file:
         path: /etc/puppetlabs/puppet
@@ -124,8 +190,7 @@
         - { section: 'main', key: 'environment',  value: 'production' }
         - { section: 'main', key: 'runinterval',  value: '30m' }
 
-    # ── First run — submits CSR to master, applies initial catalog ────────────
-    - name: Stop puppet service before first run (if running)
+    - name: Stop puppet service before first run
       service:
         name: puppet
         state: stopped
@@ -135,7 +200,7 @@
     - name: Run puppet agent --test (submits CSR, waits up to 30s for signing)
       command: /opt/puppetlabs/bin/puppet agent --test --waitforcert 30 --onetime --no-daemonize
       register: puppet_run
-      # rc 0 = no changes, rc 2 = changes applied, rc 1 = warnings (still ok for initial run)
+      # 0=no changes, 2=changes applied, 1=warnings — all acceptable on first run
       changed_when: puppet_run.rc == 2
       failed_when: puppet_run.rc not in [0, 1, 2]
 

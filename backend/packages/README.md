@@ -1,89 +1,92 @@
-# Offline Packages (Airgap Mode)
+# Offline Packages
 
-Place pre-downloaded installation packages here to enable airgap (offline) installation.
-When a subdirectory contains matching `.deb` or `.rpm` files, the playbook automatically
-switches to airgap mode and uploads the files to the target node — no internet access needed.
+Place pre-downloaded packages here to control how each service is installed.
+The playbooks scan these directories at run time and pick the best available mode.
 
-If a subdirectory is empty, the playbook falls back to online installation via the
-vendor's public repository.
+## Installation modes (checked in order, first match wins)
 
-## Directory layout
+### puppet-master/
 
-```
-packages/
-├── puppet-master/    ← puppetserver + openjdk packages
-├── puppet-agent/     ← puppet-agent packages
-├── wazuh-manager/    ← wazuh-manager packages
-└── wazuh-agent/      ← wazuh-agent packages
-```
+| What you put here | Mode |
+|---|---|
+| `puppet-enterprise*.tar.gz` | **TARBALL** — runs the PE silent installer |
+| `puppetserver*.deb` / `*.rpm` (+ optional `openjdk*.deb`) | **PACKAGES** — uploads and installs with apt/yum |
+| `puppet*-release*.deb` / `*.rpm` only | **ONLINE** with local repo package (avoids downloading release pkg) |
+| *(empty)* | **ONLINE** — downloads everything from apt.puppet.com |
 
-## Naming convention
+### puppet-agent/
 
-Files must match the glob patterns below (the playbooks use `find` with these patterns):
+| What you put here | Mode |
+|---|---|
+| `puppet-agent*.deb` / `*.rpm` | **PACKAGES** — full offline, no internet |
+| `puppet*-release*.deb` / `*.rpm` only | **LOCAL-REPO** — installs release pkg locally, pulls agent from repo |
+| *(empty)* | **ONLINE** — downloads release pkg + agent from internet |
 
-| Directory       | Pattern                         |
-|-----------------|---------------------------------|
-| puppet-master/  | `puppetserver*.deb` or `*.rpm`  |
-| puppet-master/  | `openjdk*.deb` or `*.rpm` (Java)|
-| puppet-agent/   | `puppet-agent*.deb` or `*.rpm`  |
-| wazuh-manager/  | `wazuh-manager*.deb` or `*.rpm` |
-| wazuh-agent/    | `wazuh-agent*.deb` or `*.rpm`   |
+### wazuh-manager/ and wazuh-agent/
+
+| What you put here | Mode |
+|---|---|
+| `wazuh-manager*.deb` / `*.rpm` or `wazuh-agent*.deb` / `*.rpm` | **PACKAGES** — offline install |
+| *(empty)* | **ONLINE** — downloads from packages.wazuh.com |
+
+---
 
 ## What to download
 
-### Puppet Server + Java (Ubuntu 22.04 example)
+### Puppet Enterprise (tarball)
 
-```bash
-# Java 17 (puppetserver dependency)
-apt-get download openjdk-17-jre-headless
-
-# Puppet release package (sets up the apt repo — download for bootstrapping)
-wget https://apt.puppet.com/puppet8-release-jammy.deb -O packages/puppet-master/puppet8-release-jammy.deb
-
-# puppetserver itself (download from a machine that has the repo configured)
-apt-get download puppetserver
-mv puppetserver_*.deb packages/puppet-master/
+Download the installer from https://puppet.com/try-puppet/puppet-enterprise/download/
+and place it in `puppet-master/`:
+```
+puppet-master/puppet-enterprise-2023.x.x-ubuntu-22.04-amd64.tar.gz
 ```
 
-### Puppet Agent (Ubuntu 22.04 example)
+### Puppet Server + Agent (open source .deb, Ubuntu 22.04)
 
 ```bash
+# On an internet-connected machine with the puppet repo already configured:
+apt-get download puppetserver openjdk-17-jre-headless
+mv puppetserver_*.deb openjdk*.deb packages/puppet-master/
+
 apt-get download puppet-agent
 mv puppet-agent_*.deb packages/puppet-agent/
+
+# Or just drop the release package to use LOCAL-REPO mode:
+wget https://apt.puppet.com/puppet8-release-jammy.deb \
+     -O packages/puppet-agent/puppet8-release-jammy.deb
 ```
 
-### Wazuh Manager (Ubuntu/Debian)
+### Puppet Server + Agent (.rpm, Rocky Linux 9)
 
 ```bash
-# Add repo first (on an internet-connected machine)
-curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | apt-key add -
-echo "deb https://packages.wazuh.com/4.x/apt/ stable main" > /etc/apt/sources.list.d/wazuh.list
-apt-get update
-apt-get download wazuh-manager
-mv wazuh-manager_*.deb packages/wazuh-manager/
-```
+yum install --downloadonly --downloaddir=packages/puppet-master \
+    puppetserver java-17-openjdk-headless
 
-### Wazuh Agent (Ubuntu/Debian)
-
-```bash
-apt-get download wazuh-agent
-mv wazuh-agent_*.deb packages/wazuh-agent/
-```
-
-### Rocky Linux / RHEL (RPM)
-
-```bash
-# Puppet
-wget https://yum.puppet.com/puppet8-release-el-9.noarch.rpm
-yum install --downloadonly --downloaddir=packages/puppet-master puppetserver java-17-openjdk-headless
 yum install --downloadonly --downloaddir=packages/puppet-agent puppet-agent
-
-# Wazuh
-rpm --import https://packages.wazuh.com/key/GPG-KEY-WAZUH
-# create /etc/yum.repos.d/wazuh.repo then:
-yum install --downloadonly --downloaddir=packages/wazuh-manager wazuh-manager
-yum install --downloadonly --downloaddir=packages/wazuh-agent wazuh-agent
 ```
 
-> **Tip:** The `yum install --downloadonly` command also downloads all dependencies.
-> For apt, use `apt-get download` + `apt-rdepends` to pull the full dependency tree.
+### Wazuh Manager + Agent (.deb, Ubuntu 22.04)
+
+```bash
+# Add Wazuh repo first on an internet-connected machine:
+curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | apt-key add -
+echo "deb https://packages.wazuh.com/4.x/apt/ stable main" \
+     > /etc/apt/sources.list.d/wazuh.list
+apt-get update
+
+apt-get download wazuh-manager && mv wazuh-manager_*.deb packages/wazuh-manager/
+apt-get download wazuh-agent   && mv wazuh-agent_*.deb   packages/wazuh-agent/
+```
+
+### Wazuh Manager + Agent (.rpm, Rocky Linux 9)
+
+```bash
+rpm --import https://packages.wazuh.com/key/GPG-KEY-WAZUH
+# create /etc/yum.repos.d/wazuh.repo with baseurl=https://packages.wazuh.com/4.x/yum/
+yum install --downloadonly --downloaddir=packages/wazuh-manager wazuh-manager
+yum install --downloadonly --downloaddir=packages/wazuh-agent  wazuh-agent
+```
+
+> **Tip for full airgap:** use `apt-get download` + `apt-rdepends` (or
+> `yum install --downloadonly`) to pull the full dependency tree, not just the
+> top-level package.
