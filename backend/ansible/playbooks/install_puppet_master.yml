@@ -22,7 +22,8 @@
     puppet_server_memory: "512m"
     # PE console admin password — override via extra_vars: pe_console_password=MyPass1!
     # Must be ≥8 chars and contain upper, lower, digit, and special character.
-    pe_console_password: "{{ pe_console_password | default('BdCPuppet1!') }}"
+    # --extra-vars @file.json (highest Ansible precedence) overrides this default.
+    pe_console_password: "BdCPuppet1!"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 
