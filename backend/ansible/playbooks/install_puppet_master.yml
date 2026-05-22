@@ -1,37 +1,242 @@
 ---
-# Stub playbook — real implementation in Feature 7
-- name: Install Puppet Master
+# Installs Puppet Server (open source 8) on the target node.
+# Airgap mode: place .deb/.rpm packages in backend/packages/puppet-master/
+# Online mode: downloads from apt.puppet.com / yum.puppet.com automatically.
+- name: Install Puppet Server
   hosts: target
   become: yes
+  gather_facts: yes
+
+  vars:
+    puppet_version: "8"
+    puppet_server_port: 8140
+    puppet_server_memory: "512m"
+    # packages_dir is injected by AnsibleAdapter from backend/packages/
+    puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
+
   tasks:
-    - name: Verify system requirements
-      command: echo "Checking OS and resources..."
-      changed_when: false
+    # ── Airgap detection ──────────────────────────────────────────────────────
+    - name: Find offline puppetserver packages on controller
+      find:
+        paths: "{{ puppet_pkg_dir }}"
+        patterns:
+          - "puppetserver*.deb"
+          - "puppetserver*.rpm"
+      register: puppet_offline_pkgs
+      delegate_to: localhost
+      become: no
+      failed_when: false
 
-    - name: Add Puppet Platform repository
-      command: echo "Configuring Puppet repository for {{ ansible_distribution }}..."
-      changed_when: false
+    - name: Find offline Java packages on controller
+      find:
+        paths: "{{ puppet_pkg_dir }}"
+        patterns:
+          - "openjdk*.deb"
+          - "openjdk*.rpm"
+          - "java*.deb"
+          - "java*.rpm"
+      register: java_offline_pkgs
+      delegate_to: localhost
+      become: no
+      failed_when: false
 
-    - name: Install puppetserver package
-      command: echo "Installing puppetserver..."
-      changed_when: false
+    - name: Set airgap mode
+      set_fact:
+        puppet_airgap: "{{ puppet_offline_pkgs.files | length > 0 }}"
+
+    - name: Report installation mode
+      debug:
+        msg: >-
+          Mode: {{ 'AIRGAP — using packages from ' + puppet_pkg_dir
+                   if puppet_airgap
+                   else 'ONLINE — downloading from apt.puppet.com / yum.puppet.com' }}
+
+    # ── Java (required by puppetserver) — online ──────────────────────────────
+    - name: Install Java 17 (Debian, online)
+      apt:
+        name: openjdk-17-jre-headless
+        state: present
+        update_cache: yes
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Install Java 17 (RedHat, online)
+      yum:
+        name: java-17-openjdk-headless
+        state: present
+      when:
+        - ansible_os_family == 'RedHat'
+        - not puppet_airgap
+
+    # ── Java — airgap ─────────────────────────────────────────────────────────
+    - name: Upload Java packages to node (airgap)
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ java_offline_pkgs.files | default([]) }}"
+      when: puppet_airgap
+
+    - name: Install Java from local .deb (airgap, Debian)
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'Debian'
+
+    - name: Install Java from local .rpm (airgap, RedHat)
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ java_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'RedHat'
+
+    # ── Puppet Server — online ────────────────────────────────────────────────
+    - name: Download Puppet {{ puppet_version }} release package (Debian)
+      get_url:
+        url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
+        dest: /tmp/puppet-release.deb
+        timeout: 60
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Install Puppet release package (Debian)
+      apt:
+        deb: /tmp/puppet-release.deb
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Install puppetserver (Debian, online)
+      apt:
+        name: puppetserver
+        state: present
+        update_cache: yes
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Add Puppet {{ puppet_version }} repo (RedHat, online)
+      yum:
+        name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
+        state: present
+      when:
+        - ansible_os_family == 'RedHat'
+        - not puppet_airgap
+
+    - name: Install puppetserver (RedHat, online)
+      yum:
+        name: puppetserver
+        state: present
+      when:
+        - ansible_os_family == 'RedHat'
+        - not puppet_airgap
+
+    # ── Puppet Server — airgap ────────────────────────────────────────────────
+    - name: Upload puppetserver packages to node (airgap)
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ puppet_offline_pkgs.files | default([]) }}"
+      when: puppet_airgap
+
+    - name: Install puppetserver from local .deb (airgap, Debian)
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'Debian'
+
+    - name: Install puppetserver from local .rpm (airgap, RedHat)
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ puppet_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'RedHat'
+
+    # ── Configuration ─────────────────────────────────────────────────────────
+    - name: Set JVM heap for puppetserver (Debian)
+      lineinfile:
+        path: /etc/default/puppetserver
+        regexp: '^JAVA_ARGS='
+        line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
+        create: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Set JVM heap for puppetserver (RedHat)
+      lineinfile:
+        path: /etc/sysconfig/puppetserver
+        regexp: '^JAVA_ARGS='
+        line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
+        create: yes
+      when: ansible_os_family == 'RedHat'
+
+    - name: Ensure puppet config directory exists
+      file:
+        path: /etc/puppetlabs/puppet
+        state: directory
+        mode: '0755'
 
     - name: Configure puppet.conf
-      command: echo "Writing /etc/puppetlabs/puppet/puppet.conf..."
+      ini_file:
+        path: /etc/puppetlabs/puppet/puppet.conf
+        section: "{{ item.section }}"
+        option: "{{ item.key }}"
+        value: "{{ item.value }}"
+        create: yes
+      loop:
+        - { section: 'main',   key: 'certname',   value: '{{ ansible_fqdn }}' }
+        - { section: 'main',   key: 'server',      value: '{{ ansible_fqdn }}' }
+        - { section: 'main',   key: 'environment', value: 'production' }
+        - { section: 'main',   key: 'runinterval', value: '30m' }
+        - { section: 'server', key: 'vardir',      value: '/opt/puppetlabs/server/data/puppetserver' }
+        - { section: 'server', key: 'logdir',      value: '/var/log/puppetlabs/puppetserver' }
+        - { section: 'server', key: 'rundir',      value: '/var/run/puppetlabs/puppetserver' }
+        - { section: 'server', key: 'pidfile',     value: '/var/run/puppetlabs/puppetserver/puppetserver.pid' }
+
+    # ── Firewall ──────────────────────────────────────────────────────────────
+    - name: Allow Puppet Server port (ufw)
+      ufw:
+        rule: allow
+        port: "{{ puppet_server_port }}"
+        proto: tcp
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: Allow Puppet Server port (firewalld)
+      firewalld:
+        port: "{{ puppet_server_port }}/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: ansible_os_family == 'RedHat'
+      ignore_errors: yes
+
+    # ── Service ───────────────────────────────────────────────────────────────
+    - name: Enable and start puppetserver
+      service:
+        name: puppetserver
+        state: started
+        enabled: yes
+
+    - name: Wait for Puppet Server port {{ puppet_server_port }}
+      wait_for:
+        port: "{{ puppet_server_port }}"
+        timeout: 120
+        delay: 5
+
+    - name: Verify puppet version
+      command: /opt/puppetlabs/bin/puppet --version
+      register: puppet_ver
       changed_when: false
 
-    - name: Enable and start puppetserver service
-      command: echo "Starting puppetserver service..."
-      changed_when: false
-
-    - name: Open firewall ports 8140 and 8143
-      command: echo "Opening ports 8140 (agents) and 8143 (API)..."
-      changed_when: false
-
-    - name: Generate Puppet CA certificate
-      command: echo "Initialising Puppet CA..."
-      changed_when: false
-
-    - name: Verify Puppet API is reachable
-      command: echo "Puppet master ready at {{ inventory_hostname }}:8140"
-      changed_when: false
+    - name: Puppet Server ready
+      debug:
+        msg: "Puppet Server installed and listening on port {{ puppet_server_port }} — version {{ puppet_ver.stdout }}"

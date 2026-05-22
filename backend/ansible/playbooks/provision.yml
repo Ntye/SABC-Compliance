@@ -1,32 +1,114 @@
 ---
-# Stub playbook — real implementation in Feature 7
 - name: Baseline Provisioning
   hosts: target
   become: yes
+  gather_facts: yes
+
+  vars:
+    baseline_packages_debian:
+      - curl
+      - git
+      - vim
+      - net-tools
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - chrony
+      - rsyslog
+    baseline_packages_redhat:
+      - curl
+      - git
+      - vim
+      - net-tools
+      - ca-certificates
+      - gnupg2
+      - chrony
+      - rsyslog
+
   tasks:
-    - name: Gather facts
-      setup:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
 
-    - name: Update package cache
-      command: echo "Updating package index..."
-      changed_when: false
+    - name: Update yum cache
+      yum:
+        update_cache: yes
+      when: ansible_os_family == 'RedHat'
 
-    - name: Install baseline packages
-      command: echo "Installing curl git vim net-tools..."
-      changed_when: false
+    - name: Install baseline packages (Debian/Ubuntu)
+      apt:
+        name: "{{ baseline_packages_debian }}"
+        state: present
+      when: ansible_os_family == 'Debian'
 
-    - name: Configure NTP synchronisation
-      command: echo "Configuring chrony/systemd-timesyncd..."
-      changed_when: false
+    - name: Install baseline packages (RedHat/Rocky)
+      yum:
+        name: "{{ baseline_packages_redhat }}"
+        state: present
+      when: ansible_os_family == 'RedHat'
 
-    - name: Configure SSH hardening
-      command: echo "Hardening /etc/ssh/sshd_config..."
-      changed_when: false
+    - name: Enable and start chrony (NTP)
+      service:
+        name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+        state: started
+        enabled: yes
 
-    - name: Configure system logging
-      command: echo "Configuring rsyslog..."
-      changed_when: false
+    - name: Enable and start rsyslog
+      service:
+        name: rsyslog
+        state: started
+        enabled: yes
+
+    - name: SSH hardening - prohibit root password login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin prohibit-password'
+        backup: yes
+      notify: restart sshd
+
+    - name: SSH hardening - disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+      notify: restart sshd
+
+    - name: SSH hardening - limit max auth attempts
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?MaxAuthTries'
+        line: 'MaxAuthTries 3'
+      notify: restart sshd
+
+    - name: SSH hardening - disable X11 forwarding
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?X11Forwarding'
+        line: 'X11Forwarding no'
+      notify: restart sshd
 
     - name: Apply kernel security parameters
-      command: echo "Writing /etc/sysctl.d/99-bdc-security.conf..."
-      changed_when: false
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/99-bdc-security.conf
+        reload: yes
+      loop:
+        - { name: 'net.ipv4.ip_forward',                   value: '0' }
+        - { name: 'net.ipv4.conf.all.send_redirects',       value: '0' }
+        - { name: 'net.ipv4.conf.default.send_redirects',   value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_redirects',     value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.icmp_echo_ignore_broadcasts',   value: '1' }
+        - { name: 'net.ipv4.tcp_syncookies',                value: '1' }
+        - { name: 'kernel.dmesg_restrict',                  value: '1' }
+        - { name: 'fs.suid_dumpable',                       value: '0' }
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+        state: restarted

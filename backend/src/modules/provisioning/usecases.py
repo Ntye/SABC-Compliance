@@ -272,10 +272,20 @@ class InstallServiceUseCase:
                     fresh.updated_at = datetime.utcnow()
                     await node_repo.update(fresh)
 
+        extra_vars: dict = {}
+        if self._service == "puppet_agent":
+            host = await self._config.get("puppet_master_host")
+            if host:
+                extra_vars["puppet_master_host"] = host
+        elif self._service == "wazuh_agent":
+            host = await self._config.get("wazuh_manager_host")
+            if host:
+                extra_vars["wazuh_manager_host"] = host
+
         return await self._start.execute({
             "type": f"install_{self._service}",
             "node_id": node_id,
             "playbook": self._PLAYBOOKS[self._service],
-            "extra_vars": {},
+            "extra_vars": extra_vars,
             "on_complete": on_complete,
         })

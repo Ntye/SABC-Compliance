@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
 
     # -- SSH + Ansible clients --
     ssh_client = SshClientAdapter(settings.ssh_key_path)
-    ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path)
+    ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path, settings.packages_dir)
 
     # -- Node use cases --
     register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)

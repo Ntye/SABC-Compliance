@@ -1,35 +1,150 @@
 ---
-# Stub playbook — real implementation in Feature 7
+# Installs Puppet Agent (open source 8) on the target node and connects it
+# to the Puppet master.  puppet_master_host is injected from platform config.
+# Airgap mode: place puppet-agent .deb/.rpm in backend/packages/puppet-agent/
 - name: Install Puppet Agent
   hosts: target
   become: yes
+  gather_facts: yes
+
   vars:
+    puppet_version: "8"
     puppet_master: "{{ puppet_master_host | default('puppet') }}"
+    # packages_dir is injected by AnsibleAdapter from backend/packages/
+    agent_pkg_dir: "{{ packages_dir }}/puppet-agent"
+
   tasks:
-    - name: Verify system requirements
-      command: echo "Checking OS and resources..."
-      changed_when: false
+    # ── Airgap detection ──────────────────────────────────────────────────────
+    - name: Find offline puppet-agent packages on controller
+      find:
+        paths: "{{ agent_pkg_dir }}"
+        patterns:
+          - "puppet-agent*.deb"
+          - "puppet-agent*.rpm"
+      register: agent_offline_pkgs
+      delegate_to: localhost
+      become: no
+      failed_when: false
 
-    - name: Add Puppet Platform repository
-      command: echo "Configuring Puppet repository for {{ ansible_distribution }}..."
-      changed_when: false
+    - name: Set airgap mode
+      set_fact:
+        puppet_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
 
-    - name: Install puppet-agent package
-      command: echo "Installing puppet-agent..."
-      changed_when: false
+    - name: Report installation mode
+      debug:
+        msg: >-
+          Installing Puppet agent → master: {{ puppet_master }}
+          ({{ 'AIRGAP' if puppet_airgap else 'ONLINE' }})
+
+    # ── Install — online (Debian/Ubuntu) ──────────────────────────────────────
+    - name: Download Puppet {{ puppet_version }} release package (Debian)
+      get_url:
+        url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
+        dest: /tmp/puppet-release.deb
+        timeout: 60
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Install Puppet release package (Debian)
+      apt:
+        deb: /tmp/puppet-release.deb
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    - name: Install puppet-agent (Debian, online)
+      apt:
+        name: puppet-agent
+        state: present
+        update_cache: yes
+      when:
+        - ansible_os_family == 'Debian'
+        - not puppet_airgap
+
+    # ── Install — online (RedHat/Rocky) ──────────────────────────────────────
+    - name: Add Puppet {{ puppet_version }} repo (RedHat, online)
+      yum:
+        name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
+        state: present
+      when:
+        - ansible_os_family == 'RedHat'
+        - not puppet_airgap
+
+    - name: Install puppet-agent (RedHat, online)
+      yum:
+        name: puppet-agent
+        state: present
+      when:
+        - ansible_os_family == 'RedHat'
+        - not puppet_airgap
+
+    # ── Install — airgap ─────────────────────────────────────────────────────
+    - name: Upload puppet-agent packages to node (airgap)
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+      loop: "{{ agent_offline_pkgs.files | default([]) }}"
+      when: puppet_airgap
+
+    - name: Install puppet-agent from local .deb (airgap, Debian)
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'Debian'
+
+    - name: Install puppet-agent from local .rpm (airgap, RedHat)
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+      when:
+        - puppet_airgap
+        - ansible_os_family == 'RedHat'
+
+    # ── Configure puppet.conf ─────────────────────────────────────────────────
+    - name: Ensure puppet config directory exists
+      file:
+        path: /etc/puppetlabs/puppet
+        state: directory
+        mode: '0755'
 
     - name: Configure puppet.conf
-      command: echo "Setting server = {{ puppet_master }} in puppet.conf..."
-      changed_when: false
+      ini_file:
+        path: /etc/puppetlabs/puppet/puppet.conf
+        section: "{{ item.section }}"
+        option: "{{ item.key }}"
+        value: "{{ item.value }}"
+        create: yes
+      loop:
+        - { section: 'main', key: 'server',      value: '{{ puppet_master }}' }
+        - { section: 'main', key: 'certname',     value: '{{ ansible_fqdn }}' }
+        - { section: 'main', key: 'environment',  value: 'production' }
+        - { section: 'main', key: 'runinterval',  value: '30m' }
 
-    - name: Enable and start puppet service
-      command: echo "Starting puppet agent service..."
-      changed_when: false
+    # ── First run — submits CSR to master, applies initial catalog ────────────
+    - name: Stop puppet service before first run (if running)
+      service:
+        name: puppet
+        state: stopped
+        enabled: no
+      failed_when: false
 
-    - name: Submit CSR to Puppet master
-      command: echo "Sending certificate signing request to {{ puppet_master }}..."
-      changed_when: false
+    - name: Run puppet agent --test (submits CSR, waits up to 30s for signing)
+      command: /opt/puppetlabs/bin/puppet agent --test --waitforcert 30 --onetime --no-daemonize
+      register: puppet_run
+      # rc 0 = no changes, rc 2 = changes applied, rc 1 = warnings (still ok for initial run)
+      changed_when: puppet_run.rc == 2
+      failed_when: puppet_run.rc not in [0, 1, 2]
 
-    - name: Run initial Puppet catalog
-      command: echo "Running: puppet agent --test"
-      changed_when: false
+    - name: Enable and start puppet agent service
+      service:
+        name: puppet
+        state: started
+        enabled: yes
+
+    - name: Puppet Agent ready
+      debug:
+        msg: "{{ puppet_run.stdout_lines[-5:] | default(['Puppet agent connected to ' + puppet_master]) }}"

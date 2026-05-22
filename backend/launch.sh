@@ -40,7 +40,9 @@ if ! "$ROOT/.venv/bin/python" -c "import fastapi" 2>/dev/null; then
 fi
 
 # Create directories
-mkdir -p "$ROOT/keys" "$ROOT/data"
+mkdir -p "$ROOT/keys" "$ROOT/data" \
+         "$ROOT/packages/puppet-master" "$ROOT/packages/puppet-agent" \
+         "$ROOT/packages/wazuh-manager" "$ROOT/packages/wazuh-agent"
 
 # Generate SSH key if missing
 SSH_KEY_PATH="${SSH_KEY_PATH:-$ROOT/keys/ansible_id_rsa}"
@@ -59,6 +61,7 @@ export PORT="${PORT:-3000}"
 export DB_PATH="${DB_PATH:-./data/platform.db}"
 export SSH_KEY_PATH="${SSH_KEY_PATH:-./keys/ansible_id_rsa}"
 export ANSIBLE_DIR="${ANSIBLE_DIR:-./ansible}"
+export PACKAGES_DIR="${PACKAGES_DIR:-./packages}"
 
 # Kill existing process on PORT
 if command -v lsof &>/dev/null; then

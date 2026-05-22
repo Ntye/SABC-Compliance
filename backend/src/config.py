@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     db_path: str = "./data/platform.db"
     ssh_key_path: str = "./keys/ansible_id_rsa"
     ansible_dir: str = "./ansible"
+    packages_dir: str = "./packages"
 
     # JWT (username/password auth)
     jwt_secret: str = "change-me-in-production-use-random-32-chars"
