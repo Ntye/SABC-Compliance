@@ -260,11 +260,15 @@ class InstallServiceUseCase:
         node_repo = self._node_repo
         config_repo = self._config
 
+        pe_password_used = extra_vars.get("pe_console_password", "BdCPuppet1!")
+
         async def on_complete(job: Job, _node: Node | None) -> None:
             if job.status != "success":
                 return
             if config_key:
                 await config_repo.set(config_key, node_ip)
+            if self._service == "puppet_master":
+                await config_repo.set("pe_console_password", pe_password_used)
             if enroll_attr:
                 fresh = await node_repo.find_by_id(node_id)
                 if fresh:
@@ -273,7 +277,12 @@ class InstallServiceUseCase:
                     await node_repo.update(fresh)
 
         extra_vars: dict = {}
-        if self._service == "puppet_agent":
+        if self._service == "puppet_master":
+            # Pass stored PE console password so re-installs use the same creds
+            pw = await self._config.get("pe_console_password")
+            if pw:
+                extra_vars["pe_console_password"] = pw
+        elif self._service == "puppet_agent":
             host = await self._config.get("puppet_master_host")
             if host:
                 extra_vars["puppet_master_host"] = host

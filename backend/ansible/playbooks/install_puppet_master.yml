@@ -20,6 +20,9 @@
     puppet_version: "8"
     puppet_server_port: 8140
     puppet_server_memory: "512m"
+    # PE console admin password — override via extra_vars: pe_console_password=MyPass1!
+    # Must be ≥8 chars and contain upper, lower, digit, and special character.
+    pe_console_password: "{{ pe_console_password | default('BdCPuppet1!') }}"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 
@@ -88,18 +91,44 @@
         remote_src: yes
       when: install_mode == 'tarball'
 
+    # PE requires a pe.conf file — /dev/null is not accepted.
+    # Minimum required fields: console_admin_password + puppet_master_host.
+    - name: Write pe.conf for silent install
+      copy:
+        dest: /tmp/pe.conf
+        mode: '0600'
+        content: |
+          {
+            "console_admin_password": "{{ pe_console_password }}",
+            "puppet_enterprise::puppet_master_host": "{{ ansible_fqdn }}"
+          }
+      when: install_mode == 'tarball'
+
+    - name: Show PE console credentials
+      debug:
+        msg: "PE console admin password: {{ pe_console_password }} (save this!)"
+      when: install_mode == 'tarball'
+
     - name: Run PE silent installer
       shell: |
         set -e
         INSTALLER_DIR=$(find /tmp -maxdepth 1 -type d -name 'puppet-enterprise*' | head -1)
         cd "$INSTALLER_DIR"
-        ./puppet-enterprise-installer -c /dev/null -y
+        ./puppet-enterprise-installer -c /tmp/pe.conf -y
       register: pe_install
+      async: 1800
+      poll: 30
       when: install_mode == 'tarball'
 
-    - name: Show PE installer output (last 10 lines)
+    - name: Show PE installer output (last 15 lines)
       debug:
-        msg: "{{ pe_install.stdout_lines[-10:] | default([]) }}"
+        msg: "{{ pe_install.stdout_lines[-15:] | default([]) }}"
+      when: install_mode == 'tarball'
+
+    - name: Remove pe.conf (contains password)
+      file:
+        path: /tmp/pe.conf
+        state: absent
       when: install_mode == 'tarball'
 
     # ══════════════════════════════════════════════════════════════════════════
