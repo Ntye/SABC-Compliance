@@ -57,12 +57,22 @@ jobs_table = Table(
     Column("tags", Text),
     Column("skip_tags", Text),
     Column("extra_vars", Text, default="{}"),
-    Column("logs", Text, default="[]"),
     Column("exit_code", Integer),
     Column("created_at", Text),
     Column("updated_at", Text),
     Column("started_at", Text),
     Column("finished_at", Text),
+)
+
+# Each log line is its own row — avoids the read-modify-write race condition
+# that would occur if logs were stored as a JSON array in the jobs table.
+job_logs_table = Table(
+    "job_logs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("job_id", Text, nullable=False),
+    Column("ts", Text),
+    Column("level", Text, default="info"),
+    Column("line", Text),
 )
 
 compliance_reports_table = Table(
@@ -166,11 +176,17 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # Idempotent column migrations for older DB schemas
         for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
             try:
                 await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
             except Exception:
                 pass  # column already exists
+        # jobs.logs was a JSON blob that suffered a write-race; now replaced by
+        # the job_logs table.  Drop the old column if it exists (SQLite workaround:
+        # we just leave it — SQLite ignored unused columns and doesn't support
+        # DROP COLUMN before 3.35, so we simply stop writing/reading it).
+
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory
 
@@ -273,7 +289,7 @@ class JobRepository(IJobRepository):
     def __init__(self, session: async_sessionmaker) -> None:
         self._session = session
 
-    def _to_entity(self, row) -> Job:
+    def _to_entity(self, row, logs: list | None = None) -> Job:
         return Job(
             id=row.id,
             type=row.type or "provision",
@@ -284,7 +300,7 @@ class JobRepository(IJobRepository):
             tags=row.tags,
             skip_tags=row.skip_tags,
             extra_vars=json.loads(row.extra_vars or "{}"),
-            logs=json.loads(row.logs or "[]"),
+            logs=logs if logs is not None else [],
             exit_code=row.exit_code,
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -303,7 +319,6 @@ class JobRepository(IJobRepository):
             "tags": job.tags,
             "skip_tags": job.skip_tags,
             "extra_vars": json.dumps(job.extra_vars),
-            "logs": json.dumps(job.logs),
             "exit_code": job.exit_code,
             "created_at": _ts(job.created_at),
             "updated_at": _ts(job.updated_at),
@@ -319,7 +334,15 @@ class JobRepository(IJobRepository):
     async def find_by_id(self, id: str) -> Job | None:
         async with self._session() as s:
             row = (await s.execute(select(jobs_table).where(jobs_table.c.id == id))).first()
-            return self._to_entity(row) if row else None
+            if not row:
+                return None
+            log_rows = (await s.execute(
+                select(job_logs_table)
+                .where(job_logs_table.c.job_id == id)
+                .order_by(job_logs_table.c.id)
+            )).all()
+            logs = [{"ts": r.ts, "level": r.level, "line": r.line} for r in log_rows]
+            return self._to_entity(row, logs)
 
     async def find_all(self, limit: int) -> list[Job]:
         async with self._session() as s:
@@ -336,12 +359,12 @@ class JobRepository(IJobRepository):
 
     async def append_log(self, job_id: str, entry: dict) -> None:
         async with self._session() as s:
-            row = (await s.execute(select(jobs_table.c.logs).where(jobs_table.c.id == job_id))).first()
-            current = json.loads(row.logs if row else "[]")
-            current.append(entry)
-            await s.execute(
-                update(jobs_table).where(jobs_table.c.id == job_id).values(logs=json.dumps(current))
-            )
+            await s.execute(job_logs_table.insert().values(
+                job_id=job_id,
+                ts=entry.get("ts"),
+                level=entry.get("level", "info"),
+                line=entry.get("line", ""),
+            ))
             await s.commit()
 
 
