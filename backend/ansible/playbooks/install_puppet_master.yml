@@ -77,25 +77,46 @@
 
     # ══════════════════════════════════════════════════════════════════════════
     # MODE 1 — TARBALL (Puppet Enterprise)
+    #
+    # Standard PE install flow:
+    #   1. Extract tarball to /opt  (tarball already contains all .deb packages)
+    #   2. Overwrite conf.d/pe.conf inside the extracted dir with our settings
+    #   3. Run ./puppet-enterprise-installer -c conf.d/pe.conf from that dir
+    #
+    # The tarball is NOT copied via the copy module first — unarchive handles
+    # the upload+extract in one step to avoid doubling disk usage.
     # ══════════════════════════════════════════════════════════════════════════
-    - name: Upload PE tarball to node
-      copy:
-        src: "{{ pe_tarball.files[0].path }}"
-        dest: "/tmp/{{ pe_tarball.files[0].path | basename }}"
+    - name: Check free disk space (PE needs ~20 GB)
+      shell: df -BG /opt --output=avail | tail -1 | tr -d 'G '
+      register: free_gb
+      changed_when: false
       when: install_mode == 'tarball'
 
-    - name: Extract PE tarball
+    - name: Warn if disk space is low
+      debug:
+        msg: "WARNING: only {{ free_gb.stdout }}GB free on /opt — PE needs ~20GB"
+      when: install_mode == 'tarball' and (free_gb.stdout | int) < 20
+
+    - name: Extract PE tarball to /opt (uploads + extracts in one step)
       unarchive:
-        src: "/tmp/{{ pe_tarball.files[0].path | basename }}"
-        dest: /tmp/
-        remote_src: yes
+        src: "{{ pe_tarball.files[0].path }}"
+        dest: /opt/
+        remote_src: no
+        creates: "/opt/{{ pe_tarball.files[0].path | basename | regex_replace('\\.tar\\.gz$', '') }}"
       when: install_mode == 'tarball'
 
-    # PE requires a pe.conf file — /dev/null is not accepted.
-    # Minimum required fields: console_admin_password + puppet_master_host.
-    - name: Write pe.conf for silent install
+    - name: Locate extracted installer directory
+      shell: "ls -d /opt/puppet-enterprise-*/ | head -1 | tr -d '\\n'"
+      register: pe_dir
+      changed_when: false
+      when: install_mode == 'tarball'
+
+    # Fill in the pe.conf that ships inside the tarball (conf.d/pe.conf).
+    # We overwrite it entirely — the shipped file is a template with comments,
+    # these are the only two fields required for a monolithic primary install.
+    - name: Write pe.conf (overwrite template inside installer dir)
       copy:
-        dest: /tmp/pe.conf
+        dest: "{{ pe_dir.stdout }}conf.d/pe.conf"
         mode: '0600'
         content: |
           {
@@ -104,31 +125,26 @@
           }
       when: install_mode == 'tarball'
 
-    - name: Show PE console credentials
+    - name: Print PE console password to job log (save this)
       debug:
-        msg: "PE console admin password: {{ pe_console_password }} (save this!)"
+        msg: >-
+          PE console admin password: {{ pe_console_password }}
+          — log in at https://{{ ansible_fqdn }} after install completes
       when: install_mode == 'tarball'
 
-    - name: Run PE silent installer
+    # PE installation takes 10-30 minutes.  The task runs synchronously so
+    # all stdout lines stream into the job log in real time.
+    - name: Run PE installer (this takes 10-30 minutes)
       shell: |
-        set -e
-        INSTALLER_DIR=$(find /tmp -maxdepth 1 -type d -name 'puppet-enterprise*' | head -1)
-        cd "$INSTALLER_DIR"
-        ./puppet-enterprise-installer -c /tmp/pe.conf -y
+        cd "{{ pe_dir.stdout }}"
+        ./puppet-enterprise-installer -c conf.d/pe.conf
       register: pe_install
-      async: 1800
-      poll: 30
+      timeout: 3600
       when: install_mode == 'tarball'
 
-    - name: Show PE installer output (last 15 lines)
+    - name: Show final PE installer output
       debug:
-        msg: "{{ pe_install.stdout_lines[-15:] | default([]) }}"
-      when: install_mode == 'tarball'
-
-    - name: Remove pe.conf (contains password)
-      file:
-        path: /tmp/pe.conf
-        state: absent
+        msg: "{{ pe_install.stdout_lines[-20:] | default([]) }}"
       when: install_mode == 'tarball'
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -277,9 +293,13 @@
       when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
     # ══════════════════════════════════════════════════════════════════════════
-    # CONFIGURE + START  (all modes, open-source puppet only; PE already done)
+    # CONFIGURE + START
+    # open-source (packages / online): configure JVM, puppet.conf, service
+    # PE tarball: installer already started everything; just open firewall ports
     # ══════════════════════════════════════════════════════════════════════════
-    - name: Set JVM heap for puppetserver (Debian)
+
+    # ── Open-source only ──────────────────────────────────────────────────────
+    - name: Set JVM heap for puppetserver (Debian, open-source)
       lineinfile:
         path: /etc/default/puppetserver
         regexp: '^JAVA_ARGS='
@@ -287,7 +307,7 @@
         create: yes
       when: install_mode != 'tarball' and ansible_os_family == 'Debian'
 
-    - name: Set JVM heap for puppetserver (RedHat)
+    - name: Set JVM heap for puppetserver (RedHat, open-source)
       lineinfile:
         path: /etc/sysconfig/puppetserver
         regexp: '^JAVA_ARGS='
@@ -295,13 +315,14 @@
         create: yes
       when: install_mode != 'tarball' and ansible_os_family == 'RedHat'
 
-    - name: Ensure puppet config directory exists
+    - name: Ensure puppet config directory exists (open-source)
       file:
         path: /etc/puppetlabs/puppet
         state: directory
         mode: '0755'
+      when: install_mode != 'tarball'
 
-    - name: Configure puppet.conf
+    - name: Configure puppet.conf (open-source)
       ini_file:
         path: /etc/puppetlabs/puppet/puppet.conf
         section: "{{ item.section }}"
@@ -316,33 +337,59 @@
         - { section: 'server', key: 'vardir',      value: '/opt/puppetlabs/server/data/puppetserver' }
         - { section: 'server', key: 'logdir',      value: '/var/log/puppetlabs/puppetserver' }
         - { section: 'server', key: 'rundir',      value: '/var/run/puppetlabs/puppetserver' }
+      when: install_mode != 'tarball'
 
-    - name: Allow Puppet Server port (ufw)
-      ufw:
-        rule: allow
-        port: "{{ puppet_server_port }}"
-        proto: tcp
-      when: ansible_os_family == 'Debian'
-      ignore_errors: yes
-
-    - name: Allow Puppet Server port (firewalld)
-      firewalld:
-        port: "{{ puppet_server_port }}/tcp"
-        permanent: yes
-        state: enabled
-        immediate: yes
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Enable and start puppetserver
+    - name: Enable and start puppetserver (open-source)
       service:
         name: puppetserver
         state: started
         enabled: yes
+      when: install_mode != 'tarball'
 
-    - name: Wait for Puppet Server port {{ puppet_server_port }}
+    # ── Firewall — open-source ports ──────────────────────────────────────────
+    - name: Allow port 8140 agent traffic (ufw, open-source)
+      ufw:
+        rule: allow
+        port: "8140"
+        proto: tcp
+      when: install_mode != 'tarball' and ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: Allow port 8140 agent traffic (firewalld, open-source)
+      firewalld:
+        port: "8140/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: install_mode != 'tarball' and ansible_os_family == 'RedHat'
+      ignore_errors: yes
+
+    # ── Firewall — PE ports (ufw) ─────────────────────────────────────────────
+    # 8140 = agent comms, 8143 = orchestrator API, 8170 = Code Manager,
+    # 443/4433 = console HTTPS/RBAC
+    - name: Allow PE ports (ufw)
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["8140", "8143", "8170", "443", "4433"]
+      when: install_mode == 'tarball' and ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: Allow PE ports (firewalld)
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop: ["8140", "8143", "8170", "443", "4433"]
+      when: install_mode == 'tarball' and ansible_os_family == 'RedHat'
+      ignore_errors: yes
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Wait for agent port 8140 to open
       wait_for:
-        port: "{{ puppet_server_port }}"
+        port: 8140
         timeout: 120
         delay: 5
 
@@ -353,4 +400,9 @@
 
     - name: Puppet Server ready
       debug:
-        msg: "Puppet Server installed ({{ install_mode }}) — version {{ puppet_ver.stdout }} — listening on :{{ puppet_server_port }}"
+        msg: >-
+          Puppet Server installed ({{ install_mode }}) —
+          version {{ puppet_ver.stdout }} —
+          {{ 'PE console: https://' + ansible_fqdn + ' (password in job log above)'
+             if install_mode == 'tarball'
+             else 'agent port :8140 open' }}
