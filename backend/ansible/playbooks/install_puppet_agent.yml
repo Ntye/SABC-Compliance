@@ -1,15 +1,19 @@
 ---
-# Installs Puppet Agent on the target node and connects it to the Puppet master.
-# puppet_master_host is injected from platform config.
+# Installs Puppet Agent on a PE-managed node using the PE master's install script:
+#   curl -k https://<master>:8140/packages/current/install.bash | sudo bash
 #
-# Airgap modes (checked in order):
-#   1. PACKAGES — puppet-agent*.deb or *.rpm in packages/puppet-agent/
-#                 Uploaded and installed directly.
-#   2. LOCAL-REPO — puppet*-release*.deb/rpm in packages/puppet-agent/ but no
-#                   agent package.  Installs the release pkg from local copy to
-#                   add the apt/yum source, then installs puppet-agent from the
-#                   now-configured repo (still needs internet to the repo itself).
-#   3. ONLINE   — no local files; downloads release pkg + puppet-agent from internet.
+# The PE master serves agent packages for platforms it already knows about.
+# If it doesn't have packages for the target node's OS yet, place the matching
+# platform tarball in packages/puppet-agent/ before running:
+#
+#   puppet-agent-ubuntu-22.04-amd64.tar.gz    (Ubuntu 22.04 x86_64)
+#   puppet-agent-ubuntu-20.04-amd64.tar.gz    (Ubuntu 20.04 x86_64)
+#   puppet-agent-el-8-x86_64.tar.gz           (RHEL/CentOS 8)
+#   puppet-agent-el-7-x86_64.tar.gz           (RHEL/CentOS 7)
+#
+# When a matching tarball is found, the playbook uploads it to the PE master
+# and registers it before running the install script.
+# If no tarball is present, the master is assumed to already have packages.
 #
 - name: Install Puppet Agent
   hosts: target
@@ -17,199 +21,115 @@
   gather_facts: yes
 
   vars:
-    puppet_version: "8"
     puppet_master: "{{ puppet_master_host | default('puppet') }}"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     agent_pkg_dir: "{{ packages_dir }}/puppet-agent"
 
   tasks:
-    # ── Airgap detection ──────────────────────────────────────────────────────
-    - name: Find puppet-agent packages on controller
-      find:
-        paths: "{{ agent_pkg_dir }}"
-        patterns: ["puppet-agent*.deb", "puppet-agent*.rpm"]
-      register: agent_offline_pkgs
-      delegate_to: localhost
-      become: no
-      failed_when: false
-
-    - name: Find local Puppet release package on controller
-      find:
-        paths: "{{ agent_pkg_dir }}"
-        patterns: ["puppet*-release*.deb", "puppet*-release*.rpm"]
-      register: puppet_release_pkg
-      delegate_to: localhost
-      become: no
-      failed_when: false
-
-    - name: Determine installation mode
+    # ── Derive the PE platform string from the target node's OS facts ─────────
+    # Debian/Ubuntu: ubuntu-22.04-amd64  |  RedHat/CentOS: el-8-x86_64
+    - name: Set target platform string
       set_fact:
-        install_mode: >-
-          {{ 'packages'   if agent_offline_pkgs.files | length > 0
-             else 'local-repo' if puppet_release_pkg.files | length > 0
-             else 'online' }}
+        pe_platform: >-
+          {%- if ansible_os_family == 'Debian' -%}
+          {{ ansible_distribution | lower }}-{{ ansible_distribution_version }}-{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_architecture }}
+          {%- else -%}
+          el-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}
+          {%- endif -%}
 
-    - name: Report installation mode
-      debug:
-        msg: "Installing Puppet agent → master: {{ puppet_master }} (mode: {{ install_mode | upper }})"
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # MODE 1 — PACKAGES (full offline)
-    # ══════════════════════════════════════════════════════════════════════════
-    - name: Upload puppet-agent .deb to node
-      copy:
-        src: "{{ item.path }}"
-        dest: "/tmp/{{ item.path | basename }}"
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
-      when: install_mode == 'packages' and ansible_os_family == 'Debian'
-
-    - name: Install puppet-agent from local .deb
-      apt:
-        deb: "/tmp/{{ item.path | basename }}"
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
-      when: install_mode == 'packages' and ansible_os_family == 'Debian'
-
-    - name: Upload puppet-agent .rpm to node
-      copy:
-        src: "{{ item.path }}"
-        dest: "/tmp/{{ item.path | basename }}"
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
-      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
-
-    - name: Install puppet-agent from local .rpm
-      yum:
-        name: "/tmp/{{ item.path | basename }}"
-        state: present
-      loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
-      when: install_mode == 'packages' and ansible_os_family == 'RedHat'
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # MODE 2 — LOCAL-REPO (release package on disk, agent from repo)
-    # ══════════════════════════════════════════════════════════════════════════
-    - name: Upload local Puppet release .deb to node
-      copy:
-        src: "{{ puppet_release_pkg.files[0].path }}"
-        dest: /tmp/puppet-release.deb
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'Debian'
-
-    - name: Install Puppet release package from local copy (Debian)
-      apt:
-        deb: /tmp/puppet-release.deb
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'Debian'
-
-    - name: Install puppet-agent via repo (Debian, local-repo mode)
-      apt:
-        name: puppet-agent
-        state: present
-        update_cache: yes
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'Debian'
-
-    - name: Upload local Puppet release .rpm to node
-      copy:
-        src: "{{ puppet_release_pkg.files[0].path }}"
-        dest: /tmp/puppet-release.rpm
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'RedHat'
-
-    - name: Install Puppet release package from local copy (RedHat)
-      yum:
-        name: /tmp/puppet-release.rpm
-        state: present
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'RedHat'
-
-    - name: Install puppet-agent via repo (RedHat, local-repo mode)
-      yum:
-        name: puppet-agent
-        state: present
-      when:
-        - install_mode == 'local-repo'
-        - ansible_os_family == 'RedHat'
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # MODE 3 — ONLINE
-    # ══════════════════════════════════════════════════════════════════════════
-    - name: Download Puppet {{ puppet_version }} release package (Debian, online)
-      get_url:
-        url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
-        dest: /tmp/puppet-release.deb
-        timeout: 60
-      when: install_mode == 'online' and ansible_os_family == 'Debian'
-
-    - name: Install Puppet release package (Debian, online)
-      apt:
-        deb: /tmp/puppet-release.deb
-      when: install_mode == 'online' and ansible_os_family == 'Debian'
-
-    - name: Install puppet-agent (Debian, online)
-      apt:
-        name: puppet-agent
-        state: present
-        update_cache: yes
-      when: install_mode == 'online' and ansible_os_family == 'Debian'
-
-    - name: Add Puppet {{ puppet_version }} repo from internet (RedHat, online)
-      yum:
-        name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
-        state: present
-      when: install_mode == 'online' and ansible_os_family == 'RedHat'
-
-    - name: Install puppet-agent (RedHat, online)
-      yum:
-        name: puppet-agent
-        state: present
-      when: install_mode == 'online' and ansible_os_family == 'RedHat'
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # CONFIGURE + FIRST RUN  (all modes)
-    # ══════════════════════════════════════════════════════════════════════════
-    - name: Ensure puppet config directory exists
-      file:
-        path: /etc/puppetlabs/puppet
-        state: directory
-        mode: '0755'
-
-    - name: Configure puppet.conf
-      ini_file:
-        path: /etc/puppetlabs/puppet/puppet.conf
-        section: "{{ item.section }}"
-        option: "{{ item.key }}"
-        value: "{{ item.value }}"
-        create: yes
-      loop:
-        - { section: 'main', key: 'server',      value: '{{ puppet_master }}' }
-        - { section: 'main', key: 'certname',     value: '{{ ansible_fqdn }}' }
-        - { section: 'main', key: 'environment',  value: 'production' }
-        - { section: 'main', key: 'runinterval',  value: '30m' }
-
-    - name: Stop puppet service before first run
-      service:
-        name: puppet
-        state: stopped
-        enabled: no
+    # ── Look for a platform tarball on the controller ─────────────────────────
+    - name: Find platform tarball in packages/puppet-agent/
+      find:
+        paths: "{{ agent_pkg_dir }}"
+        patterns: "puppet-agent-{{ pe_platform | trim }}.tar.gz"
+      register: platform_tarball
+      delegate_to: localhost
+      become: no
       failed_when: false
 
-    - name: Run puppet agent --test (submits CSR, waits up to 30s for signing)
-      command: /opt/puppetlabs/bin/puppet agent --test --waitforcert 30 --onetime --no-daemonize
-      register: puppet_run
-      # 0=no changes, 2=changes applied, 1=warnings — all acceptable on first run
-      changed_when: puppet_run.rc == 2
-      failed_when: puppet_run.rc not in [0, 1, 2]
+    - name: Report detected platform and tarball
+      debug:
+        msg: >-
+          Target platform: {{ pe_platform | trim }} |
+          Tarball: {{ platform_tarball.files[0].path | basename
+                      if platform_tarball.files | length > 0
+                      else 'none — PE master must already have packages for this platform' }}
 
-    - name: Enable and start puppet agent service
-      service:
-        name: puppet
-        state: started
-        enabled: yes
+    # ── If a tarball is present: register platform on the PE master ───────────
+
+    - name: Read PE version from master
+      command: cat /opt/puppetlabs/server/pe_build
+      register: pe_version_raw
+      delegate_to: "{{ puppet_master }}"
+      changed_when: false
+      failed_when: false
+      when: platform_tarball.files | length > 0
+
+    - name: Set PE version fact
+      set_fact:
+        pe_version: "{{ pe_version_raw.stdout | trim }}"
+      when: platform_tarball.files | length > 0 and (pe_version_raw.rc | default(1)) == 0
+
+    - name: Check if platform packages already present on master
+      find:
+        paths: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
+        patterns: "{{ pe_platform | trim }}-*"
+        file_type: directory
+      register: platform_dirs
+      delegate_to: "{{ puppet_master }}"
+      failed_when: false
+      when: platform_tarball.files | length > 0 and pe_version is defined
+
+    - name: Copy platform tarball to PE master
+      copy:
+        src: "{{ platform_tarball.files[0].path }}"
+        dest: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
+      delegate_to: "{{ puppet_master }}"
+      when: >
+        platform_tarball.files | length > 0
+        and pe_version is defined
+        and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
+
+    - name: Extract platform packages into PE packages directory on master
+      unarchive:
+        src: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
+        dest: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
+        remote_src: yes
+      delegate_to: "{{ puppet_master }}"
+      when: >
+        platform_tarball.files | length > 0
+        and pe_version is defined
+        and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
+
+    # ── Install agent via the PE master's install script ─────────────────────
+    - name: Install Puppet agent via PE install script
+      shell: >-
+        curl -k "https://{{ puppet_master }}:8140/packages/current/install.bash"
+        | sudo bash
+      register: pe_install
+      timeout: 300
+
+    - name: Show install script output (last 10 lines)
+      debug:
+        msg: "{{ pe_install.stdout_lines[-10:] | default([]) }}"
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Check puppet-agent is installed
+      command: /opt/puppetlabs/bin/puppet --version
+      register: puppet_ver
+      changed_when: false
+
+    - name: Check puppet agent service status
+      command: systemctl is-active puppet
+      register: puppet_svc
+      changed_when: false
+      failed_when: false
 
     - name: Puppet Agent ready
       debug:
-        msg: "{{ puppet_run.stdout_lines[-5:] | default(['Puppet agent connected to ' + puppet_master]) }}"
+        msg: >-
+          Puppet Agent {{ puppet_ver.stdout | trim }} installed on {{ ansible_fqdn }}.
+          Connected to PE master {{ puppet_master }}.
+          Service: {{ puppet_svc.stdout }}.
+          Sign the certificate on the master with:
+          puppet cert sign {{ ansible_fqdn }}
