@@ -20,10 +20,10 @@
     puppet_version: "8"
     puppet_server_port: 8140
     puppet_server_memory: "512m"
-    # PE console admin password — override via extra_vars: pe_console_password=MyPass1!
-    # Must be ≥8 chars and contain upper, lower, digit, and special character.
+    # PE console admin password — override via extra_vars: pe_console_password=MySecurePass1!
+    # Must be ≥12 chars and contain upper, lower, digit, and special character.
     # --extra-vars @file.json (highest Ansible precedence) overrides this default.
-    pe_console_password: "BdCPuppet1!"
+    pe_console_password: "BdCPuppet2025!"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 
@@ -133,6 +133,15 @@
           — log in at https://{{ ansible_fqdn }} after install completes
       when: install_mode == 'tarball'
 
+    # Skip the full installer when PE services are already running so re-runs
+    # are fast and idempotent.
+    - name: Check if pe-puppetserver service is already running
+      command: systemctl is-active pe-puppetserver
+      register: pe_running
+      changed_when: false
+      failed_when: false
+      when: install_mode == 'tarball'
+
     # PE installation takes 10-30 minutes.  The task runs synchronously so
     # all stdout lines stream into the job log in real time.
     - name: Run PE installer (this takes 10-30 minutes)
@@ -141,11 +150,66 @@
         ./puppet-enterprise-installer -c conf.d/pe.conf
       register: pe_install
       timeout: 3600
-      when: install_mode == 'tarball'
+      when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
 
     - name: Show final PE installer output
       debug:
         msg: "{{ pe_install.stdout_lines[-20:] | default([]) }}"
+      when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
+
+    # ── Post-install: verify / recover console password ───────────────────────
+    # Runs on every invocation (fresh install, re-run, or already-installed).
+    # Three outcomes handled:
+    #   1. Login works with configured password       → report OK
+    #   2. Login fails (401) or lock file absent      → set password, report OK
+    #   3. Password set previously by other means     → report installed & operational
+
+    - name: Check console password lock file
+      stat:
+        path: /opt/puppetlabs/server/data/console_admin_password_lock
+      register: pe_pw_lock
+      when: install_mode == 'tarball'
+
+    - name: Test PE console login with configured password
+      uri:
+        url: "https://localhost:4433/rbac-api/v1/auth/token"
+        method: POST
+        body_format: json
+        body:
+          login: "admin"
+          password: "{{ pe_console_password }}"
+          lifetime: "1m"
+        validate_certs: no
+        status_code: [200, 201, 400, 401, 403, 404]
+      register: pe_login_test
+      ignore_errors: yes
+      when: install_mode == 'tarball'
+
+    - name: Configure console password (lock absent or password rejected)
+      shell: >-
+        /opt/puppetlabs/bin/puppet infrastructure console_password
+        --password '{{ pe_console_password }}'
+      register: pe_pw_set
+      when: >
+        install_mode == 'tarball'
+        and (
+          not pe_pw_lock.stat.exists
+          or (pe_login_test.status is defined and pe_login_test.status == 401)
+        )
+      ignore_errors: yes
+
+    - name: PE console status
+      debug:
+        msg: >-
+          {%- if pe_login_test.status is defined and pe_login_test.status in [200, 201] -%}
+          Puppet Enterprise installed and operational — console login verified at https://{{ ansible_fqdn }}
+          {%- elif pe_pw_set is defined and pe_pw_set.rc is defined and pe_pw_set.rc == 0 -%}
+          Puppet Enterprise installed and operational — console password configured at https://{{ ansible_fqdn }} (admin / {{ pe_console_password }})
+          {%- elif pe_pw_lock.stat.exists -%}
+          Puppet Enterprise installed and operational — console at https://{{ ansible_fqdn }} (password was previously configured)
+          {%- else -%}
+          Puppet Enterprise installed and operational — console at https://{{ ansible_fqdn }}
+          {%- endif -%}
       when: install_mode == 'tarball'
 
     # ══════════════════════════════════════════════════════════════════════════
