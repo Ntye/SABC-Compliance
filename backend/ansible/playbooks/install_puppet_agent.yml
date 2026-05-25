@@ -127,31 +127,46 @@
 
     - name: Add pe_repo platform class to PE Master node group
       shell: |
-        set -eo pipefail
-        CERTNAME=$(/opt/puppetlabs/bin/puppet config print certname)
-        CERT="/etc/puppetlabs/puppet/ssl/certs/${CERTNAME}.pem"
-        KEY="/etc/puppetlabs/puppet/ssl/private_keys/${CERTNAME}.pem"
-        BASE="https://localhost:4433"
+        python3 << 'PYEOF'
+        import ssl, json, urllib.request, subprocess, sys
 
-        GROUPS=$(curl -sk --cert "$CERT" --key "$KEY" "${BASE}/classifier-api/v1/groups")
-        GROUP_ID=$(echo "$GROUPS" | python3 -c "
-        import sys, json
-        groups = json.load(sys.stdin)
-        g = next((x for x in groups if x['name'] == 'PE Master'), None)
-        print(g['id'] if g else '')
-        ")
+        certname = subprocess.check_output(
+            ['/opt/puppetlabs/bin/puppet', 'config', 'print', 'certname'],
+            text=True
+        ).strip()
 
-        if [ -z "$GROUP_ID" ]; then
-          echo "SKIP: PE Master node group not found"
-          exit 0
-        fi
+        cert = f'/etc/puppetlabs/puppet/ssl/certs/{certname}.pem'
+        key  = f'/etc/puppetlabs/puppet/ssl/private_keys/{certname}.pem'
+        base = 'https://localhost:4433'
 
-        curl -sk --cert "$CERT" --key "$KEY" \
-          -X POST -H "Content-Type: application/json" \
-          -d '{"classes":{"{{ pe_repo_class }}":{}}}' \
-          "${BASE}/classifier-api/v1/groups/${GROUP_ID}" > /dev/null
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.load_cert_chain(cert, key)
 
-        echo "Classified PE Master with {{ pe_repo_class }}"
+        with urllib.request.urlopen(
+            urllib.request.Request(f'{base}/classifier-api/v1/groups'),
+            context=ctx
+        ) as resp:
+            groups = json.loads(resp.read())
+
+        group = next((g for g in groups if g['name'] == 'PE Master'), None)
+        if not group:
+            print('SKIP: PE Master node group not found')
+            sys.exit(0)
+
+        body = json.dumps({'classes': {'{{ pe_repo_class }}': {}}}).encode()
+        req  = urllib.request.Request(
+            f"{base}/classifier-api/v1/groups/{group['id']}",
+            data=body,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, context=ctx) as resp:
+            resp.read()
+
+        print('Classified PE Master with {{ pe_repo_class }}')
+        PYEOF
       args:
         executable: /bin/bash
       delegate_to: pe_master_dynamic
