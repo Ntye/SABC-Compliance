@@ -2,8 +2,12 @@
 # Installs Puppet Agent on a PE-managed node using the PE master's install script:
 #   curl -k https://<master>:8140/packages/current/install.bash | sudo bash
 #
-# The PE master serves agent packages for platforms it already knows about.
-# If it doesn't have packages for the target node's OS yet, place the matching
+# install.bash uses pe_repo — a set of Puppet classes applied to the primary
+# that generate the apt/yum repo metadata served over HTTPS.  For the repo to
+# be ready, a puppet run must have been done on the primary after installation.
+# This playbook always triggers that run before calling install.bash.
+#
+# To add packages for a platform not yet on the primary, place the matching
 # platform tarball in packages/puppet-agent/ before running:
 #
 #   puppet-agent-ubuntu-22.04-amd64.tar.gz    (Ubuntu 22.04 x86_64)
@@ -11,9 +15,8 @@
 #   puppet-agent-el-8-x86_64.tar.gz           (RHEL/CentOS 8)
 #   puppet-agent-el-7-x86_64.tar.gz           (RHEL/CentOS 7)
 #
-# When a matching tarball is found, the playbook uploads it to the PE master
-# and registers it before running the install script.
-# If no tarball is present, the master is assumed to already have packages.
+# The playbook will upload and extract it on the primary, then trigger the
+# puppet run so pe_repo serves those packages, then run install.bash.
 #
 - name: Install Puppet Agent
   hosts: target
@@ -37,6 +40,18 @@
           el-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}
           {%- endif -%}
 
+    # ── Always register the PE master with the same SSH credentials ───────────
+    # Needed both for platform tarball upload and for the puppet run below.
+    - name: Register PE master in dynamic inventory
+      add_host:
+        name: pe_master_dynamic
+        ansible_host: "{{ puppet_master }}"
+        ansible_user: "{{ ansible_user }}"
+        ansible_ssh_private_key_file: "{{ ansible_ssh_private_key_file | default(omit) }}"
+        ansible_ssh_common_args: "{{ ansible_ssh_common_args | default(omit) }}"
+        ansible_become: yes
+      changed_when: false
+
     # ── Look for a platform tarball on the controller ─────────────────────────
     - name: Find platform tarball in packages/puppet-agent/
       find:
@@ -53,24 +68,10 @@
           Target platform: {{ pe_platform | trim }} |
           Tarball: {{ platform_tarball.files[0].path | basename
                       if platform_tarball.files | length > 0
-                      else 'none — PE master must already have packages for this platform' }}
+                      else 'none — primary must already have packages for this platform' }}
 
-    # ── If a tarball is present: register platform on the PE master ───────────
-    # Add the master to dynamic inventory with the same ansible user and key
-    # used for the target node, so delegate_to connects as 'ansible' not the
-    # local OS user.
-    - name: Register PE master in dynamic inventory
-      add_host:
-        name: pe_master_dynamic
-        ansible_host: "{{ puppet_master }}"
-        ansible_user: "{{ ansible_user }}"
-        ansible_ssh_private_key_file: "{{ ansible_ssh_private_key_file | default(omit) }}"
-        ansible_ssh_common_args: "{{ ansible_ssh_common_args | default(omit) }}"
-        ansible_become: yes
-      changed_when: false
-      when: platform_tarball.files | length > 0
-
-    - name: Read PE version from master
+    # ── If a tarball is present: upload to primary if not already there ───────
+    - name: Read PE version from primary
       command: cat /opt/puppetlabs/server/pe_build
       register: pe_version_raw
       delegate_to: pe_master_dynamic
@@ -83,7 +84,7 @@
         pe_version: "{{ pe_version_raw.stdout | trim }}"
       when: platform_tarball.files | length > 0 and (pe_version_raw.rc | default(1)) == 0
 
-    - name: Check if platform packages already present on master
+    - name: Check if platform packages already in PE packages directory
       find:
         paths: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
         patterns: "{{ pe_platform | trim }}-*"
@@ -93,7 +94,7 @@
       failed_when: false
       when: platform_tarball.files | length > 0 and pe_version is defined
 
-    - name: Copy platform tarball to PE master
+    - name: Copy platform tarball to primary
       copy:
         src: "{{ platform_tarball.files[0].path }}"
         dest: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
@@ -103,7 +104,7 @@
         and pe_version is defined
         and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
 
-    - name: Extract platform packages into PE packages directory on master
+    - name: Extract platform packages into PE packages directory on primary
       unarchive:
         src: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
         dest: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
@@ -114,16 +115,32 @@
         and pe_version is defined
         and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
 
+    # ── Run puppet on the primary to apply pe_repo classes ────────────────────
+    # pe_repo::platform::* classes (classified on the primary by PE node groups)
+    # generate the apt/yum repo metadata that install.bash fetches.
+    # Without this run the files exist on disk but the repo index is not built,
+    # so install.bash reports "agent packages not present".
+    - name: Run puppet agent on primary to configure pe_repo
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      delegate_to: pe_master_dynamic
+      register: primary_puppet_run
+      changed_when: primary_puppet_run.rc == 2
+      # rc 0=no changes, 2=changes applied — both mean pe_repo was evaluated.
+      # failed_when: false so an unrelated catalog failure does not abort the job.
+      failed_when: false
+      timeout: 300
+
+    - name: Show puppet primary run result
+      debug:
+        msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
+
     # ── Install agent via the PE master's install script ─────────────────────
-    # Download separately so a curl failure is caught, then run with bash so
-    # the script's own exit code is what Ansible sees (not the pipe's last cmd).
-    - name: Download PE agent install script from master
+    - name: Download PE agent install script from primary
       get_url:
         url: "https://{{ puppet_master }}:8140/packages/current/install.bash"
         dest: /tmp/pe-agent-install.bash
         mode: '0755'
         validate_certs: no
-      register: install_script_dl
 
     - name: Run PE agent install script
       shell: bash /tmp/pe-agent-install.bash
