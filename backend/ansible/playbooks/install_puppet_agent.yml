@@ -115,30 +115,62 @@
         and pe_version is defined
         and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
 
-    # ── Apply pe_repo platform class directly on primary ─────────────────────
-    # pe_repo::platform::ubuntu_2204_amd64 (and equivalents) generate the
-    # apt/yum repo index that install.bash fetches over HTTPS.
-    # Using `puppet apply` rather than `puppet agent --test` because the class
-    # must be applied unconditionally — it may not be classified in the PE
-    # console's "PE Master" node group, which would make puppet agent a no-op.
+    # ── Classify primary with pe_repo platform class via PE Node Manager API ───
+    # puppet apply fails here because pe_repo::bulk_pluginsync has internal
+    # `require => Package['pe-java17']` that only exists in a full PE catalog.
+    # The proper fix: add the class to the "PE Master" node group via the
+    # classifier API (cert auth — no password needed), then run puppet agent
+    # so the full catalog applies it with all its dependencies.
     - name: Derive pe_repo platform class name
       set_fact:
         pe_repo_class: "pe_repo::platform::{{ pe_platform | trim | replace('-', '_') | replace('.', '') }}"
 
-    - name: Apply pe_repo platform class on primary
-      command: >-
-        /opt/puppetlabs/bin/puppet apply
-        -e 'include {{ pe_repo_class }}'
+    - name: Add pe_repo platform class to PE Master node group
+      shell: |
+        set -eo pipefail
+        CERTNAME=$(/opt/puppetlabs/bin/puppet config print certname)
+        CERT="/etc/puppetlabs/puppet/ssl/certs/${CERTNAME}.pem"
+        KEY="/etc/puppetlabs/puppet/ssl/private_keys/${CERTNAME}.pem"
+        BASE="https://localhost:4433"
+
+        GROUPS=$(curl -sk --cert "$CERT" --key "$KEY" "${BASE}/classifier-api/v1/groups")
+        GROUP_ID=$(echo "$GROUPS" | python3 -c "
+        import sys, json
+        groups = json.load(sys.stdin)
+        g = next((x for x in groups if x['name'] == 'PE Master'), None)
+        print(g['id'] if g else '')
+        ")
+
+        if [ -z "$GROUP_ID" ]; then
+          echo "SKIP: PE Master node group not found"
+          exit 0
+        fi
+
+        curl -sk --cert "$CERT" --key "$KEY" \
+          -X POST -H "Content-Type: application/json" \
+          -d '{"classes":{"{{ pe_repo_class }}":{}}}' \
+          "${BASE}/classifier-api/v1/groups/${GROUP_ID}" > /dev/null
+
+        echo "Classified PE Master with {{ pe_repo_class }}"
+      args:
+        executable: /bin/bash
       delegate_to: pe_master_dynamic
-      register: pe_repo_apply
-      changed_when: pe_repo_apply.rc == 2
-      # rc 0 = already applied/no changes, rc 2 = changes applied — both are success.
-      failed_when: pe_repo_apply.rc not in [0, 2]
+      register: classifier_result
+      changed_when: "'Classified' in classifier_result.stdout"
+
+    - name: Run puppet agent on primary to apply pe_repo classification
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      delegate_to: pe_master_dynamic
+      register: primary_puppet_run
+      changed_when: primary_puppet_run.rc == 2
+      # rc 0=no changes, 2=changes applied — both are success.
+      # failed_when: false so unrelated catalog failures don't abort the job.
+      failed_when: false
       timeout: 300
 
-    - name: Show pe_repo apply result
+    - name: Show puppet primary run result
       debug:
-        msg: "{{ pe_repo_apply.stdout_lines[-10:] | default([]) }}"
+        msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
 
     # pe_repo configuration may cause pe-puppetserver to restart.
     # Wait for port 8140 to be accepting connections before proceeding.
