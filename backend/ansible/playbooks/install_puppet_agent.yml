@@ -256,11 +256,51 @@
       changed_when: false
       failed_when: false
 
-    - name: Puppet Agent ready
+    - name: Puppet Agent installed
       debug:
         msg: >-
           Puppet Agent {{ puppet_ver.stdout | trim }} installed on {{ ansible_fqdn }}.
-          Connected to PE master {{ puppet_master }}.
-          Service: {{ puppet_svc.stdout }}.
-          Sign the certificate on the master with:
-          puppet cert sign {{ ansible_fqdn }}
+          Service: {{ puppet_svc.stdout }}. Proceeding to certificate signing.
+
+    # ── Sign certificate and complete PE console enrollment ───────────────────
+    # After install.bash the puppet service starts and submits a CSR.
+    # Poll the master until the CSR appears (up to 2 min), then sign it,
+    # then trigger the first catalog run so the node shows in the PE console.
+    - name: Wait for agent CSR to appear on PE master (up to 2 min)
+      shell: /opt/puppetlabs/bin/puppetserver ca list 2>/dev/null | grep -qF "{{ ansible_fqdn }}"
+      delegate_to: pe_master_dynamic
+      register: csr_wait
+      retries: 12
+      delay: 10
+      until: csr_wait.rc == 0
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Sign puppet agent certificate on PE master
+      command: /opt/puppetlabs/bin/puppetserver ca sign --certname {{ ansible_fqdn }}
+      delegate_to: pe_master_dynamic
+      register: cert_sign
+      changed_when: cert_sign.rc == 0
+      # rc != 0 is acceptable only when the cert was already signed
+      failed_when: >
+        cert_sign.rc != 0
+        and 'already' not in (cert_sign.stderr | lower)
+
+    - name: Show certificate signing result
+      debug:
+        msg: "{{ cert_sign.stdout | trim or cert_sign.stderr | trim }}"
+
+    - name: Run first puppet catalog to complete PE console enrollment
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      register: first_run
+      changed_when: first_run.rc == 2
+      # rc 0=no changes, 2=changes applied — both are success
+      failed_when: first_run.rc not in [0, 2]
+      timeout: 300
+
+    - name: Node enrolled in Puppet Enterprise
+      debug:
+        msg: >-
+          {{ ansible_fqdn }} is now enrolled in Puppet Enterprise.
+          Certificate signed. First catalog applied.
+          The node appears in the PE console at https://{{ puppet_master }}.
