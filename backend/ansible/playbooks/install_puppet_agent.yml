@@ -56,11 +56,24 @@
                       else 'none — PE master must already have packages for this platform' }}
 
     # ── If a tarball is present: register platform on the PE master ───────────
+    # Add the master to dynamic inventory with the same ansible user and key
+    # used for the target node, so delegate_to connects as 'ansible' not the
+    # local OS user.
+    - name: Register PE master in dynamic inventory
+      add_host:
+        name: pe_master_dynamic
+        ansible_host: "{{ puppet_master }}"
+        ansible_user: "{{ ansible_user }}"
+        ansible_ssh_private_key_file: "{{ ansible_ssh_private_key_file | default(omit) }}"
+        ansible_ssh_common_args: "{{ ansible_ssh_common_args | default(omit) }}"
+        ansible_become: yes
+      changed_when: false
+      when: platform_tarball.files | length > 0
 
     - name: Read PE version from master
       command: cat /opt/puppetlabs/server/pe_build
       register: pe_version_raw
-      delegate_to: "{{ puppet_master }}"
+      delegate_to: pe_master_dynamic
       changed_when: false
       failed_when: false
       when: platform_tarball.files | length > 0
@@ -76,7 +89,7 @@
         patterns: "{{ pe_platform | trim }}-*"
         file_type: directory
       register: platform_dirs
-      delegate_to: "{{ puppet_master }}"
+      delegate_to: pe_master_dynamic
       failed_when: false
       when: platform_tarball.files | length > 0 and pe_version is defined
 
@@ -84,7 +97,7 @@
       copy:
         src: "{{ platform_tarball.files[0].path }}"
         dest: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
-      delegate_to: "{{ puppet_master }}"
+      delegate_to: pe_master_dynamic
       when: >
         platform_tarball.files | length > 0
         and pe_version is defined
@@ -95,7 +108,7 @@
         src: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
         dest: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
         remote_src: yes
-      delegate_to: "{{ puppet_master }}"
+      delegate_to: pe_master_dynamic
       when: >
         platform_tarball.files | length > 0
         and pe_version is defined
