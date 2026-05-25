@@ -115,19 +115,40 @@
         and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
 
     # ── Install agent via the PE master's install script ─────────────────────
-    - name: Install Puppet agent via PE install script
-      shell: >-
-        curl -k "https://{{ puppet_master }}:8140/packages/current/install.bash"
-        | sudo bash
+    # Download separately so a curl failure is caught, then run with bash so
+    # the script's own exit code is what Ansible sees (not the pipe's last cmd).
+    - name: Download PE agent install script from master
+      get_url:
+        url: "https://{{ puppet_master }}:8140/packages/current/install.bash"
+        dest: /tmp/pe-agent-install.bash
+        mode: '0755'
+        validate_certs: no
+      register: install_script_dl
+
+    - name: Run PE agent install script
+      shell: bash /tmp/pe-agent-install.bash
       register: pe_install
       timeout: 300
 
-    - name: Show install script output (last 10 lines)
+    - name: Show install script output
       debug:
-        msg: "{{ pe_install.stdout_lines[-10:] | default([]) }}"
+        msg: "{{ pe_install.stdout_lines }}"
 
     # ── Verify ────────────────────────────────────────────────────────────────
-    - name: Check puppet-agent is installed
+    - name: Check puppet-agent binary exists
+      stat:
+        path: /opt/puppetlabs/bin/puppet
+      register: puppet_bin
+
+    - name: Fail with install output if puppet-agent binary is missing
+      fail:
+        msg: >-
+          puppet-agent binary not found after install script completed.
+          Last 20 lines of install output:
+          {{ pe_install.stdout_lines[-20:] | join('\n') }}
+      when: not puppet_bin.stat.exists
+
+    - name: Get puppet-agent version
       command: /opt/puppetlabs/bin/puppet --version
       register: puppet_ver
       changed_when: false
