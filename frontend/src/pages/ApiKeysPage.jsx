@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, Plus, Trash2 } from 'lucide-react'
+import { Copy, Key, Plus, Trash2 } from 'lucide-react'
 import {
   createApiKey,
   listApiKeys,
@@ -8,24 +8,26 @@ import {
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
+import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
 
-function relativeTime(iso) {
+function relativeTime(iso, t) {
   if (!iso) return '—'
   const diff = Date.now() - new Date(iso).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return 'just now'
+  if (s < 60) return t('common.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m} minutes ago`
+  if (m < 60) return t('common.minutesAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h} hours ago`
+  if (h < 24) return t('common.hoursAgo', { n: h })
   return new Date(iso).toLocaleDateString()
 }
 
 export default function ApiKeysPage() {
+  const t = useT()
   const toast = useToast()
   const { data: keys, loading, error, refetch } = useApi(listApiKeys)
 
@@ -47,7 +49,7 @@ export default function ApiKeysPage() {
       setName('')
       setRole('readonly')
       refetch()
-      toast('API key created', 'success')
+      toast(t('keys.created'), 'success')
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -62,7 +64,7 @@ export default function ApiKeysPage() {
       await revokeApiKey(revokeTarget.id)
       setRevokeTarget(null)
       refetch()
-      toast('API key revoked', 'success')
+      toast(t('keys.revoked'), 'success')
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -72,28 +74,28 @@ export default function ApiKeysPage() {
 
   async function copyKey(val) {
     await navigator.clipboard.writeText(val)
-    toast('Copied to clipboard', 'success')
+    toast(t('keys.copied'), 'success')
   }
 
   return (
     <div className="p-6 max-w-4xl">
-      <h2 className="text-[18px] font-semibold text-gray-900 mb-6">API Keys</h2>
+      <h2 className="text-[18px] font-semibold text-gray-900 mb-6">{t('keys.title')}</h2>
 
       {/* Create form */}
       <div className="bg-white rounded-xl border border-gray-100 p-5 mb-6 max-w-lg">
-        <h3 className="text-[13px] font-semibold text-gray-700 mb-4">Create new key</h3>
+        <h3 className="text-[13px] font-semibold text-gray-700 mb-4">{t('keys.createTitle')}</h3>
         <form onSubmit={handleCreate} className="space-y-3">
           <div>
-            <label className="block text-[11px] font-medium text-gray-500 mb-1">Name</label>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('keys.name')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. ci-pipeline"
+              placeholder={t('keys.namePlaceholder')}
               className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
             />
           </div>
           <div>
-            <label className="block text-[11px] font-medium text-gray-500 mb-1">Role</label>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('keys.role')}</label>
             <select
               value={role}
               onChange={(e) => setRole(e.target.value)}
@@ -110,7 +112,7 @@ export default function ApiKeysPage() {
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white text-[13px] font-medium rounded-lg hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {creating ? <Spinner size={13} /> : <Plus size={13} />}
-            Create key
+            {creating ? t('keys.creating') : t('keys.createBtn')}
           </button>
         </form>
 
@@ -118,7 +120,7 @@ export default function ApiKeysPage() {
         {newKey && (
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
             <p className="text-[11px] font-medium text-amber-800 mb-2">
-              ⚠ Copy this key now — it will not be shown again
+              {t('keys.copyWarning')}
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 text-[12px] font-mono bg-white border border-amber-200 rounded px-2 py-1 text-amber-900 break-all">
@@ -132,10 +134,10 @@ export default function ApiKeysPage() {
               </button>
             </div>
             <button
-              onClick={() => { storeApiKey(newKey.api_key); toast('Stored as active key', 'success') }}
+              onClick={() => { storeApiKey(newKey.api_key); toast(t('keys.storedAsActive'), 'success') }}
               className="mt-2 text-[11px] text-amber-700 hover:underline"
             >
-              Use as active key
+              {t('keys.useAsActive')}
             </button>
           </div>
         )}
@@ -145,7 +147,7 @@ export default function ApiKeysPage() {
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         {loading && (
           <div className="p-6 space-y-3">
-            {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
+            {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
           </div>
         )}
         {error && (
@@ -155,16 +157,16 @@ export default function ApiKeysPage() {
         )}
         {!loading && !error && keys && (
           keys.length === 0 ? (
-            <EmptyState icon={Key} title="No API keys" description="Create your first key above" />
+            <EmptyState icon={Key} title={t('keys.noKeys')} description={t('keys.noKeysDesc')} />
           ) : (
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-gray-100">
-                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Name</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Role</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Status</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Last used</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colName')}</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colRole')}</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colStatus')}</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colLastUsed')}</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colCreated')}</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -174,10 +176,12 @@ export default function ApiKeysPage() {
                     <td className="px-4 py-3 font-medium">{k.name}</td>
                     <td className="px-4 py-3"><span className={badge(k.role)}>{k.role}</span></td>
                     <td className="px-4 py-3">
-                      <span className={badge(k.active ? 'success' : 'gray')}>{k.active ? 'active' : 'revoked'}</span>
+                      <span className={badge(k.active ? 'success' : 'gray')}>
+                        {k.active ? t('common.active') : t('common.revoked')}
+                      </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.last_used)}</td>
-                    <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.last_used, t)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.created_at, t)}</td>
                     <td className="px-4 py-3 text-right">
                       {k.active && (
                         <button
@@ -198,9 +202,9 @@ export default function ApiKeysPage() {
 
       <ConfirmDialog
         open={!!revokeTarget}
-        title="Revoke API key?"
-        message={`"${revokeTarget?.name}" will be permanently revoked and can no longer be used.`}
-        confirmLabel={revoking ? 'Revoking…' : 'Revoke'}
+        title={t('keys.revokeTitle')}
+        message={t('keys.revokeMsg', { name: revokeTarget?.name ?? '' })}
+        confirmLabel={revoking ? t('keys.revoking') : t('keys.revoke')}
         danger
         onConfirm={handleRevoke}
         onCancel={() => setRevokeTarget(null)}

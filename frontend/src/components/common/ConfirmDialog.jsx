@@ -1,7 +1,9 @@
 import { createPortal } from 'react-dom'
 import Button from './Button.jsx'
+import { useT } from '../../context/LangContext.jsx'
 
 export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = 'Confirm', danger = false }) {
+  const t = useT()
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -10,7 +12,7 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
         <h3 className="text-[15px] font-semibold text-gray-900 mb-2">{title}</h3>
         {message && <p className="text-[13px] text-gray-500 mb-5">{message}</p>}
         <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" onClick={onCancel}>{t('confirm.cancel')}</Button>
           <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>

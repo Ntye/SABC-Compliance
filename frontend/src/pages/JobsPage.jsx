@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { CheckCircle, ChevronDown, ChevronUp, RefreshCw, XCircle } from 'lucide-react'
 import { cancelJob, getJob, jobWsUrl, listJobs } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
+import { useT } from '../context/LangContext.jsx'
 import { btn, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function duration(start, end) {
   const ms = new Date(end || Date.now()) - new Date(start)
@@ -20,7 +19,7 @@ function fmt(iso) {
   return new Date(iso).toLocaleString()
 }
 
-function StatusBadge({ status }) {
+function StatusBadge({ status, t }) {
   const map = {
     pending:   'bg-gray-100 text-gray-500',
     running:   'bg-blue-50 text-blue-600',
@@ -33,14 +32,12 @@ function StatusBadge({ status }) {
       {status === 'running' && <Spinner size={9} />}
       {status === 'success' && <CheckCircle size={9} />}
       {status === 'failed' && <XCircle size={9} />}
-      {status}
+      {t(`jobs.status.${status}`) || status}
     </span>
   )
 }
 
-// ── Log panel ─────────────────────────────────────────────────────────────────
-
-function LogPanel({ jobId, initialLogs, isRunning }) {
+function LogPanel({ jobId, initialLogs, isRunning, t }) {
   const [lines, setLines] = useState(initialLogs || [])
   const [wsConnected, setWsConnected] = useState(false)
   const bottomRef = useRef(null)
@@ -51,7 +48,6 @@ function LogPanel({ jobId, initialLogs, isRunning }) {
       setLines(initialLogs || [])
       return
     }
-    // running job — connect via WebSocket (replays stored logs then streams live)
     const ws = new WebSocket(jobWsUrl(jobId))
     wsRef.current = ws
     setLines([])
@@ -85,14 +81,14 @@ function LogPanel({ jobId, initialLogs, isRunning }) {
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
         <span className="text-[10px] font-mono text-console-muted uppercase tracking-wider">
           {isRunning
-            ? wsConnected ? 'Live output' : 'Connecting…'
-            : 'Output'}
+            ? wsConnected ? t('jobs.liveOutput') : t('jobs.connecting')
+            : t('jobs.output')}
         </span>
         {isRunning && wsConnected && <Spinner size={10} className="text-console-accent" />}
       </div>
       <div className="h-64 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
         {lines.length === 0 && (
-          <span className="text-console-muted italic">No output yet…</span>
+          <span className="text-console-muted italic">{t('jobs.noOutput')}</span>
         )}
         {lines.map((l, i) => (
           <div key={i} className={lineClass(l)}>{l.line || ' '}</div>
@@ -103,14 +99,13 @@ function LogPanel({ jobId, initialLogs, isRunning }) {
   )
 }
 
-// ── Job row ───────────────────────────────────────────────────────────────────
-
 function JobRow({ job: initial, onRefresh }) {
   const [job, setJob] = useState(initial)
   const [expanded, setExpanded] = useState(false)
   const [logs, setLogs] = useState(null)
   const [cancelling, setCancelling] = useState(false)
   const toast = useToast()
+  const t = useT()
 
   const isRunning = job.status === 'running' || job.status === 'pending'
 
@@ -148,16 +143,14 @@ function JobRow({ job: initial, onRefresh }) {
   return (
     <div className="border border-gray-100 rounded-xl overflow-hidden">
       <div className="flex items-center gap-4 px-4 py-3 bg-white hover:bg-gray-50 transition-colors">
-        {/* Expand toggle */}
         <button onClick={handleExpand} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
           {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
 
-        {/* Job info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[13px] font-medium text-gray-900">{serviceLabel}</span>
-            <StatusBadge status={job.status} />
+            <StatusBadge status={job.status} t={t} />
           </div>
           <div className="flex items-center gap-4 mt-0.5">
             <span className="text-[11px] text-gray-400 font-mono">{job.id.slice(0, 8)}</span>
@@ -167,13 +160,11 @@ function JobRow({ job: initial, onRefresh }) {
           </div>
         </div>
 
-        {/* Timing */}
         <div className="text-right flex-shrink-0 hidden sm:block">
           <p className="text-[11px] text-gray-500">{fmt(job.started_at)}</p>
           <p className="text-[10px] text-gray-400">{duration(job.started_at, job.completed_at)}</p>
         </div>
 
-        {/* Cancel */}
         {isRunning && (
           <button
             onClick={handleCancel}
@@ -181,7 +172,7 @@ function JobRow({ job: initial, onRefresh }) {
             className={btnSm(false)}
           >
             {cancelling && <Spinner size={11} />}
-            Cancel
+            {t('jobs.cancel')}
           </button>
         )}
       </div>
@@ -192,6 +183,7 @@ function JobRow({ job: initial, onRefresh }) {
             jobId={job.id}
             initialLogs={logs}
             isRunning={isRunning}
+            t={t}
           />
         </div>
       )}
@@ -199,9 +191,8 @@ function JobRow({ job: initial, onRefresh }) {
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
-
 export default function JobsPage() {
+  const t = useT()
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -235,14 +226,12 @@ export default function JobsPage() {
     <div className="p-6 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-[18px] font-semibold text-gray-900">Jobs</h2>
-          <p className="text-[12px] text-gray-400 mt-0.5">
-            Ansible provisioning and installation jobs — auto-refreshes every 10s.
-          </p>
+          <h2 className="text-[18px] font-semibold text-gray-900">{t('jobs.title')}</h2>
+          <p className="text-[12px] text-gray-400 mt-0.5">{t('jobs.subtitle')}</p>
         </div>
         <button onClick={handleRefresh} disabled={refreshing} className={btnSm(false)}>
           {refreshing ? <Spinner size={11} /> : <RefreshCw size={11} />}
-          Refresh
+          {t('common.refresh')}
         </button>
       </div>
 
@@ -254,15 +243,15 @@ export default function JobsPage() {
         </div>
       ) : jobs.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-[13px]">No jobs yet.</p>
-          <p className="text-[11px] mt-1">Jobs appear here when you install services from the Infrastructure page.</p>
+          <p className="text-[13px]">{t('jobs.noJobs')}</p>
+          <p className="text-[11px] mt-1">{t('jobs.noJobsDesc')}</p>
         </div>
       ) : (
         <div className="space-y-6">
           {running.length > 0 && (
             <section>
               <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                Running ({running.length})
+                {t('jobs.running', { count: running.length })}
               </p>
               <div className="space-y-2">
                 {running.map((j) => (
@@ -274,7 +263,7 @@ export default function JobsPage() {
           {done.length > 0 && (
             <section>
               <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                History
+                {t('jobs.history')}
               </p>
               <div className="space-y-2">
                 {done.map((j) => (

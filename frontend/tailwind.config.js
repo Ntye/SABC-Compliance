@@ -1,24 +1,28 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
+  // dark: variants activate when <html data-mode="dark"> is set
+  darkMode: ['selector', '[data-mode="dark"]'],
   theme: {
     extend: {
       colors: {
+        // Brand and accent use RGB triplets so opacity variants (bg-brand/15) work
         brand: {
-          DEFAULT: '#C0281F',
-          light: '#FEF2F2',
+          DEFAULT: 'rgb(var(--brand-rgb) / <alpha-value>)',
+          light: 'var(--brand-light)',
         },
         accent: {
-          DEFAULT: '#D97706',
-          light: '#FFFBEB',
+          DEFAULT: 'rgb(var(--accent-rgb) / <alpha-value>)',
+          light: 'var(--accent-light)',
         },
         surface: {
-          page: '#F8F6F3',
-          card: '#FFFFFF',
+          page: 'var(--bg-page)',
+          card: 'var(--bg-card)',
         },
         sidebar: {
-          bg: '#1C1C1E',
+          bg: 'var(--sidebar-bg)',
         },
+        // Console (log output) stays fixed — always dark regardless of theme
         console: {
           bg: '#0C0E0F',
           surface: '#131618',

@@ -3,7 +3,8 @@ import { AlertTriangle, CheckCircle, RefreshCw, Server, Trash2, Wifi, XCircle } 
 import { checkNodeDns, deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
-import { badge, btnSm, dotColor } from '../lib/tw.js'
+import { useT } from '../context/LangContext.jsx'
+import { badge, btnSm } from '../lib/tw.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
@@ -19,21 +20,19 @@ function Skeleton() {
   )
 }
 
-function relativeTime(iso) {
+function relativeTime(iso, t) {
   if (!iso) return '—'
   const diff = Date.now() - new Date(iso).getTime()
   const s = Math.floor(diff / 1000)
-  if (s < 60) return 'just now'
+  if (s < 60) return t('common.justNow')
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
+  if (m < 60) return t('common.minutesAgo', { n: m })
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
+  if (h < 24) return t('common.hoursAgo', { n: h })
   return new Date(iso).toLocaleDateString()
 }
 
-// ── DNS Fix Modal ─────────────────────────────────────────────────────────────
-
-function CheckRow({ label, check }) {
+function CheckRow({ label, check, notConfiguredLabel }) {
   const Icon = check.ok === true ? CheckCircle : check.ok === false ? XCircle : null
   const color = check.ok === true ? 'text-green-600' : check.ok === false ? 'text-red-500' : 'text-gray-400'
   return (
@@ -44,7 +43,7 @@ function CheckRow({ label, check }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[12px] font-medium text-gray-800">{label}</span>
-          {check.ok === null && <span className="text-[10px] text-gray-400">not configured</span>}
+          {check.ok === null && <span className="text-[10px] text-gray-400">{notConfiguredLabel}</span>}
         </div>
         {check.to && (
           <div className="text-[11px] text-gray-400 font-mono truncate">
@@ -57,36 +56,35 @@ function CheckRow({ label, check }) {
   )
 }
 
-function fixCommands(check, node, osFamily) {
-  const isRedHat = osFamily === 'RedHat'
+function fixCommands(check, node, t) {
   const sudoTee = (file, content) =>
     `echo "${content}" | sudo tee -a ${file}`
 
   if (check.key === 'backend_to_node' && check.ok === false) {
     return {
-      title: 'Fix: add node to the platform server\'s /etc/hosts',
-      note: 'Run this on the PLATFORM SERVER (where the backend runs):',
+      title: t('nodes.dnsModal.fixPlatformNote'),
+      note: t('nodes.dnsModal.fixPlatformNote'),
       cmd: sudoTee('/etc/hosts', `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`),
     }
   }
   if (check.key === 'node_to_backend' && check.ok === false) {
     return {
-      title: 'Fix: add platform server to node\'s /etc/hosts',
-      note: 'Run this from the backend/ directory:',
+      title: t('nodes.dnsModal.fixNodeNote'),
+      note: t('nodes.dnsModal.fixNodeNote'),
       cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '$(hostname -I | awk '{print $1}')  $(hostname -f)' | sudo tee -a /etc/hosts"`,
     }
   }
   if (check.key === 'node_to_puppet' && check.ok === false && check.to) {
     return {
-      title: 'Fix: add Puppet master to node\'s /etc/hosts',
-      note: 'Replace <puppet-ip> with the actual IP of your Puppet master, then run from backend/:',
+      title: t('nodes.dnsModal.fixPuppetNote'),
+      note: t('nodes.dnsModal.fixPuppetNote'),
       cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '<puppet-ip>  ${check.to}' | sudo tee -a /etc/hosts"`,
     }
   }
   if (check.key === 'node_to_wazuh' && check.ok === false && check.to) {
     return {
-      title: 'Fix: add Wazuh manager to node\'s /etc/hosts',
-      note: 'Replace <wazuh-ip> with the actual IP of your Wazuh manager, then run from backend/:',
+      title: t('nodes.dnsModal.fixWazuhNote'),
+      note: t('nodes.dnsModal.fixWazuhNote'),
       cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '<wazuh-ip>  ${check.to}' | sudo tee -a /etc/hosts"`,
     }
   }
@@ -94,6 +92,7 @@ function fixCommands(check, node, osFamily) {
 }
 
 function CopyBtn({ text }) {
+  const t = useT()
   const [done, setDone] = useState(false)
   async function copy() {
     await navigator.clipboard.writeText(text)
@@ -101,13 +100,17 @@ function CopyBtn({ text }) {
     setTimeout(() => setDone(false), 1500)
   }
   return (
-    <button onClick={copy} className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-console-muted hover:text-console-text transition-colors">
-      {done ? 'Copied' : 'Copy'}
+    <button
+      onClick={copy}
+      className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-console-muted hover:text-console-text transition-colors"
+    >
+      {done ? t('common.copied') : t('common.copy')}
     </button>
   )
 }
 
 function DnsModal({ node, onClose, onRefetch }) {
+  const t = useT()
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -127,10 +130,10 @@ function DnsModal({ node, onClose, onRefetch }) {
   }
 
   const CHECK_LABELS = {
-    backend_to_node: 'Platform → Node',
-    node_to_backend: 'Node → Platform',
-    node_to_puppet: 'Node → Puppet master',
-    node_to_wazuh: 'Node → Wazuh manager',
+    backend_to_node: t('nodes.dnsModal.checkPlatformToNode'),
+    node_to_backend: t('nodes.dnsModal.checkNodeToPlatform'),
+    node_to_puppet:  t('nodes.dnsModal.checkNodeToPuppet'),
+    node_to_wazuh:   t('nodes.dnsModal.checkNodeToWazuh'),
   }
 
   const checks = result
@@ -148,7 +151,7 @@ function DnsModal({ node, onClose, onRefetch }) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
-            <h3 className="text-[14px] font-semibold text-gray-900">DNS Resolution Check</h3>
+            <h3 className="text-[14px] font-semibold text-gray-900">{t('nodes.dnsModal.title')}</h3>
             <p className="text-[11px] text-gray-400 mt-0.5">
               <span className="font-mono">{node.hostname}</span>
               {node.fqdn && node.fqdn !== node.hostname && (
@@ -160,14 +163,18 @@ function DnsModal({ node, onClose, onRefetch }) {
         </div>
 
         <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
-          {/* Run button */}
+          {/* Run / Re-run button */}
           <button
             onClick={run}
             disabled={loading}
             className="w-full flex items-center justify-center gap-2 py-2 text-[12px] font-medium rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-60 transition-colors"
           >
             {loading && <Spinner size={12} />}
-            {loading ? 'Running checks…' : result ? 'Re-run checks' : 'Run DNS checks'}
+            {loading
+              ? t('nodes.dnsModal.running')
+              : result
+                ? t('nodes.dnsModal.rerunChecks')
+                : t('nodes.dnsModal.runChecks')}
           </button>
 
           {error && (
@@ -179,23 +186,30 @@ function DnsModal({ node, onClose, onRefetch }) {
             <>
               <div className="rounded-xl border border-gray-100 overflow-hidden">
                 {checks.map((c) => (
-                  <CheckRow key={c.key} label={CHECK_LABELS[c.key] || c.key} check={c} />
+                  <CheckRow
+                    key={c.key}
+                    label={CHECK_LABELS[c.key] || c.key}
+                    check={c}
+                    notConfiguredLabel={t('nodes.notConfigured')}
+                  />
                 ))}
               </div>
 
               {result.all_ok && (
                 <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg">
                   <CheckCircle size={13} className="text-green-600" />
-                  <span className="text-[12px] text-green-700 font-medium">All DNS checks passed — ready for Puppet and Wazuh enrollment</span>
+                  <span className="text-[12px] text-green-700 font-medium">{t('nodes.dnsModal.allPassed')}</span>
                 </div>
               )}
 
               {/* Fix instructions for each failing check */}
               {failingChecks.length > 0 && (
                 <div className="space-y-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">How to fix</p>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    {t('nodes.dnsModal.howToFix')}
+                  </p>
                   {failingChecks.map((c) => {
-                    const fix = fixCommands(c, node, node.os_family)
+                    const fix = fixCommands(c, node, t)
                     if (!fix) return null
                     return (
                       <div key={c.key} className="bg-console-bg rounded-xl p-4">
@@ -209,17 +223,17 @@ function DnsModal({ node, onClose, onRefetch }) {
                     )
                   })}
                   <p className="text-[10px] text-gray-400">
-                    After applying fixes, click <strong>Re-run checks</strong> to confirm all checks pass before enrolling agents.
+                    {t('nodes.dnsModal.rerunHint')}
                   </p>
                 </div>
               )}
             </>
           )}
 
+          {/* Idle state */}
           {!result && !loading && (
             <p className="text-[12px] text-gray-400 text-center py-4">
-              Click "Run DNS checks" to verify that the node hostname resolves correctly
-              between all components — required before Puppet or Wazuh agent enrollment.
+              {t('nodes.dnsModal.idle')}
             </p>
           )}
         </div>
@@ -231,6 +245,7 @@ function DnsModal({ node, onClose, onRefetch }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NodesPage() {
+  const t = useT()
   const toast = useToast()
   const [statusFilter, setStatusFilter] = useState('')
   const [osFamilyFilter, setOsFamilyFilter] = useState('')
@@ -249,7 +264,10 @@ export default function NodesPage() {
     setPingingAll(true)
     try {
       const result = await pingAllNodes()
-      toast(`Pinged ${result.total} nodes — ${result.reachable} reachable, ${result.unreachable} unreachable`, 'info')
+      toast(
+        t('nodes.pingedSummary', { total: result.total, reachable: result.reachable, unreachable: result.unreachable }),
+        'info'
+      )
       refetch()
     } catch (err) {
       toast(err.message, 'error')
@@ -262,7 +280,12 @@ export default function NodesPage() {
     setPingingIds((prev) => new Map(prev).set(node.id, true))
     try {
       const result = await pingNode(node.id)
-      toast(result.reachable ? `${node.hostname} is reachable (${result.latency_ms}ms)` : `${node.hostname} is unreachable`, result.reachable ? 'success' : 'warning')
+      toast(
+        result.reachable
+          ? t('nodes.pingResult', { hostname: node.hostname, ms: result.latency_ms })
+          : t('nodes.pingFailed', { hostname: node.hostname }),
+        result.reachable ? 'success' : 'warning'
+      )
       refetch()
     } catch (err) {
       toast(err.message, 'error')
@@ -280,7 +303,7 @@ export default function NodesPage() {
     setDeleting(true)
     try {
       await deleteNode(deleteTarget.id)
-      toast(`Node '${deleteTarget.hostname}' deleted`, 'success')
+      toast(t('nodes.deleted', { hostname: deleteTarget.hostname }), 'success')
       setDeleteTarget(null)
       refetch()
     } catch (err) {
@@ -290,39 +313,51 @@ export default function NodesPage() {
     }
   }
 
+  const tableHeaders = [
+    t('nodes.colStatus'),
+    t('nodes.colHostname'),
+    t('nodes.colIp'),
+    t('nodes.colOs'),
+    t('nodes.colSshPort'),
+    t('nodes.colPuppet'),
+    t('nodes.colWazuh'),
+    t('nodes.colLastSeen'),
+    t('nodes.colActions'),
+  ]
+
   return (
     <div className="p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-[18px] font-semibold text-gray-900">Node Registry</h2>
+        <h2 className="text-[18px] font-semibold text-gray-900">{t('nodes.title')}</h2>
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="text-[12px] border border-gray-200 rounded-lg px-3 py-2 bg-white outline-none focus:border-brand"
           >
-            <option value="">All statuses</option>
-            <option value="registered">Registered</option>
-            <option value="reachable">Reachable</option>
-            <option value="unreachable">Unreachable</option>
-            <option value="provisioned">Provisioned</option>
+            <option value="">{t('nodes.allStatuses')}</option>
+            <option value="registered">{t('nodes.registered')}</option>
+            <option value="reachable">{t('nodes.reachable')}</option>
+            <option value="unreachable">{t('nodes.unreachable')}</option>
+            <option value="provisioned">{t('nodes.provisioned')}</option>
           </select>
           <select
             value={osFamilyFilter}
             onChange={(e) => setOsFamilyFilter(e.target.value)}
             className="text-[12px] border border-gray-200 rounded-lg px-3 py-2 bg-white outline-none focus:border-brand"
           >
-            <option value="">All OS families</option>
+            <option value="">{t('nodes.allOsFamilies')}</option>
             <option value="RedHat">RedHat</option>
             <option value="Debian">Debian</option>
           </select>
           <button onClick={handlePingAll} disabled={pingingAll} className={btnSm(false)}>
             {pingingAll ? <Spinner size={11} /> : <Wifi size={11} />}
-            Ping All
+            {t('nodes.pingAll')}
           </button>
           <button onClick={refetch} className={btnSm(false)}>
             <RefreshCw size={11} />
-            Refresh
+            {t('common.refresh')}
           </button>
         </div>
       </div>
@@ -338,7 +373,7 @@ export default function NodesPage() {
         {loading && <Skeleton />}
 
         {!loading && nodes && nodes.length === 0 && (
-          <EmptyState icon={Server} title="No nodes registered" description="Go to Add VM to register your first server" />
+          <EmptyState icon={Server} title={t('nodes.noNodes')} description={t('nodes.noNodesDesc')} />
         )}
 
         {!loading && nodes && nodes.length > 0 && (
@@ -346,7 +381,7 @@ export default function NodesPage() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
-                  {['Status', 'Hostname / FQDN', 'IP Address', 'OS', 'SSH Port', 'Puppet', 'Wazuh', 'Last Seen', 'Actions'].map((h) => (
+                  {tableHeaders.map((h) => (
                     <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -377,11 +412,11 @@ export default function NodesPage() {
                         <button
                           onClick={() => setDnsNode(node)}
                           className="flex items-center gap-1 mt-0.5 hover:opacity-75 transition-opacity"
-                          title="Click to run DNS checks and see fix instructions"
+                          title={t('nodes.dnsIssue')}
                         >
                           <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
                           <span className="text-[10px] text-amber-600 font-medium underline decoration-dotted">
-                            DNS not resolving — click to fix
+                            {t('nodes.dnsIssue')}
                           </span>
                         </button>
                       )}
@@ -410,20 +445,20 @@ export default function NodesPage() {
                     {/* Puppet */}
                     <td className="px-4 py-3">
                       <span className={badge(node.puppet_enrolled ? 'success' : 'gray')}>
-                        {node.puppet_enrolled ? 'enrolled' : 'none'}
+                        {node.puppet_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
                       </span>
                     </td>
 
                     {/* Wazuh */}
                     <td className="px-4 py-3">
                       <span className={badge(node.wazuh_enrolled ? 'success' : 'gray')}>
-                        {node.wazuh_enrolled ? 'enrolled' : 'none'}
+                        {node.wazuh_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
                       </span>
                     </td>
 
                     {/* Last Seen */}
                     <td className="px-4 py-3 text-[12px] text-gray-400 whitespace-nowrap">
-                      {relativeTime(node.last_seen)}
+                      {relativeTime(node.last_seen, t)}
                     </td>
 
                     {/* Actions */}
@@ -433,21 +468,21 @@ export default function NodesPage() {
                           onClick={() => handlePing(node)}
                           disabled={pingingIds.get(node.id)}
                           className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-brand transition-colors disabled:opacity-50"
-                          title="Ping node"
+                          title={t('nodes.pingAll')}
                         >
                           {pingingIds.get(node.id) ? <Spinner size={12} /> : <Wifi size={12} />}
                         </button>
                         <button
                           onClick={() => setDnsNode(node)}
                           className="p-1.5 rounded-md hover:bg-amber-50 text-gray-400 hover:text-amber-500 transition-colors"
-                          title="DNS checks"
+                          title={t('nodes.dnsModal.title')}
                         >
                           <AlertTriangle size={12} />
                         </button>
                         <button
                           onClick={() => setDeleteTarget(node)}
                           className="p-1.5 rounded-md hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                          title="Delete node"
+                          title={t('nodes.deleteTitle')}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -461,14 +496,20 @@ export default function NodesPage() {
         )}
       </div>
 
-      {/* Summary */}
+      {/* Summary footer */}
       {!loading && nodes && nodes.length > 0 && (
         <p className="mt-3 text-[11px] text-gray-400">
-          {nodes.length} node{nodes.length !== 1 ? 's' : ''} •{' '}
-          {nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned').length} reachable •{' '}
+          {t('nodes.summary', {
+            count: nodes.length,
+            plural: nodes.length !== 1 ? 's' : '',
+            reachable: nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned').length,
+          })}
           {nodes.filter((n) => n.dns_resolves === false).length > 0 && (
             <span className="text-amber-500">
-              {nodes.filter((n) => n.dns_resolves === false).length} DNS issue{nodes.filter((n) => n.dns_resolves === false).length !== 1 ? 's' : ''}
+              {t('nodes.dnsIssues', {
+                count: nodes.filter((n) => n.dns_resolves === false).length,
+                plural: nodes.filter((n) => n.dns_resolves === false).length !== 1 ? 's' : '',
+              })}
             </span>
           )}
         </p>
@@ -484,9 +525,9 @@ export default function NodesPage() {
 
       <ConfirmDialog
         open={!!deleteTarget}
-        title="Delete node?"
-        message={`'${deleteTarget?.hostname}' will be permanently removed from the registry. This does not uninstall any agents from the server.`}
-        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        title={t('nodes.deleteTitle')}
+        message={t('nodes.deleteMsg', { hostname: deleteTarget?.hostname ?? '' })}
+        confirmLabel={deleting ? t('nodes.deleting') : t('common.delete')}
         danger
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}

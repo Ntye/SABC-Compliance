@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { CheckCircle, Copy, Terminal, XCircle } from 'lucide-react'
 import { registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
+import { useT } from '../context/LangContext.jsx'
 import { btn } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 
@@ -47,9 +48,10 @@ const DEFAULT_FORM = {
 
 export default function AddVmPage() {
   const toast = useToast()
+  const t = useT()
   const [form, setForm] = useState(DEFAULT_FORM)
   const [submitting, setSubmitting] = useState(false)
-  const [result, setResult] = useState(null) // { success: bool, node?, error? }
+  const [result, setResult] = useState(null)
   const [bootstrapUser, setBootstrapUser] = useState('root')
 
   function set(field) {
@@ -68,7 +70,7 @@ export default function AddVmPage() {
         ssh_user: form.ssh_user.trim() || 'ansible',
         ssh_key_path: form.ssh_key_path.trim() || null,
         description: form.description.trim() || null,
-        tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+        tags: form.tags ? form.tags.split(',').map((tag) => tag.trim()).filter(Boolean) : [],
       }
       const node = await registerNode(payload)
       setResult({ success: true, node })
@@ -120,17 +122,17 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
-      <h2 className="text-[18px] font-semibold text-gray-900">Add VM</h2>
+      <h2 className="text-[18px] font-semibold text-gray-900">{t('addVm.title')}</h2>
 
-      {/* ── Zone 1: Registration form (light theme) ── */}
+      {/* ── Zone 1: Registration form ── */}
       <div className="bg-white rounded-xl border border-gray-100 p-6 max-w-2xl">
-        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">Register a Linux Server</h3>
+        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">{t('addVm.cardTitle')}</h3>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Row: hostname + IP */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                Hostname <span className="text-red-500">*</span>
+                {t('addVm.hostname')} <span className="text-red-500">{t('addVm.required')}</span>
               </label>
               <input
                 required
@@ -142,7 +144,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                IP Address <span className="text-red-500">*</span>
+                {t('addVm.ipAddress')} <span className="text-red-500">{t('addVm.required')}</span>
               </label>
               <input
                 required
@@ -157,7 +159,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           {/* Row: SSH port + SSH user */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">SSH Port</label>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.sshPort')}</label>
               <input
                 type="number"
                 value={form.ssh_port}
@@ -167,7 +169,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
               />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">SSH User</label>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.sshUser')}</label>
               <input
                 value={form.ssh_user}
                 onChange={set('ssh_user')}
@@ -180,7 +182,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           {/* SSH key path */}
           <div>
             <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-              SSH Key Path <span className="text-gray-400">(optional — uses platform default if blank)</span>
+              {t('addVm.sshKeyPath')} <span className="text-gray-400">{t('addVm.sshKeyHint')}</span>
             </label>
             <input
               value={form.ssh_key_path}
@@ -192,7 +194,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
 
           {/* Description */}
           <div>
-            <label className="block text-[11px] font-medium text-gray-500 mb-1.5">Description</label>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.description')}</label>
             <input
               value={form.description}
               onChange={set('description')}
@@ -204,7 +206,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           {/* Tags */}
           <div>
             <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-              Tags <span className="text-gray-400">(comma-separated)</span>
+              {t('addVm.tags')} <span className="text-gray-400">{t('addVm.tagsHint')}</span>
             </label>
             <input
               value={form.tags}
@@ -221,7 +223,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
             className={`${btn(true)} w-full justify-center`}
           >
             {submitting && <Spinner size={14} />}
-            {submitting ? 'Registering…' : 'Register server'}
+            {submitting ? t('addVm.registering') : t('addVm.register')}
           </button>
         </form>
 
@@ -230,7 +232,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           <div className="mt-4 flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
             <CheckCircle size={16} className="text-green-600 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-[13px] font-medium text-green-800">Node registered successfully</p>
+              <p className="text-[13px] font-medium text-green-800">{t('addVm.successTitle')}</p>
               <p className="text-[12px] text-green-700 mt-0.5">
                 {result.node.hostname} · {result.node.os_name || result.node.os_family || 'Unknown OS'} · {result.node.ip}
               </p>
@@ -241,7 +243,7 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           <div className="mt-4 flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
             <XCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-[13px] font-medium text-red-700">Registration failed</p>
+              <p className="text-[13px] font-medium text-red-700">{t('addVm.failTitle')}</p>
               <p className="text-[12px] text-red-600 mt-0.5">{result.error}</p>
             </div>
           </div>
@@ -252,15 +254,14 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
       <div className="bg-console-bg rounded-xl p-6 max-w-2xl">
         <div className="flex items-center gap-2 mb-4">
           <Terminal size={14} className="text-console-accent" />
-          <h3 className="text-[13px] font-semibold text-console-text">SSH Setup Helper</h3>
+          <h3 className="text-[13px] font-semibold text-console-text">{t('addVm.helper.title')}</h3>
         </div>
         <p className="text-[12px] text-console-muted mb-4 leading-relaxed">
-          The platform connects to each server over SSH using the ansible user and key-based authentication.
-          Run these commands from your <span className="font-mono text-console-text">backend/</span> directory before registering.
+          {t('addVm.helper.description')}
         </p>
         <div className="mb-5">
           <label className="block text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-1.5">
-            Your admin user on this server
+            {t('addVm.helper.adminUser')}
           </label>
           <input
             value={bootstrapUser}
@@ -269,14 +270,13 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
             className="w-full px-3 py-2 text-[12px] font-mono bg-console-surface border border-white/10 rounded-lg outline-none text-console-text placeholder:text-console-muted focus:border-white/30 transition-colors"
           />
           <p className="text-[10px] text-console-muted mt-1">
-            The user you SSH into this server as today (must have sudo or be root). The commands below update automatically.
+            {t('addVm.helper.adminUserHint')}
           </p>
         </div>
-        <CodeBlock label="1 — Create user + authorize key" code={setupCmd} />
-        <CodeBlock label="2 — Verify connection (run from this machine)" code={verifyCmd} />
+        <CodeBlock label={t('addVm.helper.step1')} code={setupCmd} />
+        <CodeBlock label={t('addVm.helper.step2')} code={verifyCmd} />
         <p className="text-[11px] text-console-muted mt-2">
-          The platform key is <span className="font-mono text-console-text">keys/ansible_id_rsa.pub</span> — never your personal <span className="font-mono text-console-text">~/.ssh</span> key.
-          Step 2 pipes it through your admin session so the ansible user never needs a password.
+          {t('addVm.helper.keyNote')}
         </p>
       </div>
     </div>
