@@ -134,6 +134,17 @@
       debug:
         msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
 
+    # pe_repo configuration may cause pe-puppetserver to restart.
+    # Wait for port 8140 to be accepting connections before proceeding.
+    - name: Wait for PE puppet server port 8140 to be ready
+      wait_for:
+        host: "{{ puppet_master }}"
+        port: 8140
+        timeout: 180
+        delay: 5
+      delegate_to: localhost
+      become: no
+
     # ── Install agent via the PE master's install script ─────────────────────
     - name: Download PE agent install script from primary
       get_url:
