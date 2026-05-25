@@ -115,24 +115,30 @@
         and pe_version is defined
         and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
 
-    # ── Run puppet on the primary to apply pe_repo classes ────────────────────
-    # pe_repo::platform::* classes (classified on the primary by PE node groups)
-    # generate the apt/yum repo metadata that install.bash fetches.
-    # Without this run the files exist on disk but the repo index is not built,
-    # so install.bash reports "agent packages not present".
-    - name: Run puppet agent on primary to configure pe_repo
-      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+    # ── Apply pe_repo platform class directly on primary ─────────────────────
+    # pe_repo::platform::ubuntu_2204_amd64 (and equivalents) generate the
+    # apt/yum repo index that install.bash fetches over HTTPS.
+    # Using `puppet apply` rather than `puppet agent --test` because the class
+    # must be applied unconditionally — it may not be classified in the PE
+    # console's "PE Master" node group, which would make puppet agent a no-op.
+    - name: Derive pe_repo platform class name
+      set_fact:
+        pe_repo_class: "pe_repo::platform::{{ pe_platform | trim | replace('-', '_') | replace('.', '') }}"
+
+    - name: Apply pe_repo platform class on primary
+      command: >-
+        /opt/puppetlabs/bin/puppet apply
+        -e 'include {{ pe_repo_class }}'
       delegate_to: pe_master_dynamic
-      register: primary_puppet_run
-      changed_when: primary_puppet_run.rc == 2
-      # rc 0=no changes, 2=changes applied — both mean pe_repo was evaluated.
-      # failed_when: false so an unrelated catalog failure does not abort the job.
-      failed_when: false
+      register: pe_repo_apply
+      changed_when: pe_repo_apply.rc == 2
+      # rc 0 = already applied/no changes, rc 2 = changes applied — both are success.
+      failed_when: pe_repo_apply.rc not in [0, 2]
       timeout: 300
 
-    - name: Show puppet primary run result
+    - name: Show pe_repo apply result
       debug:
-        msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
+        msg: "{{ pe_repo_apply.stdout_lines[-10:] | default([]) }}"
 
     # pe_repo configuration may cause pe-puppetserver to restart.
     # Wait for port 8140 to be accepting connections before proceeding.
