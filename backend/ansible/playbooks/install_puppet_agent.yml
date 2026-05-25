@@ -272,9 +272,14 @@
           Service: {{ puppet_svc.stdout }}. Proceeding to certificate signing.
 
     # ── Sign certificate and complete PE console enrollment ───────────────────
-    # After install.bash the puppet service starts and submits a CSR.
-    # Poll the master until the CSR appears (up to 2 min), then sign it,
-    # then trigger the first catalog run so the node shows in the PE console.
+    # If the cert file is already present on the node (e.g. the PE master
+    # itself, or a node enrolled in a previous run), the cert is already signed
+    # — skip the CSR wait and sign steps and go straight to the catalog run.
+    - name: Check if puppet agent certificate is already signed
+      stat:
+        path: "/etc/puppetlabs/puppet/ssl/certs/{{ ansible_fqdn }}.pem"
+      register: agent_cert_file
+
     - name: Wait for agent CSR to appear on PE master (up to 2 min)
       shell: /opt/puppetlabs/bin/puppetserver ca list 2>/dev/null | grep -qF "{{ ansible_fqdn }}"
       delegate_to: pe_master_dynamic
@@ -284,20 +289,22 @@
       until: csr_wait.rc == 0
       changed_when: false
       ignore_errors: yes
+      when: not agent_cert_file.stat.exists
 
     - name: Sign puppet agent certificate on PE master
       command: /opt/puppetlabs/bin/puppetserver ca sign --certname {{ ansible_fqdn }}
       delegate_to: pe_master_dynamic
       register: cert_sign
       changed_when: cert_sign.rc == 0
-      # rc != 0 is acceptable only when the cert was already signed
       failed_when: >
         cert_sign.rc != 0
         and 'already' not in (cert_sign.stderr | lower)
+      when: not agent_cert_file.stat.exists
 
     - name: Show certificate signing result
       debug:
         msg: "{{ cert_sign.stdout | trim or cert_sign.stderr | trim }}"
+      when: not agent_cert_file.stat.exists
 
     - name: Run first puppet catalog to complete PE console enrollment
       command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
