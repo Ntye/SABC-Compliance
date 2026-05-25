@@ -199,6 +199,22 @@
       become: no
 
     # ── Install agent via the PE master's install script ─────────────────────
+    # install.bash uses the PE master's FQDN (its certname) in all URLs.
+    # The target node may not have DNS for that FQDN — ensure it resolves
+    # by writing an /etc/hosts entry mapping puppet_master → certname.
+    - name: Get PE master certname (FQDN used by install.bash)
+      command: /opt/puppetlabs/bin/puppet config print certname
+      delegate_to: pe_master_dynamic
+      register: pe_master_certname
+      changed_when: false
+
+    - name: Ensure PE master FQDN resolves on target node
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ puppet_master }} {{ pe_master_certname.stdout | trim }}"
+        regexp: "\\s{{ pe_master_certname.stdout | trim | replace('.', '\\.') }}(\\s|$)"
+        state: present
+
     - name: Download PE agent install script from primary
       get_url:
         url: "https://{{ puppet_master }}:8140/packages/current/install.bash"
