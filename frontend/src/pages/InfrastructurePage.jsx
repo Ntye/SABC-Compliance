@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Cpu, Link, RefreshC
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
+  checkPuppetAgentPlatform,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -160,13 +161,31 @@ function ConnectForm({ service, onSave, onCancel, t }) {
 function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   const [selectedNode, setSelectedNode] = useState('')
   const [starting, setStarting] = useState(false)
+  const [platformCheck, setPlatformCheck] = useState(null)
+  const [checkingPlatform, setCheckingPlatform] = useState(false)
   const toast = useToast()
+
+  const isAgentInstall = service === 'puppet-agent' || service === 'wazuh-agent'
 
   const serviceLabels = {
     'puppet-master': t('infra.installPuppetMaster'),
     'wazuh-manager': t('infra.installWazuhManager'),
     'puppet-agent':  t('infra.installPuppetAgentTitle'),
     'wazuh-agent':   t('infra.installWazuhAgentTitle'),
+  }
+
+  async function handleNodeChange(nodeId) {
+    setSelectedNode(nodeId)
+    setPlatformCheck(null)
+    if (!nodeId || !isAgentInstall) return
+    setCheckingPlatform(true)
+    try {
+      const result = await checkPuppetAgentPlatform(nodeId)
+      setPlatformCheck(result)
+    } catch (_) {
+    } finally {
+      setCheckingPlatform(false)
+    }
   }
 
   async function handleStart() {
@@ -199,7 +218,7 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
             <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('infra.targetNode')}</label>
             <select
               value={selectedNode}
-              onChange={(e) => setSelectedNode(e.target.value)}
+              onChange={(e) => handleNodeChange(e.target.value)}
               className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand"
             >
               <option value="">{t('infra.selectNode')}</option>
@@ -213,6 +232,38 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
           {nodes.length === 0 && (
             <p className="text-[11px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
               {t('infra.noNodes')}
+            </p>
+          )}
+          {checkingPlatform && (
+            <div className="flex items-center gap-2 text-[11px] text-gray-400">
+              <Spinner size={11} /> {t('infra.checkingPlatform')}
+            </div>
+          )}
+          {platformCheck && !platformCheck.has_tarball && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
+              <p className="text-[12px] font-semibold text-amber-800">
+                {t('infra.platformMissingTitle', { platform: platformCheck.platform })}
+              </p>
+              <p className="text-[11px] text-amber-700">{t('infra.platformMissingDesc')}</p>
+              <ul className="text-[11px] text-amber-700 space-y-2 mt-1">
+                <li>
+                  <span className="font-semibold">{t('infra.platformOptionInternet')}</span>
+                  {' '}{t('infra.platformOptionInternetDesc')}
+                </li>
+                <li>
+                  <span className="font-semibold">{t('infra.platformOptionTarball')}</span>
+                  {' '}{t('infra.platformOptionTarballDesc')}
+                  <code className="block mt-1 px-2 py-1 bg-amber-100 rounded font-mono text-[10px] break-all">
+                    {platformCheck.packages_dir}/{platformCheck.tarball_name}
+                  </code>
+                </li>
+              </ul>
+              <p className="text-[11px] text-amber-600 italic">{t('infra.platformContinueAnyway')}</p>
+            </div>
+          )}
+          {platformCheck && platformCheck.has_tarball && (
+            <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-3 py-2">
+              {t('infra.platformReady', { platform: platformCheck.platform })}
             </p>
           )}
         </div>

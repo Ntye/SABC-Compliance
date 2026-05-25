@@ -1,5 +1,7 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+import glob
+import os
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal
@@ -45,6 +47,8 @@ _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
+_node_repo = None
+_packages_dir: str = ""
 
 
 def set_use_cases(
@@ -54,19 +58,69 @@ def set_use_cases(
     install_wazuh_manager_uc,
     install_puppet_agent_uc,
     install_wazuh_agent_uc,
+    node_repo=None,
+    packages_dir: str = "",
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
+    global _node_repo, _packages_dir
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
     _install_wazuh_manager_uc = install_wazuh_manager_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
+    _node_repo = node_repo
+    _packages_dir = packages_dir
+
+
+def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
+    """Build the PE platform string from node OS facts."""
+    if os_family == "Debian":
+        name = (os_name or "").lower()
+        version = os_version or ""
+        return f"{name}-{version}-amd64"
+    else:
+        major = (os_version or "").split(".")[0]
+        return f"el-{major}-x86_64"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+class PlatformCheckResponse(BaseModel):
+    platform: str
+    has_tarball: bool
+    tarball_name: str
+    packages_dir: str
+
+
+@router.get("/puppet-agent/platform-check", response_model=PlatformCheckResponse, summary="Check platform package availability")
+async def puppet_agent_platform_check(
+    node_id: str = Query(...),
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """Check whether a platform tarball is available for the node's OS."""
+    if _node_repo is None:
+        raise HTTPException(status_code=503, detail="Node repository not available")
+    try:
+        node = await _node_repo.get(node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    platform = _puppet_agent_platform(node.os_family, node.os_name, node.os_version)
+    tarball_name = f"puppet-agent-{platform}.tar.gz"
+    agent_pkg_dir = os.path.join(_packages_dir, "puppet-agent")
+    pattern = os.path.join(agent_pkg_dir, tarball_name)
+    has_tarball = bool(glob.glob(pattern))
+
+    return PlatformCheckResponse(
+        platform=platform,
+        has_tarball=has_tarball,
+        tarball_name=tarball_name,
+        packages_dir=agent_pkg_dir,
+    )
+
 
 @router.get("/status", response_model=InfrastructureStatusResponse, summary="Get infrastructure status")
 async def get_status(principal: AuthPrincipal = Depends(get_current_principal)):

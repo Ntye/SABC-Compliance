@@ -166,6 +166,8 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
+        node_repo=node_repo,
+        packages_dir=settings.packages_dir,
     )
     jobs_routes.set_use_cases(
         list_uc=list_jobs_uc,

@@ -192,6 +192,10 @@ export async function installService(service, nodeId) {
   return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId })
 }
 
+export async function checkPuppetAgentPlatform(nodeId) {
+  return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
+}
+
 // ── Compliance ────────────────────────────────────────────────────────────────
 
 export async function getComplianceSummary() {
