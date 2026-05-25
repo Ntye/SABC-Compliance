@@ -215,21 +215,30 @@
         regexp: "\\s{{ pe_master_certname.stdout | trim | replace('.', '\\.') }}(\\s|$)"
         state: present
 
+    # Skip download + install if puppet-agent binary is already present.
+    # This makes the playbook safe to re-run after a timeout or cancellation.
+    - name: Check if puppet-agent is already installed
+      stat:
+        path: /opt/puppetlabs/bin/puppet
+      register: puppet_bin_pre
+
     - name: Download PE agent install script from primary
       get_url:
         url: "https://{{ puppet_master }}:8140/packages/current/install.bash"
         dest: /tmp/pe-agent-install.bash
         mode: '0755'
         validate_certs: no
+      when: not puppet_bin_pre.stat.exists
 
     - name: Run PE agent install script
       shell: bash /tmp/pe-agent-install.bash
       register: pe_install
-      timeout: 300
+      timeout: 600
+      when: not puppet_bin_pre.stat.exists
 
     - name: Show install script output
       debug:
-        msg: "{{ pe_install.stdout_lines }}"
+        msg: "{{ pe_install.stdout_lines | default(['(skipped — puppet-agent already installed)']) }}"
 
     # ── Verify ────────────────────────────────────────────────────────────────
     - name: Check puppet-agent binary exists
@@ -237,13 +246,13 @@
         path: /opt/puppetlabs/bin/puppet
       register: puppet_bin
 
-    - name: Fail with install output if puppet-agent binary is missing
+    - name: Fail if puppet-agent binary is missing after install
       fail:
         msg: >-
           puppet-agent binary not found after install script completed.
           Last 20 lines of install output:
           {{ pe_install.stdout_lines[-20:] | join('\n') }}
-      when: not puppet_bin.stat.exists
+      when: not puppet_bin.stat.exists and not puppet_bin_pre.stat.exists
 
     - name: Get puppet-agent version
       command: /opt/puppetlabs/bin/puppet --version
