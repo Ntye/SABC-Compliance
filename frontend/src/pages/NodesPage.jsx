@@ -32,7 +32,7 @@ function relativeTime(iso, t) {
   return new Date(iso).toLocaleDateString()
 }
 
-function CheckRow({ label, check, t }) {
+function CheckRow({ label, check, fix, t }) {
   const isNull = check.ok === null
   const hasTarget = Boolean(check.to)
 
@@ -49,24 +49,43 @@ function CheckRow({ label, check, t }) {
     : t('nodes.dnsModal.serviceNotSet')
 
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
-      <div className={`mt-0.5 flex-shrink-0 ${color}`}>
-        <Icon size={14} />
+    <div className="px-3 py-2.5 border-b border-gray-100 last:border-0">
+      <div className="flex items-start gap-3">
+        <div className={`mt-0.5 flex-shrink-0 ${color}`}>
+          <Icon size={14} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[12px] font-medium text-gray-800">{label}</span>
+            {isNull && (
+              <span className={`text-[10px] font-medium ${hasTarget ? 'text-amber-500' : 'text-blue-500'}`}>
+                {nullTag}
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-gray-400 font-mono truncate">
+            {check.from_host} → {check.to || '?'}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">{check.description}</div>
+        </div>
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[12px] font-medium text-gray-800">{label}</span>
-          {isNull && (
-            <span className={`text-[10px] font-medium ${hasTarget ? 'text-amber-500' : 'text-blue-500'}`}>
-              {nullTag}
+
+      {fix && (
+        <div className="ml-[22px] mt-2 bg-console-bg rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-3 pt-2.5 pb-1 border-b border-white/5">
+            <span className="text-[10px] font-semibold text-console-text uppercase tracking-wider">
+              {t('nodes.dnsModal.howToFix')}
             </span>
-          )}
+            {fix.cmd && <CopyBtn text={fix.cmd} />}
+          </div>
+          <div className="px-3 py-2 space-y-1.5">
+            <p className="text-[10px] text-console-muted leading-relaxed">{fix.note}</p>
+            {fix.cmd && (
+              <pre className="text-[11px] font-mono text-console-text whitespace-pre-wrap leading-relaxed mt-1">{fix.cmd}</pre>
+            )}
+          </div>
         </div>
-        <div className="text-[11px] text-gray-400 font-mono truncate">
-          {check.from_host} → {check.to || '?'}
-        </div>
-        <div className="text-[11px] text-gray-500 mt-0.5">{check.description}</div>
-      </div>
+      )}
     </div>
   )
 }
@@ -99,14 +118,14 @@ function fixCommands(check, node, t) {
     return {
       title: t('nodes.dnsModal.fixPuppetNote'),
       note:  t('nodes.dnsModal.fixPuppetNote'),
-      cmd:   sshHostsCmd(node.ip, `<puppet-master-ip>  ${check.to}`),
+      cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
     }
   }
   if (check.key === 'node_to_wazuh' && check.ok === false && check.to) {
     return {
       title: t('nodes.dnsModal.fixWazuhNote'),
       note:  t('nodes.dnsModal.fixWazuhNote'),
-      cmd:   sshHostsCmd(node.ip, `<wazuh-manager-ip>  ${check.to}`),
+      cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
     }
   }
 
@@ -143,14 +162,14 @@ function fixCommands(check, node, t) {
       return {
         title: t('nodes.dnsModal.fixPuppetNote'),
         note:  sshNote,
-        cmd:   sshHostsCmd(node.ip, `<puppet-master-ip>  ${check.to}`),
+        cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
       }
     }
     if (check.key === 'node_to_wazuh') {
       return {
         title: t('nodes.dnsModal.fixWazuhNote'),
         note:  sshNote,
-        cmd:   sshHostsCmd(node.ip, `<wazuh-manager-ip>  ${check.to}`),
+        cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
       }
     }
   }
@@ -251,50 +270,34 @@ function DnsModal({ node, onClose, onRefetch }) {
           {/* Results */}
           {result && (
             <>
+              {result.all_ok ? (
+                <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg">
+                  <CheckCircle size={13} className="text-green-600" />
+                  <span className="text-[12px] text-green-700 font-medium">{t('nodes.dnsModal.allPassed')}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 rounded-lg">
+                  <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-[11px] text-amber-700">
+                    {t('nodes.dnsModal.failSummary', { n: actionableChecks.length, total: checks.length })}
+                  </span>
+                </div>
+              )}
+
               <div className="rounded-xl border border-gray-100 overflow-hidden">
                 {checks.map((c) => (
                   <CheckRow
                     key={c.key}
                     label={CHECK_LABELS[c.key] || c.key}
                     check={c}
+                    fix={c.ok !== true ? fixCommands(c, node, t) : null}
                     t={t}
                   />
                 ))}
               </div>
 
-              {result.all_ok && (
-                <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg">
-                  <CheckCircle size={13} className="text-green-600" />
-                  <span className="text-[12px] text-green-700 font-medium">{t('nodes.dnsModal.allPassed')}</span>
-                </div>
-              )}
-
-              {/* Fix / guidance for every non-passing check */}
-              {actionableChecks.length > 0 && (
-                <div className="space-y-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                    {t('nodes.dnsModal.howToFix')}
-                  </p>
-                  {actionableChecks.map((c) => {
-                    const fix = fixCommands(c, node, t)
-                    if (!fix) return null
-                    return (
-                      <div key={c.key} className="bg-console-bg rounded-xl p-4 space-y-2">
-                        <p className="text-[11px] font-semibold text-console-text">{fix.title}</p>
-                        <p className="text-[10px] text-console-muted">{fix.note}</p>
-                        {fix.cmd && (
-                          <div className="flex items-start justify-between gap-2">
-                            <pre className="text-[11px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{fix.cmd}</pre>
-                            <CopyBtn text={fix.cmd} />
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                  <p className="text-[10px] text-gray-400">
-                    {t('nodes.dnsModal.rerunHint')}
-                  </p>
-                </div>
+              {!result.all_ok && (
+                <p className="text-[10px] text-gray-400">{t('nodes.dnsModal.rerunHint')}</p>
               )}
             </>
           )}
