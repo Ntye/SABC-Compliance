@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle, RefreshCw, Server, Trash2, Wifi, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Info, RefreshCw, Server, Trash2, Wifi, XCircle } from 'lucide-react'
 import { checkNodeDns, deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -32,24 +32,39 @@ function relativeTime(iso, t) {
   return new Date(iso).toLocaleDateString()
 }
 
-function CheckRow({ label, check, notConfiguredLabel }) {
-  const Icon = check.ok === true ? CheckCircle : check.ok === false ? XCircle : null
-  const color = check.ok === true ? 'text-green-600' : check.ok === false ? 'text-red-500' : 'text-gray-400'
+function CheckRow({ label, check, t }) {
+  const isNull = check.ok === null
+  const hasTarget = Boolean(check.to)
+
+  const Icon  = check.ok === true  ? CheckCircle
+              : check.ok === false ? XCircle
+              : isNull && hasTarget ? AlertTriangle
+              : Info
+  const color = check.ok === true  ? 'text-green-600'
+              : check.ok === false ? 'text-red-500'
+              : isNull && hasTarget ? 'text-amber-500'
+              : 'text-blue-400'
+  const nullTag = hasTarget
+    ? t('nodes.dnsModal.checkFailed')
+    : t('nodes.dnsModal.serviceNotSet')
+
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
       <div className={`mt-0.5 flex-shrink-0 ${color}`}>
-        {Icon ? <Icon size={14} /> : <span className="text-[12px] font-mono text-gray-300">—</span>}
+        <Icon size={14} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[12px] font-medium text-gray-800">{label}</span>
-          {check.ok === null && <span className="text-[10px] text-gray-400">{notConfiguredLabel}</span>}
+          {isNull && (
+            <span className={`text-[10px] font-medium ${hasTarget ? 'text-amber-500' : 'text-blue-500'}`}>
+              {nullTag}
+            </span>
+          )}
         </div>
-        {check.to && (
-          <div className="text-[11px] text-gray-400 font-mono truncate">
-            {check.from_host} → {check.to}
-          </div>
-        )}
+        <div className="text-[11px] text-gray-400 font-mono truncate">
+          {check.from_host} → {check.to || '?'}
+        </div>
         <div className="text-[11px] text-gray-500 mt-0.5">{check.description}</div>
       </div>
     </div>
@@ -57,37 +72,89 @@ function CheckRow({ label, check, notConfiguredLabel }) {
 }
 
 function fixCommands(check, node, t) {
-  const sudoTee = (file, content) =>
-    `echo "${content}" | sudo tee -a ${file}`
+  const sshHostsCmd = (ip, entry) =>
+    `ssh -i ./keys/ansible_id_rsa ansible@${ip} \\\n  "echo '${entry}' | sudo tee -a /etc/hosts"`
+  const sudoTee = (entry) =>
+    `echo "${entry}" | sudo tee -a /etc/hosts`
 
+  const sshNote = t('nodes.dnsModal.sshCheckFailedNote')
+
+  // ── ok: false — resolution confirmed failing ──────────────────────────────
   if (check.key === 'backend_to_node' && check.ok === false) {
+    const entry = `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`
     return {
       title: t('nodes.dnsModal.fixPlatformNote'),
-      note: t('nodes.dnsModal.fixPlatformNote'),
-      cmd: sudoTee('/etc/hosts', `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`),
+      note:  t('nodes.dnsModal.fixPlatformNote'),
+      cmd:   sudoTee(entry),
     }
   }
   if (check.key === 'node_to_backend' && check.ok === false) {
     return {
       title: t('nodes.dnsModal.fixNodeNote'),
-      note: t('nodes.dnsModal.fixNodeNote'),
-      cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '$(hostname -I | awk '{print $1}')  $(hostname -f)' | sudo tee -a /etc/hosts"`,
+      note:  t('nodes.dnsModal.fixNodeNote'),
+      cmd:   sshHostsCmd(node.ip, `$(hostname -I | awk '{print $1}')  $(hostname -f)`),
     }
   }
   if (check.key === 'node_to_puppet' && check.ok === false && check.to) {
     return {
       title: t('nodes.dnsModal.fixPuppetNote'),
-      note: t('nodes.dnsModal.fixPuppetNote'),
-      cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '<puppet-ip>  ${check.to}' | sudo tee -a /etc/hosts"`,
+      note:  t('nodes.dnsModal.fixPuppetNote'),
+      cmd:   sshHostsCmd(node.ip, `<puppet-master-ip>  ${check.to}`),
     }
   }
   if (check.key === 'node_to_wazuh' && check.ok === false && check.to) {
     return {
       title: t('nodes.dnsModal.fixWazuhNote'),
-      note: t('nodes.dnsModal.fixWazuhNote'),
-      cmd: `ssh -i ./keys/ansible_id_rsa ansible@${node.ip} \\\n  "echo '<wazuh-ip>  ${check.to}' | sudo tee -a /etc/hosts"`,
+      note:  t('nodes.dnsModal.fixWazuhNote'),
+      cmd:   sshHostsCmd(node.ip, `<wazuh-manager-ip>  ${check.to}`),
     }
   }
+
+  // ── ok: null — check did not run ──────────────────────────────────────────
+  if (check.ok === null) {
+    // to is null → the service has not been connected in the platform yet
+    if (!check.to) {
+      const service = check.key === 'node_to_puppet'
+        ? t('nodes.dnsModal.puppetMasterLabel')
+        : check.key === 'node_to_wazuh'
+        ? t('nodes.dnsModal.wazuhManagerLabel')
+        : null
+      if (!service) return null
+      return {
+        title: t('nodes.dnsModal.serviceNotConfiguredTitle', { service }),
+        note:  t('nodes.dnsModal.serviceNotConfiguredNote', { service }),
+        cmd:   null,
+      }
+    }
+
+    // to is set → SSH couldn't verify — show the /etc/hosts fix anyway
+    if (check.key === 'backend_to_node') {
+      const entry = `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`
+      return { title: t('nodes.dnsModal.fixPlatformNote'), note: sshNote, cmd: sudoTee(entry) }
+    }
+    if (check.key === 'node_to_backend') {
+      return {
+        title: t('nodes.dnsModal.fixNodeNote'),
+        note:  sshNote,
+        cmd:   sshHostsCmd(node.ip, `$(hostname -I | awk '{print $1}')  $(hostname -f)`),
+      }
+    }
+    if (check.key === 'node_to_puppet') {
+      return {
+        title: t('nodes.dnsModal.fixPuppetNote'),
+        note:  sshNote,
+        cmd:   sshHostsCmd(node.ip, `<puppet-master-ip>  ${check.to}`),
+      }
+    }
+    if (check.key === 'node_to_wazuh') {
+      return {
+        title: t('nodes.dnsModal.fixWazuhNote'),
+        note:  sshNote,
+        cmd:   sshHostsCmd(node.ip, `<wazuh-manager-ip>  ${check.to}`),
+      }
+    }
+  }
+
   return null
 }
 
@@ -140,7 +207,7 @@ function DnsModal({ node, onClose, onRefetch }) {
     ? Object.entries(result.checks).map(([key, val]) => ({ key, ...val }))
     : []
 
-  const failingChecks = checks.filter((c) => c.ok === false)
+  const actionableChecks = checks.filter((c) => c.ok !== true)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
@@ -190,7 +257,7 @@ function DnsModal({ node, onClose, onRefetch }) {
                     key={c.key}
                     label={CHECK_LABELS[c.key] || c.key}
                     check={c}
-                    notConfiguredLabel={t('nodes.notConfigured')}
+                    t={t}
                   />
                 ))}
               </div>
@@ -202,23 +269,25 @@ function DnsModal({ node, onClose, onRefetch }) {
                 </div>
               )}
 
-              {/* Fix instructions for each failing check */}
-              {failingChecks.length > 0 && (
+              {/* Fix / guidance for every non-passing check */}
+              {actionableChecks.length > 0 && (
                 <div className="space-y-3">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                     {t('nodes.dnsModal.howToFix')}
                   </p>
-                  {failingChecks.map((c) => {
+                  {actionableChecks.map((c) => {
                     const fix = fixCommands(c, node, t)
                     if (!fix) return null
                     return (
-                      <div key={c.key} className="bg-console-bg rounded-xl p-4">
-                        <p className="text-[11px] font-semibold text-console-text mb-1">{fix.title}</p>
-                        <p className="text-[10px] text-console-muted mb-2">{fix.note}</p>
-                        <div className="flex items-start justify-between gap-2">
-                          <pre className="text-[11px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{fix.cmd}</pre>
-                          <CopyBtn text={fix.cmd} />
-                        </div>
+                      <div key={c.key} className="bg-console-bg rounded-xl p-4 space-y-2">
+                        <p className="text-[11px] font-semibold text-console-text">{fix.title}</p>
+                        <p className="text-[10px] text-console-muted">{fix.note}</p>
+                        {fix.cmd && (
+                          <div className="flex items-start justify-between gap-2">
+                            <pre className="text-[11px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{fix.cmd}</pre>
+                            <CopyBtn text={fix.cmd} />
+                          </div>
+                        )}
                       </div>
                     )
                   })}
