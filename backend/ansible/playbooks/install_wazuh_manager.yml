@@ -1,7 +1,18 @@
 ---
-# Installs Wazuh Manager 4.x on the target node.
-# Airgap mode: place .deb/.rpm in backend/packages/wazuh-manager/
-# Online mode: downloads from packages.wazuh.com automatically.
+# Installs Wazuh Manager 4.x on the target node (standalone, no indexer/dashboard).
+#
+# Supports both APT (Debian/Ubuntu) and RPM (RHEL/CentOS/Rocky/AlmaLinux).
+# Supports online and airgap modes:
+#   Online  — downloads packages from packages.wazuh.com automatically.
+#   Airgap  — place the matching package in backend/packages/wazuh-manager/:
+#               wazuh-manager_4.x.x-1_amd64.deb   (Debian/Ubuntu)
+#               wazuh-manager-4.x.x-1.x86_64.rpm   (RHEL/CentOS/Rocky)
+#
+# Ports opened:
+#   1514/tcp  — agent communication (remoted)
+#   1515/tcp  — agent self-registration (authd)
+#   55000/tcp — Wazuh REST API
+#
 - name: Install Wazuh Manager
   hosts: target
   become: yes
@@ -9,10 +20,26 @@
 
   vars:
     wazuh_api_port: 55000
-    # packages_dir is injected by AnsibleAdapter from backend/packages/
+    wazuh_manager_port: 1514
+    wazuh_auth_port: 1515
+    # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     wazuh_pkg_dir: "{{ packages_dir }}/wazuh-manager"
 
   tasks:
+
+    # ── Idempotency check ─────────────────────────────────────────────────────
+    - name: Check if wazuh-manager is already installed
+      stat:
+        path: /var/ossec/bin/wazuh-control
+      register: wazuh_installed
+
+    - name: Check if wazuh-manager service is running
+      command: systemctl is-active wazuh-manager
+      register: wazuh_running
+      changed_when: false
+      failed_when: false
+      when: wazuh_installed.stat.exists
+
     # ── Airgap detection ──────────────────────────────────────────────────────
     - name: Find offline Wazuh manager packages on controller
       find:
@@ -32,147 +59,277 @@
     - name: Report installation mode
       debug:
         msg: >-
+          Wazuh Manager installation on {{ ansible_fqdn }}
+          ({{ ansible_distribution }} {{ ansible_distribution_version }},
+          {{ ansible_os_family }} family).
           Mode: {{ 'AIRGAP — using packages from ' + wazuh_pkg_dir
                    if wazuh_airgap
-                   else 'ONLINE — downloading from packages.wazuh.com' }}
+                   else 'ONLINE — downloading from packages.wazuh.com' }}.
+          Already installed: {{ wazuh_installed.stat.exists }}.
 
-    # ── Install — online (Debian/Ubuntu) ──────────────────────────────────────
-    - name: Install curl and gnupg (required for repo setup)
+    # ─────────────────────────────────────────────────────────────────────────
+    # ONLINE — Debian/Ubuntu
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Install prerequisites (Debian, online)
       apt:
-        name: [curl, gnupg, apt-transport-https]
+        name:
+          - curl
+          - gnupg
+          - apt-transport-https
+          - ca-certificates
         state: present
         update_cache: yes
+        cache_valid_time: 3600
       when:
         - ansible_os_family == 'Debian'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    - name: Add Wazuh GPG key (Debian)
-      apt_key:
-        url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
-        state: present
+    - name: Create /usr/share/keyrings directory (Debian, online)
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: '0755'
       when:
         - ansible_os_family == 'Debian'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    - name: Add Wazuh repository (Debian)
+    - name: Download Wazuh GPG key to keyring (Debian, online)
+      shell: >-
+        curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH
+        | gpg --no-default-keyring
+              --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg
+              --import
+      args:
+        creates: /usr/share/keyrings/wazuh.gpg
+      when:
+        - ansible_os_family == 'Debian'
+        - not wazuh_airgap
+        - not wazuh_installed.stat.exists
+
+    - name: Set keyring permissions (Debian, online)
+      file:
+        path: /usr/share/keyrings/wazuh.gpg
+        mode: '0644'
+      when:
+        - ansible_os_family == 'Debian'
+        - not wazuh_airgap
+        - not wazuh_installed.stat.exists
+
+    - name: Add Wazuh repository (Debian, online)
       apt_repository:
-        repo: "deb https://packages.wazuh.com/4.x/apt/ stable main"
+        repo: "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main"
         state: present
         filename: wazuh
       when:
         - ansible_os_family == 'Debian'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
     - name: Install wazuh-manager (Debian, online)
       apt:
         name: wazuh-manager
         state: present
         update_cache: yes
+      register: apt_install
+      retries: 3
+      delay: 10
+      until: apt_install is succeeded
       when:
         - ansible_os_family == 'Debian'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    # ── Install — online (RedHat/Rocky) ──────────────────────────────────────
-    - name: Import Wazuh GPG key (RedHat)
+    # ─────────────────────────────────────────────────────────────────────────
+    # ONLINE — RedHat / CentOS / Rocky / AlmaLinux
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Import Wazuh GPG key (RedHat, online)
       rpm_key:
         key: https://packages.wazuh.com/key/GPG-KEY-WAZUH
         state: present
       when:
         - ansible_os_family == 'RedHat'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    - name: Add Wazuh repository (RedHat)
+    - name: Add Wazuh repository (RedHat, online)
       yum_repository:
         name: wazuh
-        description: Wazuh 4.x repository
+        description: "Wazuh 4.x — $basearch"
         baseurl: "https://packages.wazuh.com/4.x/yum/"
         gpgcheck: yes
         gpgkey: https://packages.wazuh.com/key/GPG-KEY-WAZUH
         enabled: yes
+        protect: yes
       when:
         - ansible_os_family == 'RedHat'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
     - name: Install wazuh-manager (RedHat, online)
       yum:
         name: wazuh-manager
         state: present
+      register: yum_install
+      retries: 3
+      delay: 10
+      until: yum_install is succeeded
       when:
         - ansible_os_family == 'RedHat'
         - not wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    # ── Install — airgap ─────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # AIRGAP — both families
+    # ─────────────────────────────────────────────────────────────────────────
+
     - name: Upload Wazuh manager packages to node (airgap)
       copy:
         src: "{{ item.path }}"
         dest: "/tmp/{{ item.path | basename }}"
       loop: "{{ wazuh_offline_pkgs.files | default([]) }}"
-      when: wazuh_airgap
+      when:
+        - wazuh_airgap
+        - not wazuh_installed.stat.exists
 
-    - name: Install Wazuh manager from local .deb (airgap, Debian)
+    - name: Install wazuh-manager from .deb (airgap, Debian)
       apt:
         deb: "/tmp/{{ item.path | basename }}"
+        state: present
       loop: "{{ wazuh_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
       when:
         - wazuh_airgap
         - ansible_os_family == 'Debian'
+        - not wazuh_installed.stat.exists
 
-    - name: Install Wazuh manager from local .rpm (airgap, RedHat)
+    - name: Install wazuh-manager from .rpm (airgap, RedHat)
       yum:
         name: "/tmp/{{ item.path | basename }}"
         state: present
+        disable_gpg_check: no
       loop: "{{ wazuh_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
       when:
         - wazuh_airgap
         - ansible_os_family == 'RedHat'
+        - not wazuh_installed.stat.exists
 
-    # ── Configure ossec.conf ──────────────────────────────────────────────────
-    - name: Enable agent self-registration (disable auth block)
+    # ─────────────────────────────────────────────────────────────────────────
+    # CONFIGURE ossec.conf
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Enable JSON output in ossec.conf
       replace:
         path: /var/ossec/etc/ossec.conf
-        regexp: '<disabled>yes</disabled>'
-        replace: '<disabled>no</disabled>'
-      ignore_errors: yes
+        regexp: '<jsonout_output>no</jsonout_output>'
+        replace: '<jsonout_output>yes</jsonout_output>'
+      notify: Restart wazuh-manager
 
-    # ── Firewall ──────────────────────────────────────────────────────────────
-    - name: Allow Wazuh ports (ufw)
+    - name: Enable agent self-registration (authd)
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '(<auth>[\s\S]*?<disabled>)yes(</disabled>)'
+        replace: '\1no\2'
+      notify: Restart wazuh-manager
+
+    - name: Ensure agent communication port 1514 uses TCP
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '(<remote>[\s\S]*?<protocol>)udp(</protocol>)'
+        replace: '\1tcp\2'
+      notify: Restart wazuh-manager
+
+    - name: Enable vulnerability detection
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '(<vulnerability-detector>[\s\S]*?<enabled>)no(</enabled>)'
+        replace: '\1yes\2'
+      ignore_errors: yes
+      notify: Restart wazuh-manager
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # FIREWALL
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Allow Wazuh ports (ufw, Debian)
       ufw:
         rule: allow
         port: "{{ item }}"
         proto: tcp
-      loop: ["1514", "1515", "55000"]
+        comment: "Wazuh Manager"
+      loop:
+        - "{{ wazuh_manager_port }}"
+        - "{{ wazuh_auth_port }}"
+        - "{{ wazuh_api_port }}"
       when: ansible_os_family == 'Debian'
       ignore_errors: yes
 
-    - name: Allow Wazuh ports (firewalld)
+    - name: Allow Wazuh ports (firewalld, RedHat)
       firewalld:
         port: "{{ item }}/tcp"
         permanent: yes
         state: enabled
         immediate: yes
-      loop: ["1514", "1515", "55000"]
+      loop:
+        - "{{ wazuh_manager_port }}"
+        - "{{ wazuh_auth_port }}"
+        - "{{ wazuh_api_port }}"
       when: ansible_os_family == 'RedHat'
       ignore_errors: yes
 
-    # ── Service ───────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # SERVICE
+    # ─────────────────────────────────────────────────────────────────────────
+
     - name: Enable and start wazuh-manager
       service:
         name: wazuh-manager
         state: started
         enabled: yes
 
-    - name: Wait for Wazuh API port {{ wazuh_api_port }}
+    - name: Wait for Wazuh API to be ready (port {{ wazuh_api_port }})
       wait_for:
+        host: 127.0.0.1
         port: "{{ wazuh_api_port }}"
-        timeout: 90
+        timeout: 120
         delay: 5
 
-    - name: Verify wazuh-manager status
+    - name: Wait for agent registration port {{ wazuh_auth_port }}
+      wait_for:
+        host: 0.0.0.0
+        port: "{{ wazuh_auth_port }}"
+        timeout: 60
+        delay: 3
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # VERIFY
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Get Wazuh manager version
+      command: /var/ossec/bin/wazuh-control info
+      register: wazuh_info
+      changed_when: false
+
+    - name: Check all Wazuh daemons are running
       command: /var/ossec/bin/wazuh-control status
       register: wazuh_status
       changed_when: false
-      ignore_errors: yes
 
     - name: Wazuh Manager ready
       debug:
-        msg: "{{ wazuh_status.stdout_lines | default(['Wazuh Manager started and listening on ports 1514/1515/55000']) }}"
+        msg: >-
+          Wazuh Manager installed and running on {{ ansible_fqdn }}.
+          {{ wazuh_info.stdout_lines | join(' | ') }}.
+          Agent registration: port {{ wazuh_auth_port }}/tcp.
+          Agent communication: port {{ wazuh_manager_port }}/tcp.
+          REST API: https://{{ ansible_fqdn }}:{{ wazuh_api_port }}
+          (default credentials — admin / SecretPassword1!).
+
+  # ── Handlers ─────────────────────────────────────────────────────────────
+  handlers:
+    - name: Restart wazuh-manager
+      service:
+        name: wazuh-manager
+        state: restarted
