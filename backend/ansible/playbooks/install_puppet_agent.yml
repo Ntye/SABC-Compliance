@@ -138,6 +138,7 @@
         cert = f'/etc/puppetlabs/puppet/ssl/certs/{certname}.pem'
         key  = f'/etc/puppetlabs/puppet/ssl/private_keys/{certname}.pem'
         base = 'https://localhost:4433'
+        target_class = '{{ pe_repo_class }}'
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
@@ -155,7 +156,11 @@
             print('SKIP: PE Master node group not found')
             sys.exit(0)
 
-        body = json.dumps({'classes': {'{{ pe_repo_class }}': {}}}).encode()
+        if target_class in group.get('classes', {}):
+            print(f'ALREADY_CLASSIFIED: {target_class} already present in PE Master group')
+            sys.exit(0)
+
+        body = json.dumps({'classes': {target_class: {}}}).encode()
         req  = urllib.request.Request(
             f"{base}/classifier-api/v1/groups/{group['id']}",
             data=body,
@@ -165,13 +170,13 @@
         with urllib.request.urlopen(req, context=ctx) as resp:
             resp.read()
 
-        print('Classified PE Master with {{ pe_repo_class }}')
+        print(f'Classified PE Master with {target_class}')
         PYEOF
       args:
         executable: /bin/bash
       delegate_to: pe_master_dynamic
       register: classifier_result
-      changed_when: "'Classified' in classifier_result.stdout"
+      changed_when: "'Classified PE Master' in classifier_result.stdout"
 
     - name: Run puppet agent on primary to apply pe_repo classification
       command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
@@ -181,7 +186,8 @@
       # rc 0=no changes, 2=changes applied — both are success.
       # failed_when: false so unrelated catalog failures don't abort the job.
       failed_when: false
-      timeout: 300
+      timeout: 600
+      when: classifier_result is changed
 
     - name: Show puppet primary run result
       debug:
