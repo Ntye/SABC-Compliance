@@ -121,8 +121,9 @@ async def lifespan(app: FastAPI):
     delete_node_uc = DeleteNodeUseCase(node_repo)
     check_dns_uc = CheckNodeDnsUseCase(
         node_repo, ssh_client,
-        settings.puppet_master_host,
-        settings.wazuh_manager_host,
+        platform_config_repo,
+        puppet_master_host_env=settings.puppet_master_host,
+        wazuh_manager_host_env=settings.wazuh_manager_host,
     )
 
     nodes_routes.set_use_cases(

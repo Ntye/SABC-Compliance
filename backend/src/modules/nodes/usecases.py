@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from core.domain.entities import Node
-from core.domain.interfaces import IEventBus, INodeRepository, ISSHClient
+from core.domain.interfaces import IEventBus, INodeRepository, ISSHClient, IPlatformConfigRepository
 from core.errors import ConflictError, NotFoundError, SSHConnectError, ValidationError
 from core.events import Events
 
@@ -233,23 +233,28 @@ class CheckNodeDnsUseCase:
         self,
         node_repository: INodeRepository,
         ssh_client: ISSHClient,
-        puppet_master_host: str | None,
-        wazuh_manager_host: str | None,
+        platform_config: IPlatformConfigRepository,
+        puppet_master_host_env: str | None = None,
+        wazuh_manager_host_env: str | None = None,
     ) -> None:
         self._repo = node_repository
         self._ssh = ssh_client
-        self._puppet_host = puppet_master_host
-        self._wazuh_host = wazuh_manager_host
+        self._config = platform_config
+        self._puppet_env = puppet_master_host_env
+        self._wazuh_env = wazuh_manager_host_env
 
     async def execute(self, id_or_hostname: str) -> dict:
         node = await _resolve_node(self._repo, id_or_hostname)
         backend_hostname = socket.gethostname()
 
+        puppet_host = await self._config.get("puppet_master_host") or self._puppet_env
+        wazuh_host  = await self._config.get("wazuh_manager_host") or self._wazuh_env
+
         backend_to_node, node_to_backend, node_to_puppet, node_to_wazuh = await asyncio.gather(
             _check_dns_local(node.hostname, node.ip),
             _check_dns_remote(self._ssh, node, backend_hostname),
-            _check_dns_remote(self._ssh, node, self._puppet_host) if self._puppet_host else _noop(),
-            _check_dns_remote(self._ssh, node, self._wazuh_host) if self._wazuh_host else _noop(),
+            _check_dns_remote(self._ssh, node, puppet_host) if puppet_host else _noop(),
+            _check_dns_remote(self._ssh, node, wazuh_host)  if wazuh_host  else _noop(),
         )
 
         node.dns_resolves = backend_to_node
@@ -272,13 +277,13 @@ class CheckNodeDnsUseCase:
             "node_to_puppet": {
                 "ok": node_to_puppet,
                 "from": node.hostname,
-                "to": self._puppet_host,
+                "to": puppet_host,
                 "description": "Node resolves the Puppet master hostname (required for agent enrollment)",
             },
             "node_to_wazuh": {
                 "ok": node_to_wazuh,
                 "from": node.hostname,
-                "to": self._wazuh_host,
+                "to": wazuh_host,
                 "description": "Node resolves the Wazuh manager hostname (required for agent enrollment)",
             },
         }
