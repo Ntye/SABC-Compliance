@@ -80,24 +80,41 @@
         - not wazuh_airgap
         - not wazuh_agent_installed.stat.exists
 
-    - name: Fail with airgap instructions if target cannot reach packages.wazuh.com
+    - name: Show airgap setup instructions (no internet on target)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║         WAZUH AGENT — AIRGAP SETUP REQUIRED                 ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  The target node cannot reach packages.wazuh.com."
+          - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
+          - ""
+          - "  Download the matching package on any internet-connected machine:"
+          - ""
+          - "  ── Debian / Ubuntu ──────────────────────────────────────────"
+          - "    curl -LO https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb"
+          - ""
+          - "  ── RHEL / CentOS / Rocky / AlmaLinux ────────────────────────"
+          - "    curl -LO https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.0-1.x86_64.rpm"
+          - ""
+          - "  Then copy the file into the platform packages directory:"
+          - ""
+          - "    cp wazuh-agent*.deb  backend/packages/wazuh-agent/   # Debian"
+          - "    cp wazuh-agent*.rpm  backend/packages/wazuh-agent/   # RedHat"
+          - ""
+          - "  Re-run this job — the playbook detects the file and"
+          - "  switches to offline installation automatically."
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    - name: Abort — target has no internet access (see instructions above)
       fail:
-        msg: >-
-          The target node cannot reach packages.wazuh.com
-          (curl exit {{ inet_check.rc }}, HTTP {{ inet_check.stdout | default('—') }}).
-          The target has no internet access — switch to airgap mode:
-
-            Step 1 — download the matching package on any internet-connected machine:
-              Debian/Ubuntu:
-                curl -LO "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb"
-              RHEL/CentOS/Rocky:
-                curl -LO "https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.0-1.x86_64.rpm"
-
-            Step 2 — copy the file to:
-              backend/packages/wazuh-agent/
-
-            Then re-run this job — the playbook will detect the file and
-            switch to offline installation automatically.
+        msg: "No internet on target. Follow the airgap instructions printed above, then re-run."
       when:
         - not wazuh_airgap
         - not wazuh_agent_installed.stat.exists

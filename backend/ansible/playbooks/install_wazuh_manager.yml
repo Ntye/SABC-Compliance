@@ -127,24 +127,43 @@
         - not wazuh_airgap
         - not wazuh_installed.stat.exists
 
-    - name: Fail with airgap instructions if target cannot reach packages.wazuh.com
+    - name: Show airgap setup instructions (no internet on target)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║        WAZUH MANAGER — AIRGAP SETUP REQUIRED                ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  The target node cannot reach packages.wazuh.com."
+          - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
+          - ""
+          - "  Run these commands on any internet-connected machine:"
+          - ""
+          - "    curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh"
+          - ""
+          - "    # Debian/Ubuntu target:"
+          - "    bash wazuh-install.sh -dw deb -da amd64"
+          - ""
+          - "    # RHEL/CentOS/Rocky target:"
+          - "    bash wazuh-install.sh -dw rpm -da x86_64"
+          - ""
+          - "  Then copy both files into the platform packages directory:"
+          - ""
+          - "    cp wazuh-install.sh     backend/packages/wazuh-manager/"
+          - "    cp wazuh-offline.tar.gz backend/packages/wazuh-manager/"
+          - ""
+          - "  Re-run this job — the playbook detects the files and"
+          - "  switches to offline installation automatically."
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    - name: Abort — target has no internet access (see instructions above)
       fail:
-        msg: >-
-          The target node cannot reach packages.wazuh.com
-          (curl exit {{ inet_check.rc }}, HTTP {{ inet_check.stdout | default('—') }}).
-          The target has no internet access — switch to airgap mode:
-
-            Step 1 — on any internet-connected machine:
-              curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh
-              bash wazuh-install.sh -dw deb -da amd64    # Debian/Ubuntu
-              bash wazuh-install.sh -dw rpm -da x86_64   # RHEL/CentOS
-
-            Step 2 — copy both files to the packages directory:
-              cp wazuh-install.sh     backend/packages/wazuh-manager/
-              cp wazuh-offline.tar.gz backend/packages/wazuh-manager/
-
-            Then re-run this job — the playbook will detect the files
-            and switch to offline installation automatically.
+        msg: "No internet on target. Follow the airgap instructions printed above, then re-run."
       when:
         - not wazuh_airgap
         - not wazuh_installed.stat.exists
