@@ -1,0 +1,52 @@
+services:
+
+  # ── Backend: FastAPI + Ansible ────────────────────────────────────────────
+  backend:
+    build: ./backend
+    image: bdc-compliance-backend
+    container_name: bdc-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT:          "3000"
+      DB_PATH:       /app/data/platform.db
+      SSH_KEY_PATH:  /app/keys/ansible_id_rsa
+      ANSIBLE_DIR:   /app/ansible
+      PACKAGES_DIR:  /app/packages
+    volumes:
+      # Database — survives container replacement
+      - backend-data:/app/data
+      # SSH key pair — generated once on first start, reused on updates
+      - backend-keys:/app/keys
+      # Airgap packages — bind-mount so you can drop files in without rebuild
+      - ./backend/packages:/app/packages
+    networks:
+      - bdc-net
+    # Backend is NOT exposed to the host — all traffic routes through the
+    # frontend Nginx proxy, keeping a single public port.
+
+  # ── Frontend: React → Nginx ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Tells the React bundle to send API calls to /api/ (proxied by Nginx)
+        VITE_API_BASE: /api
+    image: bdc-compliance-frontend
+    container_name: bdc-frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+    networks:
+      - bdc-net
+
+volumes:
+  backend-data:
+  backend-keys:
+
+networks:
+  bdc-net:
+    driver: bridge
