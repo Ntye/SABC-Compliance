@@ -1,0 +1,72 @@
+---
+# Wazuh Agent installation tasks — RedHat/CentOS/Rocky/AlmaLinux (YUM/DNF).
+# Included by install_wazuh_agent.yml when ansible_os_family == 'RedHat'.
+#
+# Inherits from parent play:
+#   wazuh_manager, wazuh_agent_group, wazuh_airgap,
+#   agent_pkg_dir, wazuh_agent_installed, agent_offline_pkgs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ONLINE — download from packages.wazuh.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Import Wazuh GPG key (RedHat, online)
+  rpm_key:
+    key: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+    state: present
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Add Wazuh YUM repository (RedHat, online)
+  yum_repository:
+    name: wazuh
+    description: "Wazuh 4.x — $basearch"
+    baseurl: "https://packages.wazuh.com/4.x/yum/"
+    gpgcheck: yes
+    gpgkey: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+    enabled: yes
+    protect: yes
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Install wazuh-agent from YUM (RedHat, online)
+  yum:
+    name: wazuh-agent
+    state: present
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+    WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
+  register: yum_install
+  retries: 3
+  delay: 10
+  until: yum_install is succeeded
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AIRGAP — install from local .rpm package
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Upload Wazuh agent .rpm to node (airgap)
+  copy:
+    src: "{{ item.path }}"
+    dest: "/tmp/{{ item.path | basename }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+  when:
+    - wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Install wazuh-agent from .rpm (airgap)
+  yum:
+    name: "/tmp/{{ item.path | basename }}"
+    state: present
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+    WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.rpm$') | list }}"
+  when:
+    - wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
