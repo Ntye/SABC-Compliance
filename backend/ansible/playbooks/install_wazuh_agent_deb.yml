@@ -4,7 +4,7 @@
 #
 # Inherits from parent play:
 #   wazuh_manager, wazuh_agent_group, wazuh_airgap,
-#   agent_pkg_dir, wazuh_agent_installed, agent_offline_pkgs
+#   agent_pkg_dir, wazuh_agent_installed, agent_offline_pkgs, inet_check
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ONLINE — download from packages.wazuh.com
@@ -13,7 +13,6 @@
 - name: Install prerequisites (Debian, online)
   apt:
     name:
-      - curl
       - gnupg
       - apt-transport-https
       - ca-certificates
@@ -33,12 +32,34 @@
     - not wazuh_airgap
     - not wazuh_agent_installed.stat.exists
 
-- name: Download Wazuh GPG key to keyring (Debian, online)
+# Download the GPG key on the controller (which has internet) and push it
+# to the target over the existing SSH channel — avoids requiring the target
+# to open outbound HTTPS just to fetch a 4 KB key file.
+- name: Download Wazuh GPG key on controller (Debian, online)
+  get_url:
+    url: "https://packages.wazuh.com/key/GPG-KEY-WAZUH"
+    dest: /tmp/GPG-KEY-WAZUH
+    mode: '0644'
+  delegate_to: localhost
+  become: no
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Upload Wazuh GPG key to target (Debian, online)
+  copy:
+    src: /tmp/GPG-KEY-WAZUH
+    dest: /tmp/GPG-KEY-WAZUH
+    mode: '0644'
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Import Wazuh GPG key into keyring (Debian, online)
   shell: >-
-    curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH
-    | gpg --no-default-keyring
-          --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg
-          --import
+    gpg --no-default-keyring
+        --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg
+        --import /tmp/GPG-KEY-WAZUH
   args:
     creates: /usr/share/keyrings/wazuh.gpg
   when:

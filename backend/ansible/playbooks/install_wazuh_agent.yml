@@ -65,6 +65,44 @@
           Supported: Debian (Ubuntu/Debian) and RedHat (RHEL/CentOS/Rocky/AlmaLinux).
       when: ansible_os_family not in ['Debian', 'RedHat']
 
+    # Check internet connectivity before attempting an online install.
+    # Lab/VM environments often have internet on the controller but not on
+    # managed nodes — detect this early with a clear actionable error.
+    - name: Check target internet connectivity to packages.wazuh.com
+      shell: >-
+        curl -s --connect-timeout 10 --max-time 15
+          -o /dev/null -w "%{http_code}"
+          https://packages.wazuh.com/key/GPG-KEY-WAZUH
+      register: inet_check
+      changed_when: false
+      failed_when: false
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+
+    - name: Fail with airgap instructions if target cannot reach packages.wazuh.com
+      fail:
+        msg: >-
+          The target node cannot reach packages.wazuh.com
+          (curl exit {{ inet_check.rc }}, HTTP {{ inet_check.stdout | default('—') }}).
+          The target has no internet access — switch to airgap mode:
+
+            Step 1 — download the matching package on any internet-connected machine:
+              Debian/Ubuntu:
+                curl -LO "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb"
+              RHEL/CentOS/Rocky:
+                curl -LO "https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.0-1.x86_64.rpm"
+
+            Step 2 — copy the file to:
+              backend/packages/wazuh-agent/
+
+            Then re-run this job — the playbook will detect the file and
+            switch to offline installation automatically.
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
     - name: Run Debian/Ubuntu installation script
       include_tasks: install_wazuh_agent_deb.yml
       when: ansible_os_family == 'Debian'
