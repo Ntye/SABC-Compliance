@@ -36,4 +36,5 @@ EXPOSE 3000
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["uvicorn", "main:app", "--app-dir", "/app/src", \
-     "--host", "0.0.0.0", "--port", "3000"]
+     "--host", "0.0.0.0", "--port", "3000", \
+     "--root-path", "/api"]
