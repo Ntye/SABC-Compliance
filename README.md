@@ -57,6 +57,13 @@ docker compose logs -f backend
 Open the UI at **http://localhost** (or `http://localhost:<HTTP_PORT>` if you
 changed the port in `.env`).
 
+Two URLs are available:
+
+| URL | Purpose |
+|-----|---------|
+| `http://localhost`          | Main application UI |
+| `http://localhost:3000/docs`  | FastAPI interactive Swagger docs (direct backend access) |
+
 That's it — the same three commands work on macOS, Ubuntu, and AlmaLinux.
 
 ### What you'll see in the backend logs on first run
@@ -178,6 +185,7 @@ handled.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HTTP_PORT` | `80` | Host port the UI is served on |
+| `BACKEND_PORT` | `3000` | Host port the API + Swagger docs are exposed on |
 | `JWT_SECRET` | — | **Change this.** Session-token signing key (32+ random chars) |
 | `PUPPET_MASTER_HOST` | _(unset)_ | Optional; also settable from the UI |
 | `WAZUH_MANAGER_HOST` | _(unset)_ | Optional; also settable from the UI |

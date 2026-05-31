@@ -29,8 +29,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    # Backend is NOT exposed to the host — all traffic routes through the
-    # frontend Nginx proxy, keeping a single public port.
+    # Backend exposed on BACKEND_PORT (default 3000) for direct API access
+    # and Swagger UI at http://localhost:3000/docs. The frontend Nginx proxy
+    # at /api/ remains the primary path used by the browser.
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
 
   # ── Frontend: React → Nginx ───────────────────────────────────────────────
   frontend:
