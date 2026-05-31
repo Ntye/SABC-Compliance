@@ -9,10 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Python deps first — layer cached unless requirements change
+# Python deps first — layer cached unless requirements change.
+# --no-cache-dir avoids stale/corrupt entries from a previously interrupted
+# download (pip would otherwise fail with "PACKAGES DO NOT MATCH THE HASHES").
+# --timeout / --retries cope with slow mirrors (uvloop, cryptography are large).
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --timeout=300 -r requirements.txt
+RUN pip install --no-cache-dir --timeout=300 --retries=10 -r requirements.txt
 
 # Application source and Ansible playbooks
 COPY src/     src/
