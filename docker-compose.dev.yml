@@ -1,0 +1,83 @@
+# Development compose — source code is volume-mounted so changes are live.
+#
+# Usage:
+#   First time (or after adding/removing a dependency):
+#     docker compose -f docker-compose.dev.yml up --build -d
+#
+#   After every 'git pull' (no rebuild needed):
+#     docker compose -f docker-compose.dev.yml up -d
+#     (backend auto-reloads on .py changes; frontend HMR updates the browser)
+#
+# For production / airgap deployment use docker-compose.yml instead.
+
+services:
+
+  # ── Backend: FastAPI + Ansible ─────────────────────────────────────────────
+  backend:
+    build: ./backend          # built once — deps cached; rebuild only when
+    image: bdc-compliance-backend  # requirements.txt changes
+    container_name: bdc-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT:          "3000"
+      DB_PATH:       /app/data/platform.db
+      SSH_KEY_PATH:  /app/keys/ansible_id_rsa
+      ANSIBLE_DIR:   /app/ansible
+      PACKAGES_DIR:  /app/packages
+    volumes:
+      - backend-data:/app/data
+      - backend-keys:/app/keys
+      - ./backend/packages:/app/packages
+      - ./backend/src:/app/src           # live — git pull reflects instantly
+      - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    networks:
+      - bdc-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command:
+      - uvicorn
+      - main:app
+      - --app-dir
+      - /app/src
+      - --host
+      - 0.0.0.0
+      - --port
+      - "3000"
+      - --reload     # restarts automatically on any .py file change
+
+  # ── Frontend: Vite dev server ──────────────────────────────────────────────
+  frontend:
+    image: node:20-alpine
+    container_name: bdc-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules   # kept inside container so
+                                                  # host & container binaries
+                                                  # don't conflict (ARM/x86)
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "${HTTP_PORT:-80}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - bdc-net
+    # Vite proxies /api → backend:3000 (configured in vite.config.js),
+    # including WebSocket job-log streaming — same behaviour as Nginx in prod.
+
+volumes:
+  backend-data:
+  backend-keys:
+  frontend-node-modules:    # isolated node_modules volume (not on the host)
+
+networks:
+  bdc-net:
+    driver: bridge

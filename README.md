@@ -36,35 +36,70 @@ If either command is missing, install Docker for your OS:
 
 ---
 
-## 2. Launch (identical on every OS)
+## 2. Launch
+
+There are two modes. Use **dev mode** while working on the platform (changes
+are live without rebuilding). Use **production mode** to build images for
+deployment to an airgapped machine.
+
+### Dev mode (daily use)
 
 ```bash
 # 1. Clone and enter the repo
 git clone <repo-url> SABC-Compliance
 cd SABC-Compliance
 
-# 2. Create your environment file (then edit JWT_SECRET at minimum)
+# 2. Create your environment file (edit JWT_SECRET at minimum)
 cp .env.example .env
 
-# 3. Build and start both containers
-docker compose up --build -d
+# 3. Build images once (installs all dependencies into the images)
+docker compose -f docker-compose.dev.yml up --build -d
 
-# 4. Watch the backend logs — the first-run admin credentials and the
-#    Ansible SSH public key are printed here. SAVE THEM.
-docker compose logs -f backend
+# 4. Save the first-run credentials and SSH public key printed here
+docker compose -f docker-compose.dev.yml logs -f backend
 ```
 
-Open the UI at **http://localhost** (or `http://localhost:<HTTP_PORT>` if you
-changed the port in `.env`).
+After the first build, **a `git pull` is all you need**:
 
-Two URLs are available:
+```bash
+git pull
+docker compose -f docker-compose.dev.yml up -d   # no --build
+```
+
+- **Backend**: uvicorn watches `/app/src` and restarts automatically on any
+  `.py` change — changes are live within a second.
+- **Frontend**: Vite HMR pushes JS/CSS changes to the browser without a page
+  reload — changes are live instantly.
+- **Ansible playbooks**: already live-mounted — edited playbooks take effect
+  on the very next job run.
+
+### Production / airgap mode
+
+Build self-contained images, then ship the tarball to the target machine:
+
+```bash
+# Build production images (static, no volume mounts)
+docker compose build
+
+# Export to a tar file for airgap transfer
+docker save bdc-compliance-backend bdc-compliance-frontend \
+  | gzip > bdc-compliance.tar.gz
+
+# On the airgapped machine:
+docker load < bdc-compliance.tar.gz
+docker compose up -d
+```
+
+### URLs
 
 | URL | Purpose |
 |-----|---------|
-| `http://localhost`          | Main application UI |
-| `http://localhost:3000/docs`  | FastAPI interactive Swagger docs (direct backend access) |
+| `http://localhost` | Main application UI |
+| `http://localhost:3000/docs` | FastAPI Swagger docs |
 
-That's it — the same three commands work on macOS, Ubuntu, and AlmaLinux.
+> **Note (Windows):** if Docker Desktop uses Hyper-V instead of WSL 2,
+> volume-mount file-watching may be slow. Switch to WSL 2 backend in
+> Docker Desktop → Settings → General for best performance.
 
 ### What you'll see in the backend logs on first run
 
@@ -85,55 +120,41 @@ Copy that **public key** onto every server you want to manage (see
 
 ## 3. Day-to-day commands
 
-### Pulling updates
+### Pulling updates (dev mode)
 
 ```bash
 git pull
-docker compose up --build -d
+docker compose -f docker-compose.dev.yml up -d
 ```
 
-`--build` re-checks every Dockerfile layer and only rebuilds what changed.
-Code-only changes finish in seconds; if dependencies changed the BuildKit
-cache mounts (`/root/.cache/pip`, `/root/.npm`) reuse already-downloaded
-packages and fetch only the new ones.
+No `--build` needed. The backend reloads itself; the Vite dev server pushes
+frontend changes to the browser via HMR. Rebuild only when you add or remove
+a dependency (`requirements.txt` or `package.json` changed):
+
+```bash
+docker compose -f docker-compose.dev.yml up --build -d
+```
 
 ### Stopping, restarting, inspecting
 
 ```bash
-docker compose ps                 # status + health of both services
-docker compose logs -f backend    # follow API logs
-docker compose logs -f frontend   # follow Nginx logs
-docker compose restart backend    # restart just the API (no rebuild)
-docker compose down               # stop (data + keys persist in volumes)
-docker compose up -d              # start again (no rebuild)
-docker compose down -v            # stop AND wipe data + keys (full reset)
+# all commands below work in both modes; add -f docker-compose.dev.yml for dev
+docker compose -f docker-compose.dev.yml ps                # status + health
+docker compose -f docker-compose.dev.yml logs -f backend   # follow API logs
+docker compose -f docker-compose.dev.yml logs -f frontend  # follow Vite logs
+docker compose -f docker-compose.dev.yml restart backend   # restart API only
+docker compose -f docker-compose.dev.yml down              # stop (data kept)
+docker compose -f docker-compose.dev.yml down -v           # stop + wipe data
 ```
-
-### Updating one image without touching the other
-
-The two images are independent — rebuild and roll only what changed:
-
-```bash
-# Backend only (API change, playbook fix)
-docker compose build backend && docker compose up -d --no-deps backend
-
-# Frontend only (UI change)
-docker compose build frontend && docker compose up -d --no-deps frontend
-```
-
-Persistent data (`backend-data`), the SSH key (`backend-keys`), and your
-airgap packages (`./backend/packages`) all survive image rebuilds.
 
 ### Recovering from a broken build
 
-Only needed if a build was killed mid-download (Ctrl-C, machine shutdown)
-and the cache holds a partial file:
+Only needed if a build was killed mid-download and the cache holds a partial file:
 
 ```bash
-docker compose down
-docker builder prune -af          # clear all BuildKit caches
-docker compose build --no-cache   # force a clean rebuild
-docker compose up -d
+docker compose -f docker-compose.dev.yml down
+docker builder prune -af
+docker compose -f docker-compose.dev.yml up --build -d
 ```
 
 ---

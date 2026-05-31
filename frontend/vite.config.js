@@ -5,6 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: {},
+    proxy: {
+      '/api': {
+        target: 'http://backend:3000',
+        rewrite: (path) => path.replace(/^\/api/, ''),
+        ws: true,           // covers WebSocket job-log streaming too
+        changeOrigin: true,
+      },
+    },
   },
 })
