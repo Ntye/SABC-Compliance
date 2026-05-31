@@ -7,7 +7,7 @@ import {
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
-import { btn, btnSm } from '../lib/tw.js'
+import { btn, btnSm, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 
 function StatusBadge({ configured, reachable, t }) {
@@ -79,20 +79,7 @@ function LogDrawer({ job, onClose, t }) {
         </div>
         <div className="h-80 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
           {lines.map((l, i) => (
-            <div
-              key={i}
-              className={
-                l.level === 'system'
-                  ? 'text-console-accent font-semibold mt-1'
-                  : l.line.includes('FATAL') || l.line.includes('ERROR')
-                  ? 'text-red-400'
-                  : l.line.includes('ok:') || l.line.includes('PLAY RECAP')
-                  ? 'text-green-400'
-                  : l.line.startsWith('TASK') || l.line.startsWith('PLAY')
-                  ? 'text-console-text font-semibold'
-                  : 'text-console-muted'
-              }
-            >
+            <div key={i} className={logLineClass(l)}>
               {l.line || ' '}
             </div>
           ))}
@@ -460,6 +447,22 @@ export default function InfrastructurePage() {
             <p className="text-[12px] font-medium text-blue-800">{t('infra.infoTitle')}</p>
             <p className="text-[11px] text-blue-600">{t('infra.infoDesc')}</p>
           </div>
+        </div>
+      </div>
+
+      {/* What the installer checks and self-heals automatically */}
+      <div className="mt-4 p-4 bg-white border border-gray-100 rounded-xl">
+        <p className="text-[12px] font-semibold text-gray-800 mb-3">{t('infra.preflightTitle')}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
+          {[
+            'preflightTime', 'preflightReach', 'preflightDns',
+            'preflightClone', 'preflightResources', 'preflightAirgap',
+          ].map((key) => (
+            <div key={key} className="flex items-start gap-2">
+              <CheckCircle size={13} className="text-green-500 mt-0.5 flex-shrink-0" />
+              <p className="text-[11px] text-gray-600 leading-snug">{t(`infra.${key}`)}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>

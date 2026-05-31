@@ -74,3 +74,20 @@ export const logLevelColor = (level) =>
     system: 'text-console-accent',
     info: 'text-console-text',
   })[level] || 'text-console-text'
+
+// Shared classifier for a single Ansible/job log line. Used by both the Jobs
+// page and the Infrastructure install drawer so output looks identical.
+// Plain lines default to the soft-white console-text (not the faint gray that
+// used to be near-invisible on the black background).
+export const logLineClass = (l) => {
+  if (!l) return 'text-console-text'
+  if (l.level === 'system') return 'text-console-accent font-semibold mt-1'
+  const line = l.line || ''
+  if (!line.trim()) return 'text-console-faint'
+  if (/FATAL|FAILED|ERROR|unreachable=[1-9]|failed=[1-9]/.test(line)) return 'text-console-danger'
+  if (/^WARNING|\bWARN\b|warning:|skipping:|\.\.\.ignoring/.test(line)) return 'text-console-warning'
+  if (/^changed:|changed=[1-9]/.test(line)) return 'text-console-task'
+  if (/^ok:|PLAY RECAP|^\s*ok=/.test(line)) return 'text-console-success'
+  if (/^TASK|^PLAY|^RUNNING HANDLER/.test(line)) return 'text-console-text font-semibold'
+  return 'text-console-text'
+}

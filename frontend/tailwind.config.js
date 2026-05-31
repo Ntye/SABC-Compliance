@@ -26,13 +26,14 @@ export default {
         console: {
           bg: '#0C0E0F',
           surface: '#131618',
-          text: '#C8D0D4',
-          muted: '#5A6268',
+          text: '#E3E8EB',     // primary log text — soft, readable white
+          muted: '#9BA6AE',    // secondary text — light gray, still legible on black
+          faint: '#6B747B',    // truly de-emphasised (placeholders only)
           accent: '#00D4AA',
           success: '#2ECC8A',
           warning: '#F0A500',
           danger: '#E05555',
-          task: '#0099FF',
+          task: '#48A9FF',
         },
       },
       fontFamily: {

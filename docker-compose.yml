@@ -23,6 +23,12 @@ services:
       - ./backend/packages:/app/packages
     networks:
       - bdc-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     # Backend is NOT exposed to the host — all traffic routes through the
     # frontend Nginx proxy, keeping a single public port.
 
@@ -39,7 +45,8 @@ services:
     ports:
       - "${HTTP_PORT:-80}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - bdc-net
 

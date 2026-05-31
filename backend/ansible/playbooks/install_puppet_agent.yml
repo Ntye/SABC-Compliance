@@ -52,6 +52,76 @@
         ansible_become: yes
       changed_when: false
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # PREFLIGHT — catch the common enrollment failure scenarios early
+    #   • Time sync   → prevents "certificate not yet valid" (clock skew)
+    #   • Reachability→ prevents "Connection refused" / silent firewall hangs
+    # Policy: time sync is best-effort (warn); master reachability is a hard
+    # block because the catalog run cannot possibly succeed without it.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Clock skew between agent and master makes freshly-signed certificates
+    # appear "not yet valid". Installing + forcing NTP sync removes that class
+    # of failure entirely. Best-effort: never abort the install over this.
+    - name: Ensure time synchronisation (chrony) is installed and running
+      block:
+        - name: Install chrony for clock sync
+          package:
+            name: chrony
+            state: present
+        - name: Enable and start chrony
+          service:
+            name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+            state: started
+            enabled: yes
+        - name: Force an immediate clock step (chronyc makestep)
+          command: chronyc makestep
+          changed_when: false
+          failed_when: false
+      rescue:
+        - name: Warn that time sync could not be configured
+          debug:
+            msg: >-
+              WARNING: could not configure chrony time sync on {{ ansible_fqdn }}.
+              If the system clock is wrong, certificate signing may fail with
+              "certificate not yet valid". Check the clock manually: `date`.
+
+    # Verify the agent can actually reach the master's agent port before we
+    # download install.bash. A clear failure here beats an opaque curl/SSL
+    # hang later. This is a hard block — enrollment is impossible without it.
+    - name: Preflight — check reachability of Puppet master port 8140
+      wait_for:
+        host: "{{ puppet_master }}"
+        port: 8140
+        timeout: 15
+      register: puppet_port_check
+      ignore_errors: yes
+
+    - name: Show Puppet master connectivity remediation (unreachable)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║   PUPPET MASTER UNREACHABLE — enrollment cannot proceed     ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  {{ ansible_fqdn }} cannot reach {{ puppet_master }}:8140."
+          - ""
+          - "  Most likely causes (in order):"
+          - "    1. Firewall blocking 8140/TCP between this node and the master"
+          - "    2. Wrong master host/IP configured on the Infrastructure page"
+          - "    3. Puppet Server not running on the master (systemctl status)"
+          - "    4. DNS: '{{ puppet_master }}' resolves to the wrong address"
+          - ""
+          - "  Verify from this node once fixed:"
+          - "    nc -vz {{ puppet_master }} 8140"
+          - ""
+      when: puppet_port_check is failed
+
+    - name: Abort — Puppet master port 8140 unreachable (see remediation above)
+      fail:
+        msg: "Cannot reach {{ puppet_master }}:8140. Fix connectivity (see above) and re-run."
+      when: puppet_port_check is failed
+
     # ── Look for a platform tarball on the controller ─────────────────────────
     - name: Find platform tarball in packages/puppet-agent/
       find:
@@ -319,17 +389,103 @@
         msg: "{{ cert_sign.stdout | trim or cert_sign.stderr | trim }}"
       when: not agent_cert_file.stat.exists
 
+    # First catalog run. Do NOT hard-fail yet — we inspect the output for the
+    # SSL/clock failure signatures that indicate stale certs from a cloned or
+    # reinstalled VM, and self-heal below if needed.
     - name: Run first puppet catalog to complete PE console enrollment
       command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
       register: first_run
       changed_when: first_run.rc == 2
-      # rc 0=no changes, 2=changes applied — both are success
-      failed_when: first_run.rc not in [0, 2]
+      failed_when: false
       timeout: 300
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SELF-HEAL — stale certificate recovery (VM clone / reinstalled master)
+    #
+    # When a VM is cloned, /etc/puppetlabs/puppet/ssl is copied too, so the agent
+    # presents a certificate the (new) master's CA never signed. Likewise a
+    # reinstalled master has a fresh CA that rejects the old agent cert. Both
+    # surface as one of these signatures. We only act when detected, then retry
+    # exactly once — a clean install never enters this path.
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Detect stale-certificate failure signature
+      set_fact:
+        puppet_ssl_stale: >-
+          {{ (first_run.rc not in [0, 2])
+             and ( ((first_run.stdout | default('')) ~ (first_run.stderr | default('')))
+                   | regex_search('(certificate verify failed|not yet valid|certificate revoked|The certificate.*does not match|SSL_connect|CA certificate is not yet|unable to get local issuer)',
+                                  ignorecase=True) is not none ) }}
+
+    - name: Stale certificate detected — beginning recovery
+      debug:
+        msg: >-
+          Detected a stale/mismatched Puppet certificate on {{ ansible_fqdn }}
+          (typical after VM cloning or a master reinstall). Clearing the old
+          certificate on both ends and re-enrolling once.
+      when: puppet_ssl_stale | bool
+
+    - name: Revoke + clean old cert on the PE master
+      command: /opt/puppetlabs/bin/puppetserver ca clean --certname {{ puppet_certname.stdout | trim }}
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      changed_when: true
+      when: puppet_ssl_stale | bool
+
+    - name: Remove the stale SSL directory on the agent
+      file:
+        path: /etc/puppetlabs/puppet/ssl
+        state: absent
+      when: puppet_ssl_stale | bool
+
+    - name: Re-submit CSR (generates a fresh key + request)
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize --waitforcert 0
+      failed_when: false
+      changed_when: false
+      when: puppet_ssl_stale | bool
+
+    - name: Wait for the fresh CSR on the master (up to 2 min)
+      shell: /opt/puppetlabs/bin/puppetserver ca list 2>/dev/null | grep -qF "{{ puppet_certname.stdout | trim }}"
+      delegate_to: pe_master_dynamic
+      register: csr_wait_retry
+      retries: 12
+      delay: 10
+      until: csr_wait_retry.rc == 0
+      changed_when: false
+      failed_when: false
+      when: puppet_ssl_stale | bool
+
+    - name: Sign the fresh certificate on the master
+      command: /opt/puppetlabs/bin/puppetserver ca sign --certname {{ puppet_certname.stdout | trim }}
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      changed_when: true
+      when: puppet_ssl_stale | bool
+
+    - name: Retry first puppet catalog after re-enrollment
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      register: first_run_retry
+      changed_when: first_run_retry.rc == 2
+      failed_when: false
+      timeout: 300
+      when: puppet_ssl_stale | bool
+
+    # Consolidate the outcome from whichever path we took.
+    - name: Determine final enrollment result
+      set_fact:
+        puppet_final_rc: "{{ (first_run_retry.rc if puppet_ssl_stale | bool else first_run.rc) | int }}"
+
+    - name: Fail if enrollment still unsuccessful
+      fail:
+        msg: >-
+          Puppet enrollment did not complete (rc={{ puppet_final_rc }}).
+          Last output:
+          {{ (first_run_retry.stdout_lines | default(first_run.stdout_lines | default([])))[-20:] | join('\n') }}
+      when: puppet_final_rc | int not in [0, 2]
 
     - name: Node enrolled in Puppet Enterprise
       debug:
         msg: >-
           {{ ansible_fqdn }} is now enrolled in Puppet Enterprise.
-          Certificate signed. First catalog applied.
-          The node appears in the PE console at https://{{ puppet_master }}.
+          Certificate signed{{ ' (re-enrolled after stale-cert recovery)' if puppet_ssl_stale | bool else '' }}.
+          First catalog applied. The node appears in the PE console at
+          https://{{ puppet_master }}.

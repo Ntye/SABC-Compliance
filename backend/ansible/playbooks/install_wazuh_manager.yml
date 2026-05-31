@@ -97,6 +97,60 @@
           Pre-generated certs: {{ wazuh_has_certs }}.
           Already installed: {{ wazuh_installed.stat.exists }}.
 
+    # ── PREFLIGHT (resources + ports — warn only, never block) ────────────────
+    # The all-in-one stack (manager + OpenSearch indexer + dashboard) is memory
+    # hungry: 4 GB is the practical floor, 8 GB comfortable. Under that the
+    # indexer (JVM) tends to OOM during or shortly after install.
+    - name: Preflight — warn on low memory
+      debug:
+        msg: >-
+          WARNING: {{ ansible_fqdn }} has {{ ansible_memtotal_mb }} MB RAM.
+          The Wazuh all-in-one stack (indexer + manager + dashboard) needs
+          ~4096 MB minimum (8192 MB recommended). The OpenSearch indexer may
+          fail to start below this. Proceeding anyway.
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_memtotal_mb < 4096
+
+    - name: Preflight — check free disk on /
+      shell: df -BG --output=avail / | tail -1 | tr -d 'G '
+      register: root_free_gb
+      changed_when: false
+      failed_when: false
+
+    - name: Preflight — warn on low disk
+      debug:
+        msg: >-
+          WARNING: only {{ root_free_gb.stdout | trim }} GB free on /. Wazuh +
+          indexed data needs ~20 GB+ to be usable. Proceeding anyway.
+      when:
+        - not wazuh_installed.stat.exists
+        - root_free_gb.stdout | trim | length > 0
+        - (root_free_gb.stdout | trim | int) < 20
+
+    # Port conflicts produce confusing mid-install failures. Detect up front and
+    # warn (a re-install legitimately reuses these ports, so never block).
+    - name: Preflight — detect listeners on Wazuh ports
+      shell: |
+        for p in 1514 1515 55000 443 9200; do
+          if ss -ltn 2>/dev/null | grep -q ":$p "; then echo "$p"; fi
+        done
+      register: wazuh_port_conflicts
+      changed_when: false
+      failed_when: false
+      when: not wazuh_installed.stat.exists
+
+    - name: Preflight — warn on port conflicts
+      debug:
+        msg: >-
+          WARNING: these Wazuh ports already have a listener on {{ ansible_fqdn }}:
+          {{ wazuh_port_conflicts.stdout_lines | join(', ') }}.
+          If another service owns them the install will fail — free them first
+          (1514/1515 manager, 55000 API, 443 dashboard, 9200 indexer).
+      when:
+        - not wazuh_installed.stat.exists
+        - wazuh_port_conflicts.stdout_lines | default([]) | length > 0
+
     # ─────────────────────────────────────────────────────────────────────────
     # ONLINE — download installer and run directly
     # ─────────────────────────────────────────────────────────────────────────

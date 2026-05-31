@@ -76,6 +76,36 @@
       debug:
         msg: "Installation mode: {{ install_mode | upper }} ({{ puppet_pkg_dir }})"
 
+    # ── PREFLIGHT (resources — warn only, never block) ────────────────────────
+    # Puppet Enterprise (tarball) realistically wants ~6 GB+ RAM; open-source
+    # puppetserver runs in ~2.5 GB. Under-spec boxes install but may OOM/crash.
+    - name: Preflight — warn on low memory
+      debug:
+        msg: >-
+          WARNING: {{ ansible_fqdn }} has {{ ansible_memtotal_mb }} MB RAM.
+          {{ 'Puppet Enterprise recommends 6144 MB+' if install_mode == 'tarball'
+             else 'puppetserver recommends 2560 MB+' }} — installation may be
+          slow or unstable below this. Proceeding anyway.
+      when: >-
+        (install_mode == 'tarball' and ansible_memtotal_mb < 6144)
+        or (install_mode != 'tarball' and ansible_memtotal_mb < 2560)
+
+    - name: Preflight — check free disk on /opt
+      shell: df -BG --output=avail /opt | tail -1 | tr -d 'G '
+      register: opt_free_gb
+      changed_when: false
+      failed_when: false
+
+    - name: Preflight — warn on low disk
+      debug:
+        msg: >-
+          WARNING: only {{ opt_free_gb.stdout | trim }} GB free on /opt.
+          {{ 'Puppet Enterprise needs ~20 GB' if install_mode == 'tarball'
+             else 'puppetserver needs a few GB' }}. Proceeding anyway.
+      when:
+        - opt_free_gb.stdout | trim | length > 0
+        - (opt_free_gb.stdout | trim | int) < (20 if install_mode == 'tarball' else 5)
+
     # ══════════════════════════════════════════════════════════════════════════
     # MODE 1 — TARBALL (Puppet Enterprise)
     #

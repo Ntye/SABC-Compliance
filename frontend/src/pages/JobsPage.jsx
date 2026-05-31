@@ -3,7 +3,7 @@ import { CheckCircle, ChevronDown, ChevronUp, RefreshCw, XCircle } from 'lucide-
 import { cancelJob, getJob, jobWsUrl, listJobs } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
-import { btn, btnSm } from '../lib/tw.js'
+import { btn, btnSm, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 
 function duration(start, end) {
@@ -67,15 +67,6 @@ function LogPanel({ jobId, initialLogs, isRunning, t }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [lines])
 
-  function lineClass(l) {
-    if (l.level === 'system') return 'text-console-accent font-semibold mt-1'
-    if (!l.line) return 'text-console-muted'
-    if (l.line.includes('FATAL') || l.line.includes('ERROR')) return 'text-red-400'
-    if (l.line.includes('ok:') || l.line.includes('PLAY RECAP')) return 'text-green-400'
-    if (l.line.startsWith('TASK') || l.line.startsWith('PLAY')) return 'text-console-text font-semibold'
-    return 'text-console-muted'
-  }
-
   return (
     <div className="mt-3 rounded-xl overflow-hidden bg-console-bg border border-white/5">
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
@@ -88,10 +79,10 @@ function LogPanel({ jobId, initialLogs, isRunning, t }) {
       </div>
       <div className="h-64 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
         {lines.length === 0 && (
-          <span className="text-console-muted italic">{t('jobs.noOutput')}</span>
+          <span className="text-console-faint italic">{t('jobs.noOutput')}</span>
         )}
         {lines.map((l, i) => (
-          <div key={i} className={lineClass(l)}>{l.line || ' '}</div>
+          <div key={i} className={logLineClass(l)}>{l.line || ' '}</div>
         ))}
         <div ref={bottomRef} />
       </div>
