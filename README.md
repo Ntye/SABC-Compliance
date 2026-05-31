@@ -78,13 +78,28 @@ Copy that **public key** onto every server you want to manage (see
 
 ## 3. Day-to-day commands
 
+### Pulling updates
+
+```bash
+git pull
+docker compose up --build -d
+```
+
+`--build` re-checks every Dockerfile layer and only rebuilds what changed.
+Code-only changes finish in seconds; if dependencies changed the BuildKit
+cache mounts (`/root/.cache/pip`, `/root/.npm`) reuse already-downloaded
+packages and fetch only the new ones.
+
+### Stopping, restarting, inspecting
+
 ```bash
 docker compose ps                 # status + health of both services
 docker compose logs -f backend    # follow API logs
 docker compose logs -f frontend   # follow Nginx logs
+docker compose restart backend    # restart just the API (no rebuild)
 docker compose down               # stop (data + keys persist in volumes)
+docker compose up -d              # start again (no rebuild)
 docker compose down -v            # stop AND wipe data + keys (full reset)
-docker compose restart backend    # restart just the API
 ```
 
 ### Updating one image without touching the other
@@ -101,6 +116,18 @@ docker compose build frontend && docker compose up -d --no-deps frontend
 
 Persistent data (`backend-data`), the SSH key (`backend-keys`), and your
 airgap packages (`./backend/packages`) all survive image rebuilds.
+
+### Recovering from a broken build
+
+Only needed if a build was killed mid-download (Ctrl-C, machine shutdown)
+and the cache holds a partial file:
+
+```bash
+docker compose down
+docker builder prune -af          # clear all BuildKit caches
+docker compose build --no-cache   # force a clean rebuild
+docker compose up -d
+```
 
 ---
 
