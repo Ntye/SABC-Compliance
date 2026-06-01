@@ -173,6 +173,62 @@ async def ping_all(principal: AuthPrincipal = Depends(require_operator)):
     return await _ping_all_uc.execute()
 
 
+@router.get("/host-info", summary="Return platform host IP, hostname, and admin user")
+async def get_host_info(
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """
+    Returns the IP, hostname, and detected admin SSH user of the platform host.
+    Used by the Add VM page to pre-fill the form when registering this machine.
+    Set HOST_IP and HOST_ADMIN_USER in .env for reliable values.
+    """
+    host_ip = _detect_host_ip()
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = None
+    admin_user = _detect_admin_user()
+    return {"host_ip": host_ip, "hostname": hostname, "admin_user": admin_user}
+
+
+@router.get(
+    "/setup-script",
+    summary="Download the node bootstrap script",
+    response_class=PlainTextResponse,
+)
+async def get_setup_script(
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """
+    Returns a ready-to-run bash script that bootstraps SSH access on a new node.
+    The platform's ansible public key is embedded in the script at download time.
+
+    Run it from the backend/ directory:
+        bash setup-node.sh <server-ip> [admin-user]
+    """
+    key_path = os.environ.get("SSH_KEY_PATH", "./keys/ansible_id_rsa")
+    pub_key_path = key_path if key_path.endswith(".pub") else key_path + ".pub"
+    if not os.path.isabs(pub_key_path):
+        pub_key_path = os.path.join("/app", pub_key_path.lstrip("./"))
+
+    try:
+        with open(pub_key_path) as f:
+            platform_key = f.read().strip()
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="Platform SSH key not yet generated. Start the backend container first.",
+        )
+
+    script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
+
+    return PlainTextResponse(
+        content=script,
+        headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
+        media_type="text/x-sh; charset=utf-8",
+    )
+
+
 @router.get("/{id}", response_model=NodeResponse, summary="Get a node by ID or hostname")
 async def get_node(id: str, principal: AuthPrincipal = Depends(get_current_principal)):
     """Retrieve a node by UUID or hostname."""
@@ -300,24 +356,6 @@ def _detect_admin_user() -> str:
     return "root"
 
 
-@router.get("/host-info", summary="Return platform host IP, hostname, and admin user")
-async def get_host_info(
-    principal: AuthPrincipal = Depends(get_current_principal),
-):
-    """
-    Returns the IP, hostname, and detected admin SSH user of the platform host.
-    Used by the Add VM page to pre-fill the form when registering this machine.
-    Set HOST_IP and HOST_ADMIN_USER in .env for reliable values.
-    """
-    host_ip = _detect_host_ip()
-    try:
-        hostname = socket.gethostname()
-    except Exception:
-        hostname = None
-    admin_user = _detect_admin_user()
-    return {"host_ip": host_ip, "hostname": hostname, "admin_user": admin_user}
-
-
 # ── Setup script ──────────────────────────────────────────────────────────────
 
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
@@ -441,41 +479,3 @@ else
   exit 1
 fi
 """
-
-
-@router.get(
-    "/setup-script",
-    summary="Download the node bootstrap script",
-    response_class=PlainTextResponse,
-)
-async def get_setup_script(
-    principal: AuthPrincipal = Depends(get_current_principal),
-):
-    """
-    Returns a ready-to-run bash script that bootstraps SSH access on a new node.
-    The platform's ansible public key is embedded in the script at download time.
-
-    Run it from the backend/ directory:
-        bash setup-node.sh <server-ip> [admin-user]
-    """
-    key_path = os.environ.get("SSH_KEY_PATH", "./keys/ansible_id_rsa")
-    pub_key_path = key_path if key_path.endswith(".pub") else key_path + ".pub"
-    if not os.path.isabs(pub_key_path):
-        pub_key_path = os.path.join("/app", pub_key_path.lstrip("./"))
-
-    try:
-        with open(pub_key_path) as f:
-            platform_key = f.read().strip()
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="Platform SSH key not yet generated. Start the backend container first.",
-        )
-
-    script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
-
-    return PlainTextResponse(
-        content=script,
-        headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
-        media_type="text/x-sh; charset=utf-8",
-    )
