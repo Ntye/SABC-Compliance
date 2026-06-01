@@ -83,6 +83,9 @@ export const translations = {
     },
     addVm: {
       title: 'Add VM', cardTitle: 'Register a Linux Server',
+      thisHostBtn: 'Register this machine',
+      thisHostTooltip: 'Fill form with platform host IP',
+      thisMachine: 'this machine',
       hostname: 'Hostname', required: '*', ipAddress: 'IP Address',
       sshPort: 'SSH Port', sshUser: 'SSH User',
       sshKeyPath: 'SSH Key Path', sshKeyHint: '(optional — uses platform default if blank)',
@@ -273,6 +276,9 @@ export const translations = {
     },
     addVm: {
       title: 'Ajouter VM', cardTitle: 'Enregistrer un serveur Linux',
+      thisHostBtn: 'Cette machine',
+      thisHostTooltip: 'Remplir avec l\'IP de l\'hôte plateforme',
+      thisMachine: 'cette machine',
       hostname: 'Nom d\'hôte', required: '*', ipAddress: 'Adresse IP',
       sshPort: 'Port SSH', sshUser: 'Utilisateur SSH',
       sshKeyPath: 'Chemin de la clé SSH', sshKeyHint: '(optionnel — clé par défaut si vide)',

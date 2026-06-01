@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os
+import socket
+import subprocess
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -244,6 +246,57 @@ async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_ope
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ── Host info ─────────────────────────────────────────────────────────────────
+
+def _detect_host_ip() -> str | None:
+    """Best-effort detection of the Docker host's IP from inside the container."""
+    # 1. Explicit env var (most reliable — set HOST_IP in .env)
+    explicit = os.environ.get("HOST_IP", "").strip()
+    if explicit:
+        return explicit
+
+    # 2. host.docker.internal — resolves via extra_hosts: host-gateway on Linux
+    try:
+        ip = socket.gethostbyname("host.docker.internal")
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+
+    # 3. Default route gateway (Docker bridge IP — valid SSH target if sshd
+    #    is bound to 0.0.0.0 on the host)
+    try:
+        out = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if "via" in parts:
+                return parts[parts.index("via") + 1]
+    except Exception:
+        pass
+
+    return None
+
+
+@router.get("/host-info", summary="Return platform host IP and hostname")
+async def get_host_info(
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """
+    Returns the IP address and hostname of the machine running the platform.
+    Used by the Add VM page to pre-fill the form when registering the host itself.
+    Set HOST_IP in .env for a reliable value; otherwise it is auto-detected.
+    """
+    host_ip = _detect_host_ip()
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = None
+    return {"host_ip": host_ip, "hostname": hostname}
 
 
 # ── Setup script ──────────────────────────────────────────────────────────────

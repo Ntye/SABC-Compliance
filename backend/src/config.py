@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Server
     port: int = 3000
+    host_ip: str = ""            # Platform host's LAN IP; auto-detected when blank
     cors_origins: list[str] = [
         "http://localhost",
         "http://localhost:80",

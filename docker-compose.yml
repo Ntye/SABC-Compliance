@@ -14,6 +14,14 @@ services:
       SSH_KEY_PATH:  /app/keys/ansible_id_rsa
       ANSIBLE_DIR:   /app/ansible
       PACKAGES_DIR:  /app/packages
+      # Optional: set to the host machine's LAN IP so "Register this machine"
+      # works on the Add VM page without manual typing.
+      # If blank the backend auto-detects via host.docker.internal.
+      HOST_IP:       "${HOST_IP:-}"
+    extra_hosts:
+      # Makes host.docker.internal resolve to the Docker host on Linux.
+      # Used for auto-detecting the platform host IP.
+      - "host.docker.internal:host-gateway"
     volumes:
       # Database — survives container replacement
       - backend-data:/app/data

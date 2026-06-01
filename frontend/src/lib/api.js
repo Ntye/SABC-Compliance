@@ -186,6 +186,10 @@ export async function deleteNode(id) {
   return request('DELETE', `/nodes/${id}`)
 }
 
+export async function getHostInfo() {
+  return request('GET', '/nodes/host-info')
+}
+
 export async function checkNodeDns(id) {
   return request('POST', `/nodes/${id}/check-dns`)
 }

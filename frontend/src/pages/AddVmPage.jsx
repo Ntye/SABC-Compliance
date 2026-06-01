@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { CheckCircle, Copy, Download, Terminal, XCircle } from 'lucide-react'
-import { downloadSetupScript, registerNode } from '../lib/api.js'
+import { useEffect, useState } from 'react'
+import { CheckCircle, Copy, Download, Monitor, Terminal, XCircle } from 'lucide-react'
+import { downloadSetupScript, getHostInfo, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn } from '../lib/tw.js'
@@ -53,6 +53,21 @@ export default function AddVmPage() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [bootstrapUser, setBootstrapUser] = useState('root')
+  const [hostInfo, setHostInfo] = useState(null)   // { host_ip, hostname }
+
+  useEffect(() => {
+    getHostInfo()
+      .then((info) => { if (info?.host_ip) setHostInfo(info) })
+      .catch(() => {})   // non-critical — silently ignore
+  }, [])
+
+  function fillFromHost() {
+    setForm((prev) => ({
+      ...prev,
+      ip: hostInfo.host_ip,
+      hostname: prev.hostname || hostInfo.hostname || '',
+    }))
+  }
 
   function set(field) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))
@@ -96,7 +111,20 @@ export default function AddVmPage() {
 
       {/* ── Zone 1: Registration form ── */}
       <div className="bg-white rounded-xl border border-gray-100 p-6 max-w-2xl">
-        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">{t('addVm.cardTitle')}</h3>
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-[14px] font-semibold text-gray-800">{t('addVm.cardTitle')}</h3>
+          {hostInfo?.host_ip && (
+            <button
+              type="button"
+              onClick={fillFromHost}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand/10 hover:bg-brand/20 border border-brand/20 text-brand text-[11px] font-semibold transition-colors"
+              title={`${t('addVm.thisHostTooltip')}: ${hostInfo.host_ip}`}
+            >
+              <Monitor size={11} />
+              {t('addVm.thisHostBtn')}
+            </button>
+          )}
+        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Row: hostname + IP */}
           <div className="grid grid-cols-2 gap-4">
@@ -115,12 +143,17 @@ export default function AddVmPage() {
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
                 {t('addVm.ipAddress')} <span className="text-red-500">{t('addVm.required')}</span>
+                {hostInfo?.host_ip && form.ip === hostInfo.host_ip && (
+                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-brand/10 text-brand">
+                    {t('addVm.thisMachine')}
+                  </span>
+                )}
               </label>
               <input
                 required
                 value={form.ip}
                 onChange={set('ip')}
-                placeholder="192.168.1.10"
+                placeholder={hostInfo?.host_ip || '10.0.0.5'}
                 className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all"
               />
             </div>
