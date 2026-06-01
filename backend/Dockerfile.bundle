@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+# ── Airgap bundle image ───────────────────────────────────────────────────────
+# Extends the standard backend image by baking the contents of backend/packages/
+# into /app/bundled/.  On first container start the entrypoint seeds
+# /app/packages/ (the runtime volume) from /app/bundled/ so Ansible playbooks
+# can find the offline files without any separate volume pre-population step.
+#
+# Build workflow (run from the repo root):
+#
+#   # 1. First save the Wazuh Docker images into the packages directory:
+#   #    (see README for the full export command)
+#
+#   # 2. Build the standard backend image:
+#   docker build -t bdc-compliance-backend ./backend
+#
+#   # 3. Build the bundle image on top of it:
+#   docker build -f backend/Dockerfile.bundle -t bdc-compliance-backend:bundle ./backend
+#
+#   # 4. Export the bundle image to ship to an air-gapped machine:
+#   docker save bdc-compliance-backend:bundle | gzip > bdc-backend-bundle.tar.gz
+#
+# On the air-gapped machine:
+#   docker load < bdc-backend-bundle.tar.gz
+#   # Run as normal with docker-compose — the entrypoint seeds packages on first start.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM bdc-compliance-backend:latest
+
+# /app/bundled is NOT declared as a VOLUME so these files survive save/load.
+COPY packages/ /app/bundled/
