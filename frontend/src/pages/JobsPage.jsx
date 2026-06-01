@@ -187,13 +187,16 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(null)
 
   async function load() {
     try {
       const data = await listJobs(100)
       setJobs(data)
-    } catch (_) {}
-    finally {
+      setFetchError(null)
+    } catch (err) {
+      setFetchError(err.message)
+    } finally {
       setLoading(false)
       setRefreshing(false)
     }
@@ -231,6 +234,10 @@ export default function JobsPage() {
           {[1, 2, 3].map((i) => (
             <div key={i} className="h-16 rounded-xl bg-gray-100 animate-pulse" />
           ))}
+        </div>
+      ) : fetchError ? (
+        <div className="p-4 border border-red-200 bg-red-50 rounded-xl">
+          <p className="text-[12px] text-red-600">{fetchError}</p>
         </div>
       ) : jobs.length === 0 ? (
         <div className="text-center py-16 text-gray-400">

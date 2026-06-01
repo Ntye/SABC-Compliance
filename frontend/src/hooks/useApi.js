@@ -14,7 +14,9 @@ export function useApi(apiFn, { deps = [], immediate = true } = {}) {
       return result
     } catch (err) {
       setError(err.message)
-      throw err
+      // Do NOT re-throw here — the error is already in state for the UI to
+      // display. Re-throwing creates an unhandled Promise rejection that shows
+      // Vite's full-page error overlay in dev mode, making the page appear blank.
     } finally {
       setLoading(false)
     }
