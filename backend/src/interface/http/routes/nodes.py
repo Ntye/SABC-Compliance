@@ -282,21 +282,40 @@ def _detect_host_ip() -> str | None:
     return None
 
 
-@router.get("/host-info", summary="Return platform host IP and hostname")
+def _detect_admin_user() -> str:
+    """Return the best-guess SSH admin user for the host machine."""
+    # Explicit env var wins
+    explicit = os.environ.get("HOST_ADMIN_USER", "").strip()
+    if explicit:
+        return explicit
+    # SUDO_USER is set when someone ran 'sudo docker compose up'
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if sudo_user and sudo_user != "root":
+        return sudo_user
+    # USER is the process owner (usually root inside the container,
+    # but may be set to the host user via env in docker-compose)
+    user = os.environ.get("USER", "").strip()
+    if user and user != "root":
+        return user
+    return "root"
+
+
+@router.get("/host-info", summary="Return platform host IP, hostname, and admin user")
 async def get_host_info(
     principal: AuthPrincipal = Depends(get_current_principal),
 ):
     """
-    Returns the IP address and hostname of the machine running the platform.
-    Used by the Add VM page to pre-fill the form when registering the host itself.
-    Set HOST_IP in .env for a reliable value; otherwise it is auto-detected.
+    Returns the IP, hostname, and detected admin SSH user of the platform host.
+    Used by the Add VM page to pre-fill the form when registering this machine.
+    Set HOST_IP and HOST_ADMIN_USER in .env for reliable values.
     """
     host_ip = _detect_host_ip()
     try:
         hostname = socket.gethostname()
     except Exception:
         hostname = None
-    return {"host_ip": host_ip, "hostname": hostname}
+    admin_user = _detect_admin_user()
+    return {"host_ip": host_ip, "hostname": hostname, "admin_user": admin_user}
 
 
 # ── Setup script ──────────────────────────────────────────────────────────────

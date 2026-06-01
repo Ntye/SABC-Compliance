@@ -57,7 +57,10 @@ export default function AddVmPage() {
 
   useEffect(() => {
     getHostInfo()
-      .then((info) => { if (info?.host_ip) setHostInfo(info) })
+      .then((info) => {
+        if (info?.host_ip) setHostInfo(info)
+        if (info?.admin_user) setBootstrapUser(info.admin_user)
+      })
       .catch(() => {})   // non-critical — silently ignore
   }, [])
 
@@ -67,6 +70,7 @@ export default function AddVmPage() {
       ip: hostInfo.host_ip,
       hostname: prev.hostname || hostInfo.hostname || '',
     }))
+    if (hostInfo.admin_user) setBootstrapUser(hostInfo.admin_user)
   }
 
   function set(field) {

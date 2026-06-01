@@ -17,7 +17,11 @@ services:
       # Optional: set to the host machine's LAN IP so "Register this machine"
       # works on the Add VM page without manual typing.
       # If blank the backend auto-detects via host.docker.internal.
-      HOST_IP:       "${HOST_IP:-}"
+      HOST_IP:         "${HOST_IP:-}"
+      # Optional: SSH admin user on the host (default: root).
+      # Set to e.g. ubuntu, debian, or your personal user if that's how
+      # you SSH into this machine.
+      HOST_ADMIN_USER: "${HOST_ADMIN_USER:-}"
     extra_hosts:
       # Makes host.docker.internal resolve to the Docker host on Linux.
       # Used for auto-detecting the platform host IP.
