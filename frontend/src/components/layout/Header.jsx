@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Check, Copy, Eye, Palette, ShieldCheck, X } from 'lucide-react'
+import { ArrowRightLeft, Eye, Palette, ShieldCheck, X } from 'lucide-react'
 import { clearApiKey, getStoredApiKey } from '../../lib/api.js'
 import { useToast } from '../../context/ToastContext.jsx'
 import { useLang } from '../../context/LangContext.jsx'
@@ -26,7 +26,6 @@ export default function Header() {
 
   const [panelOpen,    setPanelOpen]    = useState(false)
   const [activateOpen, setActivateOpen] = useState(false)
-  const [copying,      setCopying]      = useState(false)
   // tick lets us re-render after the modal applies a key (localStorage write)
   const [, setTick] = useState(0)
 
@@ -34,13 +33,6 @@ export default function Header() {
   const title     = t(titleKey)
   const storedKey = getStoredApiKey()
   const maskedKey = storedKey ? storedKey.slice(0, 8) + '••••••••' : ''
-
-  async function handleCopy() {
-    if (!storedKey) return
-    await navigator.clipboard.writeText(storedKey)
-    setCopying(true)
-    setTimeout(() => setCopying(false), 1500)
-  }
 
   function handleDeactivate() {
     clearApiKey()
@@ -71,18 +63,15 @@ export default function Header() {
             ))}
           </div>
 
-          {/* Activation status — View-only pill OR Active badge with key */}
+          {/* API key status */}
           {!storedKey ? (
             <button
               onClick={() => setActivateOpen(true)}
               className="flex items-center gap-1.5 pl-2 pr-3 py-1 rounded-full bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
-              title={t('header.activateTooltip')}
+              title={t('header.viewOnlyTooltip')}
             >
               <Eye size={12} className="text-amber-700" />
               <span className="text-[11px] font-semibold text-amber-800">{t('header.viewOnly')}</span>
-              <span className="text-[11px] font-semibold text-amber-900 underline-offset-2 hover:underline">
-                {t('header.activate')}
-              </span>
             </button>
           ) : (
             <div className="flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-full bg-green-50 border border-green-200">
@@ -90,11 +79,11 @@ export default function Header() {
               <span className="text-[11px] font-semibold text-green-800">{t('header.active')}</span>
               <span className="text-[11px] font-mono text-green-900/70 ml-1">{maskedKey}</span>
               <button
-                onClick={handleCopy}
+                onClick={() => setActivateOpen(true)}
                 className="p-1 rounded-full hover:bg-green-100 text-green-700"
-                title={t('header.copyApiKey')}
+                title={t('header.overrideTooltip')}
               >
-                {copying ? <Check size={11} /> : <Copy size={11} />}
+                <ArrowRightLeft size={11} />
               </button>
               <button
                 onClick={handleDeactivate}

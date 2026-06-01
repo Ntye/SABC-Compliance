@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Copy, Key, Plus, Trash2 } from 'lucide-react'
+import { Key, Plus, Trash2 } from 'lucide-react'
 import {
   createApiKey,
   listApiKeys,
   revokeApiKey,
-  setApiKey as storeApiKey,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -72,11 +71,6 @@ export default function ApiKeysPage() {
     }
   }
 
-  async function copyKey(val) {
-    await navigator.clipboard.writeText(val)
-    toast(t('keys.copied'), 'success')
-  }
-
   return (
     <div className="p-6 max-w-4xl">
       <h2 className="text-[18px] font-semibold text-gray-900 mb-6">{t('keys.title')}</h2>
@@ -116,29 +110,12 @@ export default function ApiKeysPage() {
           </button>
         </form>
 
-        {/* New key reveal */}
+        {/* New key created — key value is not shown for security */}
         {newKey && (
-          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-[11px] font-medium text-amber-800 mb-2">
-              {t('keys.copyWarning')}
+          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <p className="text-[11px] font-medium text-green-800">
+              {t('keys.createSuccess', { name: newKey.name })}
             </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-[12px] font-mono bg-white border border-amber-200 rounded px-2 py-1 text-amber-900 break-all">
-                {newKey.api_key}
-              </code>
-              <button
-                onClick={() => copyKey(newKey.api_key)}
-                className="p-1.5 hover:bg-amber-100 rounded text-amber-700"
-              >
-                <Copy size={13} />
-              </button>
-            </div>
-            <button
-              onClick={() => { storeApiKey(newKey.api_key); toast(t('keys.storedAsActive'), 'success') }}
-              className="mt-2 text-[11px] text-amber-700 hover:underline"
-            >
-              {t('keys.useAsActive')}
-            </button>
           </div>
         )}
       </div>

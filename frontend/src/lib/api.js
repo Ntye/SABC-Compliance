@@ -111,10 +111,13 @@ export async function login(username, password) {
   setJwt(data.access_token)
   if (data.role)     localStorage.setItem('bdc_user_role', data.role)
   if (data.username) localStorage.setItem('bdc_user_username', data.username)
-  // Always start each login session in view-only mode. Any previously stored
-  // API key from an old session is cleared here; the user re-activates via the
-  // header Activate button when they need to perform actions.
-  localStorage.removeItem('bdc_api_key')
+  // Auto-apply the personal API key returned by the server.
+  // This replaces any stale key from a previous session.
+  if (data.api_key) {
+    localStorage.setItem('bdc_api_key', data.api_key)
+  } else {
+    localStorage.removeItem('bdc_api_key')
+  }
   return data
 }
 

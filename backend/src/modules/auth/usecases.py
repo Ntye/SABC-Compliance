@@ -136,11 +136,13 @@ class LoginUseCase:
     def __init__(
         self,
         user_repo: IUserRepository,
+        api_key_repo: IApiKeyRepository,
         jwt_secret: str,
         jwt_algorithm: str,
         jwt_expire_hours: int,
     ) -> None:
         self._repo = user_repo
+        self._api_key_repo = api_key_repo
         self._secret = jwt_secret
         self._algorithm = jwt_algorithm
         self._expire_hours = jwt_expire_hours
@@ -159,7 +161,26 @@ class LoginUseCase:
             self._secret,
             algorithm=self._algorithm,
         )
-        return {"access_token": token, "token_type": "bearer", "role": user.role, "username": user.username}
+        # Revoke any previous personal key for this user, then issue a fresh one.
+        # The raw key is returned once so the frontend can auto-apply it.
+        await self._api_key_repo.revoke_by_user_id(user.id)
+        raw = _gen_key()
+        personal_key = ApiKey(
+            id=str(uuid.uuid4()),
+            name=f"personal-{user.username}",
+            key_hash=_hash_key(raw),
+            role=user.role,
+            created_at=datetime.utcnow(),
+            user_id=user.id,
+        )
+        await self._api_key_repo.save(personal_key)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "role": user.role,
+            "username": user.username,
+            "api_key": raw,
+        }
 
 
 class DecodeJwtUseCase:

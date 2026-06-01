@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
     create_api_key_uc = CreateApiKeyUseCase(api_key_repo)
     list_api_keys_uc = ListApiKeysUseCase(api_key_repo)
     revoke_api_key_uc = RevokeApiKeyUseCase(api_key_repo)
-    login_uc = LoginUseCase(user_repo, settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours)
+    login_uc = LoginUseCase(user_repo, api_key_repo, settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours)
     init_admin_user_uc = InitAdminUserUseCase(user_repo)
     create_user_uc = CreateUserUseCase(user_repo)
     list_users_uc = ListUsersUseCase(user_repo)

@@ -22,6 +22,7 @@ class LoginResponse(BaseModel):
     token_type: str
     role: str
     username: str
+    api_key: str
 
 class ApiKeyResponse(BaseModel):
     id: str
@@ -120,18 +121,7 @@ async def get_current_principal(
 
 
 async def require_operator(principal: AuthPrincipal = Depends(get_current_principal)) -> AuthPrincipal:
-    """Require operator or admin role applied via an API key.
-
-    Logging in with a username/password gives view-only access by design.
-    To perform actions the user must generate (or paste) an API key from
-    the header → Activate panel; that key is then sent as X-API-Key.
-    """
-    if principal.source == "jwt":
-        raise HTTPException(
-            status_code=403,
-            detail="API_KEY_REQUIRED: Actions require an active API key. "
-                   "Open the Activate panel in the header to generate or apply one.",
-        )
+    """Require operator or admin role (API key or JWT)."""
     if not principal.can_operate():
         raise HTTPException(status_code=403, detail="Operator or admin role required")
     return principal

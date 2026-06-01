@@ -120,6 +120,7 @@ class ApiKey:
     created_at: datetime
     last_used: datetime | None = None
     active: bool = True
+    user_id: str | None = None
 
     ROLES: ClassVar[list[str]] = ["readonly", "operator", "admin"]
 

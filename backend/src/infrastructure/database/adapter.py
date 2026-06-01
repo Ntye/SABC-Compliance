@@ -110,6 +110,7 @@ api_keys_table = Table(
     Column("created_at", Text),
     Column("last_used", Text),
     Column("active", Integer, default=1),
+    Column("user_id", Text),
 )
 
 users_table = Table(
@@ -182,6 +183,10 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
                 await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
             except Exception:
                 pass  # column already exists
+        try:
+            await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
+        except Exception:
+            pass  # column already exists
         # jobs.logs was a JSON blob that suffered a write-race; now replaced by
         # the job_logs table.  Drop the old column if it exists (SQLite workaround:
         # we just leave it — SQLite ignored unused columns and doesn't support
@@ -538,6 +543,7 @@ class ApiKeyRepository(IApiKeyRepository):
             created_at=_dt(row.created_at) or datetime.utcnow(),
             last_used=_dt(row.last_used),
             active=bool(row.active),
+            user_id=getattr(row, 'user_id', None),
         )
 
     async def save(self, key: ApiKey) -> None:
@@ -545,7 +551,7 @@ class ApiKeyRepository(IApiKeyRepository):
             await s.execute(api_keys_table.insert().values(
                 id=key.id, name=key.name, key_hash=key.key_hash, role=key.role,
                 created_at=_ts(key.created_at), last_used=_ts(key.last_used),
-                active=int(key.active),
+                active=int(key.active), user_id=key.user_id,
             ))
             await s.commit()
 
@@ -562,6 +568,15 @@ class ApiKeyRepository(IApiKeyRepository):
     async def revoke(self, id: str) -> None:
         async with self._session() as s:
             await s.execute(update(api_keys_table).where(api_keys_table.c.id == id).values(active=0))
+            await s.commit()
+
+    async def revoke_by_user_id(self, user_id: str) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(api_keys_table)
+                .where(api_keys_table.c.user_id == user_id)
+                .values(active=0)
+            )
             await s.commit()
 
     async def count_active(self) -> int:
