@@ -13,7 +13,15 @@ export function getStoredApiKey() {
 }
 
 export function setApiKey(key) {
-  localStorage.setItem('bdc_api_key', key)
+  if (key) {
+    localStorage.setItem('bdc_api_key', key)
+  } else {
+    localStorage.removeItem('bdc_api_key')
+  }
+}
+
+export function clearApiKey() {
+  localStorage.removeItem('bdc_api_key')
 }
 
 export function getJwt() {
@@ -28,12 +36,23 @@ export function setJwt(token) {
   }
 }
 
+export function getUserRole() {
+  return localStorage.getItem('bdc_user_role') || ''
+}
+
+export function getUsername() {
+  return localStorage.getItem('bdc_user_username') || ''
+}
+
 export function isAuthenticated() {
   return !!getJwt()
 }
 
 export function logout() {
   localStorage.removeItem('bdc_jwt_token')
+  localStorage.removeItem('bdc_user_role')
+  localStorage.removeItem('bdc_user_username')
+  localStorage.removeItem('bdc_api_key')
 }
 
 async function request(method, path, body) {
@@ -44,13 +63,16 @@ async function request(method, path, body) {
     'Content-Type': 'application/json',
   }
 
-  // JWT Bearer takes priority, fall back to API key
+  // API key (if applied) grants action access. JWT is sent as identity
+  // fallback so the backend can still recognise the user for read-only views.
+  // The backend prefers X-API-Key when both are present.
   const jwt = getJwt()
   const apiKey = getStoredApiKey()
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
   if (jwt) {
     headers['Authorization'] = `Bearer ${jwt}`
-  } else if (apiKey) {
-    headers['X-API-Key'] = apiKey
   }
 
   const res = await fetch(url, {
@@ -72,7 +94,11 @@ async function request(method, path, body) {
     if (res.status === 401) {
       logout()
     }
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    const text = typeof msg === 'string' ? msg : JSON.stringify(msg)
+    const err = new Error(text.replace(/^API_KEY_REQUIRED:\s*/, ''))
+    err.status = res.status
+    err.apiKeyRequired = typeof text === 'string' && text.startsWith('API_KEY_REQUIRED')
+    throw err
   }
 
   return data
@@ -83,6 +109,8 @@ async function request(method, path, body) {
 export async function login(username, password) {
   const data = await request('POST', '/auth/login', { username, password })
   setJwt(data.access_token)
+  if (data.role)     localStorage.setItem('bdc_user_role', data.role)
+  if (data.username) localStorage.setItem('bdc_user_username', data.username)
   return data
 }
 

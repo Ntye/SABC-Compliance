@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Copy, Key, Palette } from 'lucide-react'
-import { getStoredApiKey, initApiKey, setApiKey } from '../../lib/api.js'
+import { Check, Copy, Eye, Palette, ShieldCheck, X } from 'lucide-react'
+import { clearApiKey, getStoredApiKey } from '../../lib/api.js'
 import { useToast } from '../../context/ToastContext.jsx'
 import { useLang } from '../../context/LangContext.jsx'
 import ThemePanel from '../settings/ThemePanel.jsx'
+import ActivateModal from '../auth/ActivateModal.jsx'
 
 const PAGE_KEY = {
   '/overview':       'header.pageOverview',
@@ -23,15 +24,16 @@ export default function Header() {
   const toast    = useToast()
   const { lang, t, setLang } = useLang()
 
-  const [copying,      setCopying]      = useState(false)
-  const [initing,      setIniting]      = useState(false)
   const [panelOpen,    setPanelOpen]    = useState(false)
+  const [activateOpen, setActivateOpen] = useState(false)
+  const [copying,      setCopying]      = useState(false)
+  // tick lets us re-render after the modal applies a key (localStorage write)
+  const [, setTick] = useState(0)
 
-  const titleKey = PAGE_KEY[location.pathname] || 'header.pageOverview'
-  const title    = t(titleKey)
-
+  const titleKey  = PAGE_KEY[location.pathname] || 'header.pageOverview'
+  const title     = t(titleKey)
   const storedKey = getStoredApiKey()
-  const maskedKey = storedKey ? storedKey.slice(0, 8) + '••••••••' : t('header.noApiKey')
+  const maskedKey = storedKey ? storedKey.slice(0, 8) + '••••••••' : ''
 
   async function handleCopy() {
     if (!storedKey) return
@@ -40,17 +42,10 @@ export default function Header() {
     setTimeout(() => setCopying(false), 1500)
   }
 
-  async function handleInit() {
-    setIniting(true)
-    try {
-      const result = await initApiKey()
-      setApiKey(result.api_key)
-      toast(t('header.apiKeyCreated', { key: result.api_key }), 'success')
-    } catch (err) {
-      toast(err.message, 'error')
-    } finally {
-      setIniting(false)
-    }
+  function handleDeactivate() {
+    clearApiKey()
+    toast(t('header.deactivated'), 'success')
+    setTick((n) => n + 1)
   }
 
   return (
@@ -76,24 +71,40 @@ export default function Header() {
             ))}
           </div>
 
-          {/* API key display */}
-          <span className="text-[12px] font-mono text-gray-400">{maskedKey}</span>
-          <button
-            onClick={handleCopy}
-            disabled={!storedKey}
-            className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30"
-            title={t('header.copyApiKey')}
-          >
-            <Copy size={13} className={copying ? 'text-green-600' : ''} />
-          </button>
-          <button
-            onClick={handleInit}
-            disabled={initing}
-            className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-            title={t('header.initApiKey')}
-          >
-            <Key size={13} />
-          </button>
+          {/* Activation status — View-only pill OR Active badge with key */}
+          {!storedKey ? (
+            <button
+              onClick={() => setActivateOpen(true)}
+              className="flex items-center gap-1.5 pl-2 pr-3 py-1 rounded-full bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors"
+              title={t('header.activateTooltip')}
+            >
+              <Eye size={12} className="text-amber-700" />
+              <span className="text-[11px] font-semibold text-amber-800">{t('header.viewOnly')}</span>
+              <span className="text-[11px] font-semibold text-amber-900 underline-offset-2 hover:underline">
+                {t('header.activate')}
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-full bg-green-50 border border-green-200">
+              <ShieldCheck size={12} className="text-green-700" />
+              <span className="text-[11px] font-semibold text-green-800">{t('header.active')}</span>
+              <span className="text-[11px] font-mono text-green-900/70 ml-1">{maskedKey}</span>
+              <button
+                onClick={handleCopy}
+                className="p-1 rounded-full hover:bg-green-100 text-green-700"
+                title={t('header.copyApiKey')}
+              >
+                {copying ? <Check size={11} /> : <Copy size={11} />}
+              </button>
+              <button
+                onClick={handleDeactivate}
+                className="p-1 rounded-full hover:bg-green-100 text-green-700"
+                title={t('header.deactivate')}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          )}
 
           {/* Theme / appearance panel trigger */}
           <button
@@ -106,7 +117,8 @@ export default function Header() {
         </div>
       </header>
 
-      {panelOpen && <ThemePanel onClose={() => setPanelOpen(false)} />}
+      {panelOpen    && <ThemePanel onClose={() => setPanelOpen(false)} />}
+      {activateOpen && <ActivateModal onClose={() => { setActivateOpen(false); setTick((n) => n + 1) }} />}
     </>
   )
 }
