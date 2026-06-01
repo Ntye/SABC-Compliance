@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
-import { CheckCircle, Copy, Terminal, XCircle } from 'lucide-react'
-import { registerNode } from '../lib/api.js'
+import { useState } from 'react'
+import { CheckCircle, Copy, Download, Terminal, XCircle } from 'lucide-react'
+import { downloadSetupScript, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn } from '../lib/tw.js'
@@ -86,39 +86,9 @@ export default function AddVmPage() {
     }
   }
 
-  const sshKey = form.ssh_key_path || './keys/ansible_id_rsa'
-  const sshUser = form.ssh_user || 'ansible'
+  const ip = form.ip || '<server-ip>'
   const bUser = bootstrapUser || 'root'
-  const sudoPrefix = bUser === 'root' ? '' : 'sudo '
-
-  const setupCmd = `# 0. If you see "REMOTE HOST IDENTIFICATION HAS CHANGED", clear the cached entry first:
-ssh-keygen -R ${form.ip || '<server-ip>'}
-
-# 1. Create the ${sshUser} user (connect as ${bUser})
-ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
-  ${sudoPrefix}useradd -m -s /bin/bash ${sshUser} 2>/dev/null || true
-  ${sudoPrefix}mkdir -p /home/${sshUser}/.ssh
-  ${sudoPrefix}chmod 700 /home/${sshUser}/.ssh
-  ${sudoPrefix}chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh
-"
-
-# 2. Install the PLATFORM key — run from backend/ directory
-cat ${sshKey}.pub | ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
-  ${sudoPrefix}tee -a /home/${sshUser}/.ssh/authorized_keys
-  ${sudoPrefix}chmod 600 /home/${sshUser}/.ssh/authorized_keys
-  ${sudoPrefix}chown ${sshUser}:${sshUser} /home/${sshUser}/.ssh/authorized_keys
-"
-
-# 3. Grant passwordless sudo
-ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
-  echo '${sshUser} ALL=(ALL) NOPASSWD:ALL' | ${sudoPrefix}tee /etc/sudoers.d/${sshUser}
-  ${sudoPrefix}chmod 440 /etc/sudoers.d/${sshUser}
-"`
-
-  const verifyCmd = `ssh -i ${sshKey} \\
-  -o StrictHostKeyChecking=no \\
-  -o ConnectTimeout=5 \\
-  ${sshUser}@${form.ip || '<server-ip>'} "echo OK && sudo id"`
+  const runCmd = `bash setup-node.sh ${ip} ${bUser}`
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -256,9 +226,31 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
           <Terminal size={14} className="text-console-accent" />
           <h3 className="text-[13px] font-semibold text-console-text">{t('addVm.helper.title')}</h3>
         </div>
-        <p className="text-[12px] text-console-muted mb-4 leading-relaxed">
+        <p className="text-[12px] text-console-muted mb-5 leading-relaxed">
           {t('addVm.helper.description')}
         </p>
+
+        {/* Step 1 — download */}
+        <div className="mb-5">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-2">
+            {t('addVm.helper.step1')}
+          </p>
+          <button
+            onClick={async () => {
+              try { await downloadSetupScript() }
+              catch (err) { toast(err.message, 'error') }
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-console-accent/20 hover:bg-console-accent/30 border border-console-accent/40 text-console-accent rounded-lg text-[12px] font-semibold transition-colors"
+          >
+            <Download size={13} />
+            {t('addVm.helper.downloadBtn')}
+          </button>
+          <p className="text-[10px] text-console-muted mt-1.5">
+            {t('addVm.helper.downloadHint')}
+          </p>
+        </div>
+
+        {/* Step 2 — admin user input */}
         <div className="mb-5">
           <label className="block text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-1.5">
             {t('addVm.helper.adminUser')}
@@ -273,11 +265,20 @@ ssh -o StrictHostKeyChecking=no ${bUser}@${form.ip || '<server-ip>'} "
             {t('addVm.helper.adminUserHint')}
           </p>
         </div>
-        <CodeBlock label={t('addVm.helper.step1')} code={setupCmd} />
-        <CodeBlock label={t('addVm.helper.step2')} code={verifyCmd} />
-        <p className="text-[11px] text-console-muted mt-2">
-          {t('addVm.helper.keyNote')}
-        </p>
+
+        {/* Step 3 — run command */}
+        <div className="mb-4">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-2">
+            {t('addVm.helper.step2')}
+          </p>
+          <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
+            <pre className="text-[12px] font-mono text-console-text">{runCmd}</pre>
+            <CopyButton text={runCmd} />
+          </div>
+          <p className="text-[11px] text-console-muted mt-2">
+            {t('addVm.helper.runHint')}
+          </p>
+        </div>
       </div>
     </div>
   )

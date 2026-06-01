@@ -190,6 +190,25 @@ export async function checkNodeDns(id) {
   return request('POST', `/nodes/${id}/check-dns`)
 }
 
+export async function downloadSetupScript() {
+  const base = getGatewayUrl()
+  const headers = {}
+  const apiKey = getStoredApiKey()
+  const jwt = getJwt()
+  if (apiKey) headers['X-API-Key'] = apiKey
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+  const res = await fetch(`${base}/nodes/setup-script`, { headers })
+  if (!res.ok) throw new Error(`Failed to download script (HTTP ${res.status})`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'setup-node.sh'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export async function listJobs(limit = 50) {
