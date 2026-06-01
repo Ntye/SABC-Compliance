@@ -6,7 +6,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Server
     port: int = 3000
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:4173"]
+    cors_origins: list[str] = [
+        "http://localhost",
+        "http://localhost:80",
+        "http://localhost:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1",
+        "http://127.0.0.1:80",
+    ]
 
     # Storage
     db_path: str = "./data/platform.db"
