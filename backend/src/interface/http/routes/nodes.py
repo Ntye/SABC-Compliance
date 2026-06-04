@@ -200,33 +200,35 @@ async def get_setup_script(
     principal: AuthPrincipal = Depends(get_current_principal),
 ):
     """
-    Returns a ready-to-run bash script that bootstraps SSH access on a new node.
-    The platform's ansible public key is embedded in the script at download time.
+    Returns a downloadable bash script to run on a target server.
+    The platform's ansible public key is embedded at download time.
 
-    Run it from the backend/ directory:
-        bash setup-node.sh <server-ip> [admin-user]
+    Transfer to the target server, then run:  sudo bash setup-node.sh
     """
-    key_path = os.environ.get("SSH_KEY_PATH", "./keys/ansible_id_rsa")
-    pub_key_path = key_path if key_path.endswith(".pub") else key_path + ".pub"
-    if not os.path.isabs(pub_key_path):
-        pub_key_path = os.path.join("/app", pub_key_path.lstrip("./"))
-
-    try:
-        with open(pub_key_path) as f:
-            platform_key = f.read().strip()
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="Platform SSH key not yet generated. Start the backend container first.",
-        )
-
+    platform_key = _read_platform_public_key()
     script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
-
     return PlainTextResponse(
         content=script,
         headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
         media_type="text/x-sh; charset=utf-8",
     )
+
+
+@router.get(
+    "/bootstrap",
+    summary="Bootstrap script for curl | sudo bash",
+    response_class=PlainTextResponse,
+)
+async def get_bootstrap_script():
+    """
+    Unauthenticated endpoint returning the bootstrap script for piping:
+        curl -sSL http://<platform>/api/nodes/bootstrap | sudo bash
+
+    Only exposes the platform's public key (not the private key).
+    """
+    platform_key = _read_platform_public_key()
+    script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
+    return PlainTextResponse(content=script, media_type="text/x-sh; charset=utf-8")
 
 
 @router.get("/{id}", response_model=NodeResponse, summary="Get a node by ID or hostname")
@@ -361,121 +363,72 @@ def _detect_admin_user() -> str:
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
 # BdC Compliance Platform — Node Bootstrap Script
 #
-# Usage (from backend/ directory):
-#   bash setup-node.sh <server-ip> [admin-user]
+# Run this directly on the target server with root privileges:
+#   sudo bash setup-node.sh
 #
-#   server-ip    IP address or hostname of the target server
-#   admin-user   SSH user with root or passwordless-sudo access (default: root)
+# Or via curl from the platform:
+#   curl -sSL http://<platform-url>/api/nodes/bootstrap | sudo bash
 #
-# What this script does in a single SSH session:
-#   1. Clears any stale host-key entry so known_hosts stays clean
-#   2. Creates the 'ansible' OS user with a locked password
-#   3. Installs the platform's public key for passwordless SSH
-#   4. Grants the ansible user full passwordless sudo
-#   5. Verifies the connection using the platform's private key
+# What this script does:
+#   1. Creates the 'ansible' OS user
+#   2. Installs the platform's SSH public key for passwordless access
+#   3. Grants the ansible user full passwordless sudo
 #
-# You will be prompted for the admin user's SSH password once.
-# Everything else is automated.
-#
-# Requirements:
-#   - admin-user must be root OR have passwordless sudo (NOPASSWD:ALL).
-#     If sudo requires a password, re-run with 'root' as the admin user.
-#   - The script auto-locates the platform private key from its own directory.
+# After running, register this server in the platform's Node Registry.
 
 set -euo pipefail
 
-SERVER_IP="${1:-}"
-ADMIN_USER="${2:-root}"
-
-if [[ -z "$SERVER_IP" ]]; then
-  echo "Usage: bash setup-node.sh <server-ip> [admin-user]"
-  echo "  server-ip    IP or hostname of the target server"
-  echo "  admin-user   SSH user with root/passwordless-sudo (default: root)"
-  exit 1
-fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KEY_PRIV="${SCRIPT_DIR}/keys/ansible_id_rsa"
-
-# Platform public key — embedded by the platform at download time
-PLATFORM_KEY="__PLATFORM_PUBLIC_KEY__"
 SSH_USER="ansible"
+PLATFORM_KEY="__PLATFORM_PUBLIC_KEY__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  BdC Compliance — Node Bootstrap"
-echo "  Target    : ${SERVER_IP}"
-echo "  Admin user: ${ADMIN_USER}"
+echo "  Host: $(hostname -f 2>/dev/null || hostname)"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
-# ── 1. Clear stale host-key entries ──────────────────────────────────────────
-echo "[1/3] Clearing stale host-key entries for ${SERVER_IP} ..."
-ssh-keygen -R "${SERVER_IP}" 2>/dev/null || true
-
-# ── 2. Bootstrap in one SSH session ──────────────────────────────────────────
-echo "[2/3] Connecting as ${ADMIN_USER}@${SERVER_IP} — enter SSH password when prompted ..."
-echo ""
-
-# For non-root admin users all remote commands run via 'sudo bash'.
-# This requires NOPASSWD sudo. If sudo needs a password, pass 'root' instead.
-if [[ "$ADMIN_USER" == "root" ]]; then
-  REMOTE_SHELL="bash -s"
-else
-  REMOTE_SHELL="sudo bash -s"
-fi
-
-ssh \
-  -o StrictHostKeyChecking=no \
-  -o ConnectTimeout=15 \
-  "${ADMIN_USER}@${SERVER_IP}" \
-  "$REMOTE_SHELL" << REMOTE
-set -e
-
-echo "  Creating ${SSH_USER} user ..."
+# ── 1. Create ansible user ──────────────────────────────────────────────────
+echo "[1/3] Creating '${SSH_USER}' user ..."
 useradd -m -s /bin/bash "${SSH_USER}" 2>/dev/null || true
 
-echo "  Setting up .ssh directory ..."
+# ── 2. Install platform SSH key ─────────────────────────────────────────────
+echo "[2/3] Installing platform SSH key ..."
 mkdir -p /home/"${SSH_USER}"/.ssh
 chmod 700 /home/"${SSH_USER}"/.ssh
-chown "${SSH_USER}":"${SSH_USER}" /home/"${SSH_USER}"/.ssh
 
-echo "  Installing platform public key ..."
 if ! grep -qF "${PLATFORM_KEY}" /home/"${SSH_USER}"/.ssh/authorized_keys 2>/dev/null; then
   echo "${PLATFORM_KEY}" >> /home/"${SSH_USER}"/.ssh/authorized_keys
 fi
 chmod 600 /home/"${SSH_USER}"/.ssh/authorized_keys
-chown "${SSH_USER}":"${SSH_USER}" /home/"${SSH_USER}"/.ssh/authorized_keys
+chown -R "${SSH_USER}":"${SSH_USER}" /home/"${SSH_USER}"/.ssh
 
-echo "  Granting passwordless sudo ..."
+# ── 3. Grant passwordless sudo ──────────────────────────────────────────────
+echo "[3/3] Granting passwordless sudo ..."
 echo "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"${SSH_USER}"
 chmod 440 /etc/sudoers.d/"${SSH_USER}"
 
 echo ""
-echo "  Bootstrap complete on \$(hostname -f 2>/dev/null || hostname)."
-REMOTE
-
-# ── 3. Verify the platform key ────────────────────────────────────────────────
+echo "══════════════════════════════════════════════════════"
+echo "  Done! This server is ready to be managed."
+echo "  Register it now in the platform's Node Registry."
+echo "══════════════════════════════════════════════════════"
 echo ""
-echo "[3/3] Verifying platform key (no password should be prompted) ..."
-echo ""
-
-if ssh \
-  -i "${KEY_PRIV}" \
-  -o StrictHostKeyChecking=no \
-  -o ConnectTimeout=5 \
-  -o BatchMode=yes \
-  "${SSH_USER}@${SERVER_IP}" \
-  "echo '  SSH   : OK' && sudo id | sed 's/^/  sudo  : /'"; then
-  echo ""
-  echo "══════════════════════════════════════════════════════"
-  echo "  ✓  ${SERVER_IP} is ready."
-  echo "     Register it now in the Node Registry."
-  echo "══════════════════════════════════════════════════════"
-else
-  echo ""
-  echo "ERROR: Could not connect as ${SSH_USER}@${SERVER_IP} using the platform key."
-  echo "Check that setup completed without errors above."
-  exit 1
-fi
 """
+
+
+def _read_platform_public_key() -> str:
+    """Read the platform's ansible public key from disk."""
+    key_path = os.environ.get("SSH_KEY_PATH", "./keys/ansible_id_rsa")
+    pub_key_path = key_path if key_path.endswith(".pub") else key_path + ".pub"
+    if not os.path.isabs(pub_key_path):
+        pub_key_path = os.path.join("/app", pub_key_path.lstrip("./"))
+
+    try:
+        with open(pub_key_path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=503,
+            detail="Platform SSH key not yet generated. Start the backend container first.",
+        )

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { CheckCircle, Copy, Download, Monitor, Terminal, XCircle } from 'lucide-react'
-import { downloadSetupScript, getHostInfo, registerNode } from '../lib/api.js'
+import { useState } from 'react'
+import { CheckCircle, Copy, Download, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
+import { downloadSetupScript, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn } from '../lib/tw.js'
@@ -24,18 +24,6 @@ function CopyButton({ text }) {
   )
 }
 
-function CodeBlock({ code, label }) {
-  return (
-    <div className="mb-4">
-      {label && <p className="text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-1.5">{label}</p>}
-      <div className="bg-console-surface rounded-lg p-3 flex items-start justify-between gap-3 group">
-        <pre className="text-[12px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{code}</pre>
-        <CopyButton text={code} />
-      </div>
-    </div>
-  )
-}
-
 const DEFAULT_FORM = {
   hostname: '',
   ip: '',
@@ -52,26 +40,7 @@ export default function AddVmPage() {
   const [form, setForm] = useState(DEFAULT_FORM)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
-  const [bootstrapUser, setBootstrapUser] = useState('root')
-  const [hostInfo, setHostInfo] = useState(null)   // { host_ip, hostname }
-
-  useEffect(() => {
-    getHostInfo()
-      .then((info) => {
-        if (info?.host_ip) setHostInfo(info)
-        if (info?.admin_user) setBootstrapUser(info.admin_user)
-      })
-      .catch(() => {})   // non-critical — silently ignore
-  }, [])
-
-  function fillFromHost() {
-    setForm((prev) => ({
-      ...prev,
-      ip: hostInfo.host_ip,
-      hostname: prev.hostname || hostInfo.hostname || '',
-    }))
-    if (hostInfo.admin_user) setBootstrapUser(hostInfo.admin_user)
-  }
+  const [platformUrl, setPlatformUrl] = useState(() => window.location.origin)
 
   function set(field) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))
@@ -105,9 +74,8 @@ export default function AddVmPage() {
     }
   }
 
-  const ip = form.ip || '<server-ip>'
-  const bUser = bootstrapUser || 'root'
-  const runCmd = `bash setup-node.sh ${ip} ${bUser}`
+  const curlCmd = `curl -sSL ${platformUrl}/api/nodes/bootstrap | sudo bash`
+  const airgapCmd = 'sudo bash setup-node.sh'
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -115,20 +83,7 @@ export default function AddVmPage() {
 
       {/* ── Zone 1: Registration form ── */}
       <div className="bg-white rounded-xl border border-gray-100 p-6 max-w-2xl">
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-[14px] font-semibold text-gray-800">{t('addVm.cardTitle')}</h3>
-          {hostInfo?.host_ip && (
-            <button
-              type="button"
-              onClick={fillFromHost}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand/10 hover:bg-brand/20 border border-brand/20 text-brand text-[11px] font-semibold transition-colors"
-              title={`${t('addVm.thisHostTooltip')}: ${hostInfo.host_ip}`}
-            >
-              <Monitor size={11} />
-              {t('addVm.thisHostBtn')}
-            </button>
-          )}
-        </div>
+        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">{t('addVm.cardTitle')}</h3>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Row: hostname + IP */}
           <div className="grid grid-cols-2 gap-4">
@@ -147,17 +102,12 @@ export default function AddVmPage() {
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
                 {t('addVm.ipAddress')} <span className="text-red-500">{t('addVm.required')}</span>
-                {hostInfo?.host_ip && form.ip === hostInfo.host_ip && (
-                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-brand/10 text-brand">
-                    {t('addVm.thisMachine')}
-                  </span>
-                )}
               </label>
               <input
                 required
                 value={form.ip}
                 onChange={set('ip')}
-                placeholder={hostInfo?.host_ip || '10.0.0.5'}
+                placeholder="10.0.0.5"
                 className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all"
               />
             </div>
@@ -257,7 +207,7 @@ export default function AddVmPage() {
         )}
       </div>
 
-      {/* ── Zone 2: SSH Setup Helper (console theme) ── */}
+      {/* ── Zone 2: SSH Setup (console theme) ── */}
       <div className="bg-console-bg rounded-xl p-6 max-w-2xl">
         <div className="flex items-center gap-2 mb-4">
           <Terminal size={14} className="text-console-accent" />
@@ -267,54 +217,76 @@ export default function AddVmPage() {
           {t('addVm.helper.description')}
         </p>
 
-        {/* Step 1 — download */}
-        <div className="mb-5">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-2">
-            {t('addVm.helper.step1')}
-          </p>
-          <button
-            onClick={async () => {
-              try { await downloadSetupScript() }
-              catch (err) { toast(err.message, 'error') }
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-console-accent/20 hover:bg-console-accent/30 border border-console-accent/40 text-console-accent rounded-lg text-[12px] font-semibold transition-colors"
-          >
-            <Download size={13} />
-            {t('addVm.helper.downloadBtn')}
-          </button>
-          <p className="text-[10px] text-console-muted mt-1.5">
-            {t('addVm.helper.downloadHint')}
-          </p>
-        </div>
-
-        {/* Step 2 — admin user input */}
-        <div className="mb-5">
-          <label className="block text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-1.5">
-            {t('addVm.helper.adminUser')}
-          </label>
-          <input
-            value={bootstrapUser}
-            onChange={(e) => setBootstrapUser(e.target.value)}
-            placeholder="root / debian / ubuntu / ec2-user"
-            className="w-full px-3 py-2 text-[12px] font-mono bg-console-surface border border-white/10 rounded-lg outline-none text-console-text placeholder:text-console-muted focus:border-white/30 transition-colors"
-          />
-          <p className="text-[10px] text-console-muted mt-1">
-            {t('addVm.helper.adminUserHint')}
-          </p>
-        </div>
-
-        {/* Step 3 — run command */}
-        <div className="mb-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-console-muted mb-2">
-            {t('addVm.helper.step2')}
-          </p>
-          <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
-            <pre className="text-[12px] font-mono text-console-text">{runCmd}</pre>
-            <CopyButton text={runCmd} />
+        {/* Option 1 — Online: curl | sudo bash */}
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Globe size={12} className="text-console-accent" />
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-console-accent">
+              {t('addVm.helper.onlineTitle')}
+            </p>
           </div>
-          <p className="text-[11px] text-console-muted mt-2">
-            {t('addVm.helper.runHint')}
-          </p>
+
+          <div className="mb-3">
+            <label className="block text-[10px] font-medium text-console-muted mb-1.5">
+              {t('addVm.helper.platformUrl')}
+            </label>
+            <input
+              value={platformUrl}
+              onChange={(e) => setPlatformUrl(e.target.value)}
+              placeholder="http://192.168.1.5"
+              className="w-full px-3 py-2 text-[12px] font-mono bg-console-surface border border-white/10 rounded-lg outline-none text-console-text placeholder:text-console-muted focus:border-white/30 transition-colors"
+            />
+            <p className="text-[10px] text-console-muted mt-1">
+              {t('addVm.helper.platformUrlHint')}
+            </p>
+          </div>
+
+          <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.runOnTarget')}</p>
+          <div className="bg-console-surface rounded-lg p-3 flex items-start justify-between gap-3">
+            <pre className="text-[12px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{curlCmd}</pre>
+            <CopyButton text={curlCmd} />
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="flex items-center gap-3 my-5">
+          <div className="flex-1 border-t border-white/10" />
+          <span className="text-[10px] font-semibold text-console-muted uppercase">{t('addVm.helper.or')}</span>
+          <div className="flex-1 border-t border-white/10" />
+        </div>
+
+        {/* Option 2 — Airgap: download + transfer */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <HardDriveDownload size={12} className="text-console-accent" />
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-console-accent">
+              {t('addVm.helper.airgapTitle')}
+            </p>
+          </div>
+
+          <div className="flex items-start gap-4 mb-3">
+            <div className="flex-shrink-0">
+              <button
+                onClick={async () => {
+                  try { await downloadSetupScript() }
+                  catch (err) { toast(err.message, 'error') }
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-console-accent/20 hover:bg-console-accent/30 border border-console-accent/40 text-console-accent rounded-lg text-[12px] font-semibold transition-colors"
+              >
+                <Download size={13} />
+                {t('addVm.helper.downloadBtn')}
+              </button>
+            </div>
+            <p className="text-[10px] text-console-muted pt-1.5 leading-relaxed">
+              {t('addVm.helper.airgapSteps')}
+            </p>
+          </div>
+
+          <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.thenRun')}</p>
+          <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
+            <pre className="text-[12px] font-mono text-console-text">{airgapCmd}</pre>
+            <CopyButton text={airgapCmd} />
+          </div>
         </div>
       </div>
     </div>
