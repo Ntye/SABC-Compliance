@@ -1,0 +1,342 @@
+---
+# Installs Wazuh Agent 4.x and registers it with the manager.
+#
+# Detects OS family, then delegates to the appropriate platform script:
+#   Debian/Ubuntu  → install_wazuh_agent_deb.yml
+#   RedHat/CentOS  → install_wazuh_agent_rpm.yml
+#
+# wazuh_manager_host is injected from platform config.
+#
+# ── Airgap / offline mode ─────────────────────────────────────────────────────
+# Place matching packages in backend/packages/wazuh-agent/ before running:
+#   wazuh-agent_4.x.x-1_amd64.deb    (Debian/Ubuntu)
+#   wazuh-agent-4.x.x-1.x86_64.rpm   (RHEL/CentOS/Rocky)
+#
+- name: Install Wazuh Agent
+  hosts: target
+  become: yes
+  gather_facts: yes
+
+  vars:
+    wazuh_manager: "{{ wazuh_manager_host | default('wazuh') }}"
+    wazuh_agent_group: "default"
+    # packages_dir is injected by AnsibleAdapter
+    agent_pkg_dir: "{{ packages_dir }}/wazuh-agent"
+
+  tasks:
+
+    # ── Idempotency check ─────────────────────────────────────────────────────
+    - name: Check if wazuh-agent is already installed
+      stat:
+        path: /var/ossec/bin/wazuh-agentd
+      register: wazuh_agent_installed
+
+    # ── Airgap detection (shared by both platform scripts) ───────────────────
+    - name: Find offline Wazuh agent packages on controller
+      find:
+        paths: "{{ agent_pkg_dir }}"
+        patterns:
+          - "wazuh-agent*.deb"
+          - "wazuh-agent*.rpm"
+      register: agent_offline_pkgs
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Set airgap mode
+      set_fact:
+        wazuh_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
+
+    # ── OS detection and dispatch ─────────────────────────────────────────────
+    - name: Report OS family, install mode, and manager
+      debug:
+        msg: >-
+          Target: {{ ansible_fqdn }}
+          ({{ ansible_distribution }} {{ ansible_distribution_version }},
+          {{ ansible_os_family }} family).
+          Manager: {{ wazuh_manager }}.
+          Mode: {{ 'AIRGAP — packages from ' + agent_pkg_dir if wazuh_airgap else 'ONLINE' }}.
+          Already installed: {{ wazuh_agent_installed.stat.exists }}.
+
+    - name: Fail on unsupported OS family
+      fail:
+        msg: >-
+          Unsupported OS family '{{ ansible_os_family }}'.
+          Supported: Debian (Ubuntu/Debian) and RedHat (RHEL/CentOS/Rocky/AlmaLinux).
+      when: ansible_os_family not in ['Debian', 'RedHat']
+
+    # Check internet connectivity before attempting an online install.
+    # Lab/VM environments often have internet on the controller but not on
+    # managed nodes — detect this early with a clear actionable error.
+    - name: Check target internet connectivity to packages.wazuh.com
+      shell: >-
+        curl -s --connect-timeout 10 --max-time 15
+          -o /dev/null -w "%{http_code}"
+          https://packages.wazuh.com/key/GPG-KEY-WAZUH
+      register: inet_check
+      changed_when: false
+      failed_when: false
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+
+    - name: Show airgap setup instructions (no internet on target)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║         WAZUH AGENT — AIRGAP SETUP REQUIRED                 ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  The target node cannot reach packages.wazuh.com."
+          - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
+          - ""
+          - "  Download the matching package on any internet-connected machine:"
+          - ""
+          - "  ── Debian / Ubuntu ──────────────────────────────────────────"
+          - "    curl -LO https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb"
+          - ""
+          - "  ── RHEL / CentOS / Rocky / AlmaLinux ────────────────────────"
+          - "    curl -LO https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.0-1.x86_64.rpm"
+          - ""
+          - "  Then copy the file into the platform packages directory:"
+          - ""
+          - "    cp wazuh-agent*.deb  backend/packages/wazuh-agent/   # Debian"
+          - "    cp wazuh-agent*.rpm  backend/packages/wazuh-agent/   # RedHat"
+          - ""
+          - "  Re-run this job — the playbook detects the file and"
+          - "  switches to offline installation automatically."
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    - name: Abort — target has no internet access (see instructions above)
+      fail:
+        msg: "No internet on target. Follow the airgap instructions printed above, then re-run."
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PREFLIGHT — catch the common Wazuh enrollment failure scenarios early
+    #   • Time sync     → agent/manager TLS + accurate event timestamps
+    #   • Manager DNS   → "Cannot connect to server" from name resolution
+    #   • Reachability  → enrollment (1515) + comms (1514) blocked by firewall
+    # Policy: time sync best-effort (warn); manager reachability is a hard block.
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Ensure time synchronisation (chrony) is installed and running
+      block:
+        - name: Install chrony for clock sync
+          package:
+            name: chrony
+            state: present
+        - name: Enable and start chrony
+          service:
+            name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+            state: started
+            enabled: yes
+        - name: Force an immediate clock step (chronyc makestep)
+          command: chronyc makestep
+          changed_when: false
+          failed_when: false
+      rescue:
+        - name: Warn that time sync could not be configured
+          debug:
+            msg: >-
+              WARNING: could not configure chrony on {{ ansible_fqdn }}. A wrong
+              clock can break agent↔manager TLS and skew alert timestamps.
+
+    # Resolve the manager name up front so the connectivity probe below can use
+    # it — and so ongoing agent comms work regardless of site DNS.
+    - name: Resolve manager hostname to IP on the node
+      command: "getent hosts {{ wazuh_manager }}"
+      register: manager_resolve
+      changed_when: false
+      failed_when: false
+
+    - name: Add manager hostname to /etc/hosts if DNS resolution fails
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ wazuh_manager }} {{ wazuh_manager }}"
+        regexp: "\\s{{ wazuh_manager | replace('.', '\\.') }}(\\s|$)"
+        state: present
+      when: manager_resolve.rc != 0
+
+    - name: Preflight — check manager enrollment port 1515 is reachable
+      wait_for:
+        host: "{{ wazuh_manager }}"
+        port: 1515
+        timeout: 15
+      register: wazuh_1515_check
+      ignore_errors: yes
+
+    - name: Preflight — check manager comms port 1514 is reachable
+      wait_for:
+        host: "{{ wazuh_manager }}"
+        port: 1514
+        timeout: 15
+      register: wazuh_1514_check
+      ignore_errors: yes
+
+    - name: Show Wazuh manager connectivity remediation (unreachable)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║   WAZUH MANAGER UNREACHABLE — enrollment cannot proceed     ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  {{ ansible_fqdn }} cannot reach {{ wazuh_manager }}."
+          - "    port 1515 (enrollment): {{ 'BLOCKED' if wazuh_1515_check is failed else 'OK' }}"
+          - "    port 1514 (comms):      {{ 'BLOCKED' if wazuh_1514_check is failed else 'OK' }}"
+          - ""
+          - "  Most likely causes (in order):"
+          - "    1. Firewall blocking 1514/1515 TCP between node and manager"
+          - "    2. Wrong manager host/IP configured on the Infrastructure page"
+          - "    3. wazuh-manager service not running on the manager"
+          - "    4. DNS: '{{ wazuh_manager }}' resolves to the wrong address"
+          - ""
+          - "  Verify from this node once fixed:"
+          - "    nc -vz {{ wazuh_manager }} 1515 && nc -vz {{ wazuh_manager }} 1514"
+          - ""
+      when: wazuh_1515_check is failed or wazuh_1514_check is failed
+
+    - name: Abort — Wazuh manager ports unreachable (see remediation above)
+      fail:
+        msg: "Cannot reach {{ wazuh_manager }} on 1514/1515. Fix connectivity (see above) and re-run."
+      when: wazuh_1515_check is failed or wazuh_1514_check is failed
+
+    - name: Run Debian/Ubuntu installation script
+      include_tasks: install_wazuh_agent_deb.yml
+      when: ansible_os_family == 'Debian'
+
+    - name: Run RedHat/CentOS/Rocky installation script
+      include_tasks: install_wazuh_agent_rpm.yml
+      when: ansible_os_family == 'RedHat'
+
+    # ── Common post-install configuration ─────────────────────────────────────
+    # Belt-and-suspenders: patch ossec.conf directly in addition to the
+    # WAZUH_MANAGER env var that was set during package install.
+    - name: Set manager address in ossec.conf
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '<address>[^<]*</address>'
+        replace: '<address>{{ wazuh_manager }}</address>'
+      notify: Restart wazuh-agent
+
+    # ── Service ───────────────────────────────────────────────────────────────
+    - name: Enable and start wazuh-agent
+      service:
+        name: wazuh-agent
+        state: started
+        enabled: yes
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Wait for agent to register with manager (up to 30s)
+      command: /var/ossec/bin/wazuh-control status
+      register: agent_status
+      retries: 6
+      delay: 5
+      until: "'wazuh-agentd is running' in agent_status.stdout"
+      changed_when: false
+      failed_when: false
+
+    # Confirm the agent actually connected (not just that the daemon is up).
+    # "Connected to the server" in ossec.log means enrollment + handshake worked.
+    - name: Check whether the agent has connected to the manager
+      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+      register: agent_connected
+      changed_when: false
+      failed_when: false
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SELF-HEAL — duplicate agent ID recovery (VM clone)
+    #
+    # A cloned VM carries the source's /var/ossec/etc/client.keys, so the manager
+    # sees a duplicate ID and silently drops the connection — the daemon runs but
+    # never reaches "Connected to the server". Detected here only; on a healthy
+    # fresh enroll this block is skipped. We reset the key and let the agent's
+    # auto-enrollment register a brand-new ID, then retry once.
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Detect stuck enrollment (daemon up but never connected)
+      set_fact:
+        wazuh_enroll_stuck: >-
+          {{ ('wazuh-agentd is running' not in agent_status.stdout)
+             or (agent_connected.rc != 0) }}
+
+    - name: Duplicate/stale agent key detected — re-enrolling
+      debug:
+        msg: >-
+          {{ ansible_fqdn }} did not connect to {{ wazuh_manager }} (typical
+          after VM cloning — a duplicate agent ID in client.keys). Resetting the
+          key to force a fresh registration.
+      when: wazuh_enroll_stuck | bool
+
+    - name: Stop wazuh-agent before resetting key
+      service:
+        name: wazuh-agent
+        state: stopped
+      when: wazuh_enroll_stuck | bool
+
+    - name: Clear stale client.keys so auto-enrollment issues a fresh ID
+      copy:
+        dest: /var/ossec/etc/client.keys
+        content: ""
+        owner: root
+        group: wazuh
+        mode: '0640'
+      failed_when: false
+      when: wazuh_enroll_stuck | bool
+
+    - name: Start wazuh-agent to trigger fresh auto-enrollment
+      service:
+        name: wazuh-agent
+        state: started
+      when: wazuh_enroll_stuck | bool
+
+    - name: Wait for the agent to connect after re-enrollment (up to 60s)
+      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+      register: agent_connected_retry
+      retries: 12
+      delay: 5
+      until: agent_connected_retry.rc == 0
+      changed_when: false
+      failed_when: false
+      when: wazuh_enroll_stuck | bool
+
+    - name: Get wazuh-agent version
+      command: /var/ossec/bin/wazuh-control info
+      register: agent_info
+      changed_when: false
+      failed_when: false
+
+    - name: Determine final connection state
+      set_fact:
+        wazuh_connected_final: >-
+          {{ (agent_connected_retry.rc == 0) if wazuh_enroll_stuck | bool
+             else (agent_connected.rc == 0) }}
+
+    - name: Warn if the agent still has not connected
+      debug:
+        msg: >-
+          WARNING: wazuh-agent installed on {{ ansible_fqdn }} but it has not yet
+          reported "Connected to the server". Check /var/ossec/logs/ossec.log on
+          the node and confirm 1514/1515 are open to {{ wazuh_manager }}.
+      when: not (wazuh_connected_final | bool)
+
+    - name: Wazuh Agent ready
+      debug:
+        msg: >-
+          Wazuh Agent installed on {{ ansible_fqdn }}
+          ({{ agent_info.stdout_lines | join(' | ') }}).
+          Manager: {{ wazuh_manager }}.
+          Connection: {{ 'CONNECTED' if wazuh_connected_final | bool else 'NOT yet connected — see warning above' }}.
+
+  # ── Handlers ─────────────────────────────────────────────────────────────────
+  handlers:
+    - name: Restart wazuh-agent
+      service:
+        name: wazuh-agent
+        state: restarted

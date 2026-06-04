@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS custom properties – defaults (BdC, light mode) ─────────────────────
+   ThemeContext overwrites these at runtime via style.setProperty.
+   They also serve as fallback for the initial paint before React hydrates.    */
+:root {
+  --brand-rgb:   192 40 31;
+  --accent-rgb:  217 119 6;
+  --brand-light: #FEF2F2;
+  --accent-light:#FFFBEB;
+
+  --bg-page:       #F8F6F3;
+  --bg-card:       #FFFFFF;
+  --bg-card-hover: #F9FAFB;
+  --bg-input:      #FFFFFF;
+  --bg-subtle:     #F9FAFB;
+
+  --text-primary:   #111827;
+  --text-secondary: #4B5563;
+  --text-muted:     #9CA3AF;
+
+  --border:        #F3F4F6;
+  --border-strong: #E5E7EB;
+
+  --sidebar-bg: #1C1C1E;
+}
+
+@layer base {
+  body {
+    @apply font-sans antialiased;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+  }
+}
+
+/* ── Toast animation ─────────────────────────────────────────────────────── */
+@keyframes toast-in {
+  from { transform: translateX(120%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.toast-enter { animation: toast-in 0.25s ease forwards; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK MODE OVERRIDES
+   When <html data-mode="dark"> is set, remap common Tailwind utility classes
+   to our CSS variable values so existing components get dark mode for free.
+   Using !important because Tailwind utilities have equal specificity.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-mode="dark"] {
+  color-scheme: dark;
+}
+
+/* Backgrounds ────────────────────────────────────────────────────────────── */
+html[data-mode="dark"] .bg-white          { background-color: var(--bg-card)       !important; }
+html[data-mode="dark"] .bg-gray-50        { background-color: var(--bg-subtle)     !important; }
+html[data-mode="dark"] .bg-gray-100       { background-color: var(--bg-card-hover) !important; }
+html[data-mode="dark"] .bg-gray-50\/50    { background-color: var(--bg-subtle)     !important; }
+html[data-mode="dark"] .bg-gray-100\/50   { background-color: var(--bg-card-hover) !important; }
+html[data-mode="dark"] .bg-surface-page   { background-color: var(--bg-page)       !important; }
+html[data-mode="dark"] .bg-surface-card   { background-color: var(--bg-card)       !important; }
+
+/* Hover backgrounds */
+html[data-mode="dark"] .hover\:bg-gray-50:hover     { background-color: var(--bg-card-hover) !important; }
+html[data-mode="dark"] .hover\:bg-gray-50\/50:hover { background-color: var(--bg-card-hover) !important; }
+html[data-mode="dark"] .hover\:bg-gray-100:hover    { background-color: var(--bg-card-hover) !important; }
+html[data-mode="dark"] .hover\:bg-white\/5:hover    { background-color: rgba(255,255,255,0.07) !important; }
+
+/* Text ───────────────────────────────────────────────────────────────────── */
+html[data-mode="dark"] .text-gray-900 { color: var(--text-primary)   !important; }
+html[data-mode="dark"] .text-gray-800 { color: var(--text-primary)   !important; }
+html[data-mode="dark"] .text-gray-700 { color: var(--text-secondary) !important; }
+html[data-mode="dark"] .text-gray-600 { color: var(--text-secondary) !important; }
+html[data-mode="dark"] .text-gray-500 { color: var(--text-muted)     !important; }
+html[data-mode="dark"] .text-gray-400 { color: var(--text-muted)     !important; }
+html[data-mode="dark"] .text-gray-300 { color: #6B7280               !important; }
+
+html[data-mode="dark"] .hover\:text-gray-600:hover { color: var(--text-secondary) !important; }
+html[data-mode="dark"] .hover\:text-gray-200:hover { color: var(--text-primary)   !important; }
+
+/* Borders ───────────────────────────────────────────────────────────────── */
+html[data-mode="dark"] .border-gray-50  { border-color: var(--border)        !important; }
+html[data-mode="dark"] .border-gray-100 { border-color: var(--border)        !important; }
+html[data-mode="dark"] .border-gray-200 { border-color: var(--border-strong) !important; }
+html[data-mode="dark"] .divide-gray-50  > * + * { border-color: var(--border) !important; }
+
+/* Inputs ─────────────────────────────────────────────────────────────────── */
+html[data-mode="dark"] input:not([type="color"]),
+html[data-mode="dark"] select,
+html[data-mode="dark"] textarea {
+  background-color: var(--bg-input)  !important;
+  color:            var(--text-primary) !important;
+  border-color:     var(--border-strong) !important;
+}
+
+html[data-mode="dark"] input::placeholder,
+html[data-mode="dark"] textarea::placeholder { color: var(--text-muted) !important; }
+
+html[data-mode="dark"] select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+/* Skeleton / pulse ──────────────────────────────────────────────────────── */
+html[data-mode="dark"] .animate-pulse { background-color: var(--bg-subtle) !important; }
+
+/* Status colour chips ───────────────────────────────────────────────────── */
+html[data-mode="dark"] .bg-green-50   { background-color: #0C2118 !important; }
+html[data-mode="dark"] .bg-red-50     { background-color: #2A0F0F !important; }
+html[data-mode="dark"] .bg-amber-50   { background-color: #251700 !important; }
+html[data-mode="dark"] .bg-blue-50    { background-color: #0A1628 !important; }
+html[data-mode="dark"] .bg-amber-100  { background-color: #2D1A00 !important; }
+
+html[data-mode="dark"] .text-green-700 { color: #34D399 !important; }
+html[data-mode="dark"] .text-green-600 { color: #34D399 !important; }
+html[data-mode="dark"] .text-red-700   { color: #F87171 !important; }
+html[data-mode="dark"] .text-red-600   { color: #F87171 !important; }
+html[data-mode="dark"] .text-red-500   { color: #F87171 !important; }
+html[data-mode="dark"] .text-amber-800 { color: #FCD34D !important; }
+html[data-mode="dark"] .text-amber-700 { color: #FCD34D !important; }
+html[data-mode="dark"] .text-amber-600 { color: #FCD34D !important; }
+html[data-mode="dark"] .text-amber-500 { color: #FCD34D !important; }
+html[data-mode="dark"] .text-blue-800  { color: #93C5FD !important; }
+html[data-mode="dark"] .text-blue-600  { color: #93C5FD !important; }
+html[data-mode="dark"] .text-blue-500  { color: #60A5FA !important; }
+
+html[data-mode="dark"] .border-green-200 { border-color: rgba(52,211,153,.25) !important; }
+html[data-mode="dark"] .border-red-200   { border-color: rgba(248,113,113,.25) !important; }
+html[data-mode="dark"] .border-amber-200 { border-color: rgba(252,211,77,.25)  !important; }
+html[data-mode="dark"] .border-blue-100  { border-color: rgba(147,197,253,.20) !important; }
+
+/* Hover states for icon buttons */
+html[data-mode="dark"] .hover\:bg-red-50:hover   { background-color: rgba(248,113,113,.12) !important; }
+html[data-mode="dark"] .hover\:bg-amber-50:hover { background-color: rgba(252,211,77,.12)  !important; }
+html[data-mode="dark"] .hover\:bg-amber-100:hover{ background-color: rgba(252,211,77,.18)  !important; }
+
+/* Modal overlays – keep bg-white panels themed */
+html[data-mode="dark"] .shadow-sm  { box-shadow: 0 1px 3px 0 rgba(0,0,0,.5) !important; }
+html[data-mode="dark"] .shadow-xl  { box-shadow: 0 20px 25px -5px rgba(0,0,0,.7) !important; }
+html[data-mode="dark"] .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0,0,0,.8) !important; }

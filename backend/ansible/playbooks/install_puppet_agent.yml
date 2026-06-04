@@ -1,0 +1,491 @@
+---
+# Installs Puppet Agent on a PE-managed node using the PE master's install script:
+#   curl -k https://<master>:8140/packages/current/install.bash | sudo bash
+#
+# install.bash uses pe_repo — a set of Puppet classes applied to the primary
+# that generate the apt/yum repo metadata served over HTTPS.  For the repo to
+# be ready, a puppet run must have been done on the primary after installation.
+# This playbook always triggers that run before calling install.bash.
+#
+# To add packages for a platform not yet on the primary, place the matching
+# platform tarball in packages/puppet-agent/ before running:
+#
+#   puppet-agent-ubuntu-22.04-amd64.tar.gz    (Ubuntu 22.04 x86_64)
+#   puppet-agent-ubuntu-20.04-amd64.tar.gz    (Ubuntu 20.04 x86_64)
+#   puppet-agent-el-8-x86_64.tar.gz           (RHEL/CentOS 8)
+#   puppet-agent-el-7-x86_64.tar.gz           (RHEL/CentOS 7)
+#
+# The playbook will upload and extract it on the primary, then trigger the
+# puppet run so pe_repo serves those packages, then run install.bash.
+#
+- name: Install Puppet Agent
+  hosts: target
+  become: yes
+  gather_facts: yes
+
+  vars:
+    puppet_master: "{{ puppet_master_host | default('puppet') }}"
+    # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
+    agent_pkg_dir: "{{ packages_dir }}/puppet-agent"
+
+  tasks:
+    # ── Derive the PE platform string from the target node's OS facts ─────────
+    # Debian/Ubuntu: ubuntu-22.04-amd64  |  RedHat/CentOS: el-8-x86_64
+    - name: Set target platform string
+      set_fact:
+        pe_platform: >-
+          {%- if ansible_os_family == 'Debian' -%}
+          {{ ansible_distribution | lower }}-{{ ansible_distribution_version }}-{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_architecture }}
+          {%- else -%}
+          el-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}
+          {%- endif -%}
+
+    # ── Always register the PE master with the same SSH credentials ───────────
+    # Needed both for platform tarball upload and for the puppet run below.
+    - name: Register PE master in dynamic inventory
+      add_host:
+        name: pe_master_dynamic
+        ansible_host: "{{ puppet_master }}"
+        ansible_user: "{{ ansible_user }}"
+        ansible_ssh_private_key_file: "{{ ansible_ssh_private_key_file | default(omit) }}"
+        ansible_ssh_common_args: "{{ ansible_ssh_common_args | default(omit) }}"
+        ansible_become: yes
+      changed_when: false
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PREFLIGHT — catch the common enrollment failure scenarios early
+    #   • Time sync   → prevents "certificate not yet valid" (clock skew)
+    #   • Reachability→ prevents "Connection refused" / silent firewall hangs
+    # Policy: time sync is best-effort (warn); master reachability is a hard
+    # block because the catalog run cannot possibly succeed without it.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Clock skew between agent and master makes freshly-signed certificates
+    # appear "not yet valid". Installing + forcing NTP sync removes that class
+    # of failure entirely. Best-effort: never abort the install over this.
+    - name: Ensure time synchronisation (chrony) is installed and running
+      block:
+        - name: Install chrony for clock sync
+          package:
+            name: chrony
+            state: present
+        - name: Enable and start chrony
+          service:
+            name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+            state: started
+            enabled: yes
+        - name: Force an immediate clock step (chronyc makestep)
+          command: chronyc makestep
+          changed_when: false
+          failed_when: false
+      rescue:
+        - name: Warn that time sync could not be configured
+          debug:
+            msg: >-
+              WARNING: could not configure chrony time sync on {{ ansible_fqdn }}.
+              If the system clock is wrong, certificate signing may fail with
+              "certificate not yet valid". Check the clock manually: `date`.
+
+    # Verify the agent can actually reach the master's agent port before we
+    # download install.bash. A clear failure here beats an opaque curl/SSL
+    # hang later. This is a hard block — enrollment is impossible without it.
+    - name: Preflight — check reachability of Puppet master port 8140
+      wait_for:
+        host: "{{ puppet_master }}"
+        port: 8140
+        timeout: 15
+      register: puppet_port_check
+      ignore_errors: yes
+
+    - name: Show Puppet master connectivity remediation (unreachable)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║   PUPPET MASTER UNREACHABLE — enrollment cannot proceed     ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  {{ ansible_fqdn }} cannot reach {{ puppet_master }}:8140."
+          - ""
+          - "  Most likely causes (in order):"
+          - "    1. Firewall blocking 8140/TCP between this node and the master"
+          - "    2. Wrong master host/IP configured on the Infrastructure page"
+          - "    3. Puppet Server not running on the master (systemctl status)"
+          - "    4. DNS: '{{ puppet_master }}' resolves to the wrong address"
+          - ""
+          - "  Verify from this node once fixed:"
+          - "    nc -vz {{ puppet_master }} 8140"
+          - ""
+      when: puppet_port_check is failed
+
+    - name: Abort — Puppet master port 8140 unreachable (see remediation above)
+      fail:
+        msg: "Cannot reach {{ puppet_master }}:8140. Fix connectivity (see above) and re-run."
+      when: puppet_port_check is failed
+
+    # ── Look for a platform tarball on the controller ─────────────────────────
+    - name: Find platform tarball in packages/puppet-agent/
+      find:
+        paths: "{{ agent_pkg_dir }}"
+        patterns: "puppet-agent-{{ pe_platform | trim }}.tar.gz"
+      register: platform_tarball
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Report detected platform and tarball
+      debug:
+        msg: >-
+          Target platform: {{ pe_platform | trim }} |
+          Tarball: {{ platform_tarball.files[0].path | basename
+                      if platform_tarball.files | length > 0
+                      else 'none — primary must already have packages for this platform' }}
+
+    # ── If a tarball is present: upload to primary if not already there ───────
+    - name: Read PE version from primary
+      command: cat /opt/puppetlabs/server/pe_build
+      register: pe_version_raw
+      delegate_to: pe_master_dynamic
+      changed_when: false
+      failed_when: false
+      when: platform_tarball.files | length > 0
+
+    - name: Set PE version fact
+      set_fact:
+        pe_version: "{{ pe_version_raw.stdout | trim }}"
+      when: platform_tarball.files | length > 0 and (pe_version_raw.rc | default(1)) == 0
+
+    - name: Check if platform packages already in PE packages directory
+      find:
+        paths: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
+        patterns: "{{ pe_platform | trim }}-*"
+        file_type: directory
+      register: platform_dirs
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      when: platform_tarball.files | length > 0 and pe_version is defined
+
+    - name: Copy platform tarball to primary
+      copy:
+        src: "{{ platform_tarball.files[0].path }}"
+        dest: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
+      delegate_to: pe_master_dynamic
+      when: >
+        platform_tarball.files | length > 0
+        and pe_version is defined
+        and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
+
+    - name: Extract platform packages into PE packages directory on primary
+      unarchive:
+        src: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
+        dest: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
+        remote_src: yes
+      delegate_to: pe_master_dynamic
+      when: >
+        platform_tarball.files | length > 0
+        and pe_version is defined
+        and (platform_dirs is failed or (platform_dirs.matched | default(0)) == 0)
+
+    # ── Classify primary with pe_repo platform class via PE Node Manager API ───
+    # puppet apply fails here because pe_repo::bulk_pluginsync has internal
+    # `require => Package['pe-java17']` that only exists in a full PE catalog.
+    # The proper fix: add the class to the "PE Master" node group via the
+    # classifier API (cert auth — no password needed), then run puppet agent
+    # so the full catalog applies it with all its dependencies.
+    - name: Derive pe_repo platform class name
+      set_fact:
+        pe_repo_class: "pe_repo::platform::{{ pe_platform | trim | replace('-', '_') | replace('.', '') }}"
+
+    - name: Add pe_repo platform class to PE Master node group
+      shell: |
+        python3 << 'PYEOF'
+        import ssl, json, urllib.request, subprocess, sys
+
+        certname = subprocess.check_output(
+            ['/opt/puppetlabs/bin/puppet', 'config', 'print', 'certname'],
+            text=True
+        ).strip()
+
+        cert = f'/etc/puppetlabs/puppet/ssl/certs/{certname}.pem'
+        key  = f'/etc/puppetlabs/puppet/ssl/private_keys/{certname}.pem'
+        base = 'https://localhost:4433'
+        target_class = '{{ pe_repo_class }}'
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.load_cert_chain(cert, key)
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f'{base}/classifier-api/v1/groups'),
+            context=ctx
+        ) as resp:
+            groups = json.loads(resp.read())
+
+        group = next((g for g in groups if g['name'] == 'PE Master'), None)
+        if not group:
+            print('SKIP: PE Master node group not found')
+            sys.exit(0)
+
+        if target_class in group.get('classes', {}):
+            print(f'ALREADY_CLASSIFIED: {target_class} already present in PE Master group')
+            sys.exit(0)
+
+        body = json.dumps({'classes': {target_class: {}}}).encode()
+        req  = urllib.request.Request(
+            f"{base}/classifier-api/v1/groups/{group['id']}",
+            data=body,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, context=ctx) as resp:
+            resp.read()
+
+        print(f'Classified PE Master with {target_class}')
+        PYEOF
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: classifier_result
+      changed_when: "'Classified PE Master' in classifier_result.stdout"
+
+    - name: Run puppet agent on primary to apply pe_repo classification
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      delegate_to: pe_master_dynamic
+      register: primary_puppet_run
+      changed_when: primary_puppet_run.rc == 2
+      # rc 0=no changes, 2=changes applied — both are success.
+      # failed_when: false so unrelated catalog failures don't abort the job.
+      failed_when: false
+      timeout: 600
+      when: classifier_result is changed
+
+    - name: Show puppet primary run result
+      debug:
+        msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
+
+    # pe_repo configuration may cause pe-puppetserver to restart.
+    # Wait for port 8140 to be accepting connections before proceeding.
+    - name: Wait for PE puppet server port 8140 to be ready
+      wait_for:
+        host: "{{ puppet_master }}"
+        port: 8140
+        timeout: 180
+        delay: 5
+      delegate_to: localhost
+      become: no
+
+    # ── Install agent via the PE master's install script ─────────────────────
+    # install.bash uses the PE master's FQDN (its certname) in all URLs.
+    # The target node may not have DNS for that FQDN — ensure it resolves
+    # by writing an /etc/hosts entry mapping puppet_master → certname.
+    - name: Get PE master certname (FQDN used by install.bash)
+      command: /opt/puppetlabs/bin/puppet config print certname
+      delegate_to: pe_master_dynamic
+      register: pe_master_certname
+      changed_when: false
+
+    - name: Ensure PE master FQDN resolves on target node
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ puppet_master }} {{ pe_master_certname.stdout | trim }}"
+        regexp: "\\s{{ pe_master_certname.stdout | trim | replace('.', '\\.') }}(\\s|$)"
+        state: present
+
+    # Skip download + install if puppet-agent binary is already present.
+    # This makes the playbook safe to re-run after a timeout or cancellation.
+    - name: Check if puppet-agent is already installed
+      stat:
+        path: /opt/puppetlabs/bin/puppet
+      register: puppet_bin_pre
+
+    - name: Download PE agent install script from primary
+      get_url:
+        url: "https://{{ puppet_master }}:8140/packages/current/install.bash"
+        dest: /tmp/pe-agent-install.bash
+        mode: '0755'
+        validate_certs: no
+      when: not puppet_bin_pre.stat.exists
+
+    - name: Run PE agent install script
+      shell: bash /tmp/pe-agent-install.bash
+      register: pe_install
+      timeout: 600
+      when: not puppet_bin_pre.stat.exists
+
+    - name: Show install script output
+      debug:
+        msg: "{{ pe_install.stdout_lines | default(['(skipped — puppet-agent already installed)']) }}"
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Check puppet-agent binary exists
+      stat:
+        path: /opt/puppetlabs/bin/puppet
+      register: puppet_bin
+
+    - name: Fail if puppet-agent binary is missing after install
+      fail:
+        msg: >-
+          puppet-agent binary not found after install script completed.
+          Last 20 lines of install output:
+          {{ pe_install.stdout_lines[-20:] | join('\n') }}
+      when: not puppet_bin.stat.exists and not puppet_bin_pre.stat.exists
+
+    - name: Get puppet-agent version
+      command: /opt/puppetlabs/bin/puppet --version
+      register: puppet_ver
+      changed_when: false
+
+    - name: Check puppet agent service status
+      command: systemctl is-active puppet
+      register: puppet_svc
+      changed_when: false
+      failed_when: false
+
+    - name: Puppet Agent installed
+      debug:
+        msg: >-
+          Puppet Agent {{ puppet_ver.stdout | trim }} installed on {{ ansible_fqdn }}.
+          Service: {{ puppet_svc.stdout }}. Proceeding to certificate signing.
+
+    # ── Sign certificate and complete PE console enrollment ───────────────────
+    # Use `puppet config print certname` — not ansible_fqdn — as the
+    # authoritative cert name. ansible_fqdn may return a short hostname
+    # while Puppet uses the full FQDN (e.g. manager vs manager.lab.cm).
+    - name: Get puppet certname of target node
+      command: /opt/puppetlabs/bin/puppet config print certname
+      register: puppet_certname
+      changed_when: false
+
+    # If the signed cert file is already present, the node is already enrolled
+    # (e.g. the PE master itself, or a re-run). Skip CSR wait and sign.
+    - name: Check if puppet agent certificate is already signed
+      stat:
+        path: "/etc/puppetlabs/puppet/ssl/certs/{{ puppet_certname.stdout | trim }}.pem"
+      register: agent_cert_file
+
+    - name: Wait for agent CSR to appear on PE master (up to 2 min)
+      shell: /opt/puppetlabs/bin/puppetserver ca list 2>/dev/null | grep -qF "{{ puppet_certname.stdout | trim }}"
+      delegate_to: pe_master_dynamic
+      register: csr_wait
+      retries: 12
+      delay: 10
+      until: csr_wait.rc == 0
+      changed_when: false
+      ignore_errors: yes
+      when: not agent_cert_file.stat.exists
+
+    - name: Sign puppet agent certificate on PE master
+      command: /opt/puppetlabs/bin/puppetserver ca sign --certname {{ puppet_certname.stdout | trim }}
+      delegate_to: pe_master_dynamic
+      register: cert_sign
+      changed_when: cert_sign.rc == 0
+      failed_when: >
+        cert_sign.rc != 0
+        and 'already' not in (cert_sign.stderr | lower)
+      when: not agent_cert_file.stat.exists
+
+    - name: Show certificate signing result
+      debug:
+        msg: "{{ cert_sign.stdout | trim or cert_sign.stderr | trim }}"
+      when: not agent_cert_file.stat.exists
+
+    # First catalog run. Do NOT hard-fail yet — we inspect the output for the
+    # SSL/clock failure signatures that indicate stale certs from a cloned or
+    # reinstalled VM, and self-heal below if needed.
+    - name: Run first puppet catalog to complete PE console enrollment
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      register: first_run
+      changed_when: first_run.rc == 2
+      failed_when: false
+      timeout: 300
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SELF-HEAL — stale certificate recovery (VM clone / reinstalled master)
+    #
+    # When a VM is cloned, /etc/puppetlabs/puppet/ssl is copied too, so the agent
+    # presents a certificate the (new) master's CA never signed. Likewise a
+    # reinstalled master has a fresh CA that rejects the old agent cert. Both
+    # surface as one of these signatures. We only act when detected, then retry
+    # exactly once — a clean install never enters this path.
+    # ══════════════════════════════════════════════════════════════════════════
+    - name: Detect stale-certificate failure signature
+      set_fact:
+        puppet_ssl_stale: >-
+          {{ (first_run.rc not in [0, 2])
+             and ( ((first_run.stdout | default('')) ~ (first_run.stderr | default('')))
+                   | regex_search('(certificate verify failed|not yet valid|certificate revoked|The certificate.*does not match|SSL_connect|CA certificate is not yet|unable to get local issuer)',
+                                  ignorecase=True) is not none ) }}
+
+    - name: Stale certificate detected — beginning recovery
+      debug:
+        msg: >-
+          Detected a stale/mismatched Puppet certificate on {{ ansible_fqdn }}
+          (typical after VM cloning or a master reinstall). Clearing the old
+          certificate on both ends and re-enrolling once.
+      when: puppet_ssl_stale | bool
+
+    - name: Revoke + clean old cert on the PE master
+      command: /opt/puppetlabs/bin/puppetserver ca clean --certname {{ puppet_certname.stdout | trim }}
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      changed_when: true
+      when: puppet_ssl_stale | bool
+
+    - name: Remove the stale SSL directory on the agent
+      file:
+        path: /etc/puppetlabs/puppet/ssl
+        state: absent
+      when: puppet_ssl_stale | bool
+
+    - name: Re-submit CSR (generates a fresh key + request)
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize --waitforcert 0
+      failed_when: false
+      changed_when: false
+      when: puppet_ssl_stale | bool
+
+    - name: Wait for the fresh CSR on the master (up to 2 min)
+      shell: /opt/puppetlabs/bin/puppetserver ca list 2>/dev/null | grep -qF "{{ puppet_certname.stdout | trim }}"
+      delegate_to: pe_master_dynamic
+      register: csr_wait_retry
+      retries: 12
+      delay: 10
+      until: csr_wait_retry.rc == 0
+      changed_when: false
+      failed_when: false
+      when: puppet_ssl_stale | bool
+
+    - name: Sign the fresh certificate on the master
+      command: /opt/puppetlabs/bin/puppetserver ca sign --certname {{ puppet_certname.stdout | trim }}
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      changed_when: true
+      when: puppet_ssl_stale | bool
+
+    - name: Retry first puppet catalog after re-enrollment
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      register: first_run_retry
+      changed_when: first_run_retry.rc == 2
+      failed_when: false
+      timeout: 300
+      when: puppet_ssl_stale | bool
+
+    # Consolidate the outcome from whichever path we took.
+    - name: Determine final enrollment result
+      set_fact:
+        puppet_final_rc: "{{ (first_run_retry.rc if puppet_ssl_stale | bool else first_run.rc) | int }}"
+
+    - name: Fail if enrollment still unsuccessful
+      fail:
+        msg: >-
+          Puppet enrollment did not complete (rc={{ puppet_final_rc }}).
+          Last output:
+          {{ (first_run_retry.stdout_lines | default(first_run.stdout_lines | default([])))[-20:] | join('\n') }}
+      when: puppet_final_rc | int not in [0, 2]
+
+    - name: Node enrolled in Puppet Enterprise
+      debug:
+        msg: >-
+          {{ ansible_fqdn }} is now enrolled in Puppet Enterprise.
+          Certificate signed{{ ' (re-enrolled after stale-cert recovery)' if puppet_ssl_stale | bool else '' }}.
+          First catalog applied. The node appears in the PE console at
+          https://{{ puppet_master }}.

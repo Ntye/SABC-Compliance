@@ -1,0 +1,125 @@
+---
+# Wazuh Agent installation tasks — Debian/Ubuntu (APT).
+# Included by install_wazuh_agent.yml when ansible_os_family == 'Debian'.
+#
+# Inherits from parent play:
+#   wazuh_manager, wazuh_agent_group, wazuh_airgap,
+#   agent_pkg_dir, wazuh_agent_installed, agent_offline_pkgs, inet_check
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ONLINE — download from packages.wazuh.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Install prerequisites (Debian, online)
+  apt:
+    name:
+      - gnupg
+      - apt-transport-https
+      - ca-certificates
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Create /usr/share/keyrings directory (Debian, online)
+  file:
+    path: /usr/share/keyrings
+    state: directory
+    mode: '0755'
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+# Download the GPG key on the controller (which has internet) and push it
+# to the target over the existing SSH channel — avoids requiring the target
+# to open outbound HTTPS just to fetch a 4 KB key file.
+- name: Download Wazuh GPG key on controller (Debian, online)
+  get_url:
+    url: "https://packages.wazuh.com/key/GPG-KEY-WAZUH"
+    dest: /tmp/GPG-KEY-WAZUH
+    mode: '0644'
+  delegate_to: localhost
+  become: no
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Upload Wazuh GPG key to target (Debian, online)
+  copy:
+    src: /tmp/GPG-KEY-WAZUH
+    dest: /tmp/GPG-KEY-WAZUH
+    mode: '0644'
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Import Wazuh GPG key into keyring (Debian, online)
+  shell: >-
+    gpg --no-default-keyring
+        --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg
+        --import /tmp/GPG-KEY-WAZUH
+  args:
+    creates: /usr/share/keyrings/wazuh.gpg
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Set keyring permissions (Debian, online)
+  file:
+    path: /usr/share/keyrings/wazuh.gpg
+    mode: '0644'
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Add Wazuh APT repository (Debian, online)
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main"
+    state: present
+    filename: wazuh
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Install wazuh-agent from APT (Debian, online)
+  apt:
+    name: wazuh-agent
+    state: present
+    update_cache: yes
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+    WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
+  register: apt_install
+  retries: 3
+  delay: 10
+  until: apt_install is succeeded
+  when:
+    - not wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AIRGAP — install from local .deb package
+# ─────────────────────────────────────────────────────────────────────────────
+
+- name: Upload Wazuh agent .deb to node (airgap)
+  copy:
+    src: "{{ item.path }}"
+    dest: "/tmp/{{ item.path | basename }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+  when:
+    - wazuh_airgap
+    - not wazuh_agent_installed.stat.exists
+
+- name: Install wazuh-agent from .deb (airgap)
+  apt:
+    deb: "/tmp/{{ item.path | basename }}"
+    state: present
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+    WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+  when:
+    - wazuh_airgap
+    - not wazuh_agent_installed.stat.exists

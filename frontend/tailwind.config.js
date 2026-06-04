@@ -1,0 +1,46 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  // dark: variants activate when <html data-mode="dark"> is set
+  darkMode: ['selector', '[data-mode="dark"]'],
+  theme: {
+    extend: {
+      colors: {
+        // Brand and accent use RGB triplets so opacity variants (bg-brand/15) work
+        brand: {
+          DEFAULT: 'rgb(var(--brand-rgb) / <alpha-value>)',
+          light: 'var(--brand-light)',
+        },
+        accent: {
+          DEFAULT: 'rgb(var(--accent-rgb) / <alpha-value>)',
+          light: 'var(--accent-light)',
+        },
+        surface: {
+          page: 'var(--bg-page)',
+          card: 'var(--bg-card)',
+        },
+        sidebar: {
+          bg: 'var(--sidebar-bg)',
+        },
+        // Console (log output) stays fixed — always dark regardless of theme
+        console: {
+          bg: '#0C0E0F',
+          surface: '#131618',
+          text: '#E3E8EB',     // primary log text — soft, readable white
+          muted: '#9BA6AE',    // secondary text — light gray, still legible on black
+          faint: '#6B747B',    // truly de-emphasised (placeholders only)
+          accent: '#00D4AA',
+          success: '#2ECC8A',
+          warning: '#F0A500',
+          danger: '#E05555',
+          task: '#48A9FF',
+        },
+      },
+      fontFamily: {
+        sans: ['DM Sans', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'Fira Code', 'monospace'],
+      },
+    },
+  },
+  plugins: [],
+}
