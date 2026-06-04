@@ -1,47 +1,47 @@
 import config from '../config.js'
 
 export function getGatewayUrl() {
-  return localStorage.getItem('bdc_gateway_url') || config.apiBase
+  return localStorage.getItem('sabc_gateway_url') || config.apiBase
 }
 
 export function setGatewayUrl(url) {
-  localStorage.setItem('bdc_gateway_url', url)
+  localStorage.setItem('sabc_gateway_url', url)
 }
 
 export function getStoredApiKey() {
-  return localStorage.getItem('bdc_api_key') || ''
+  return localStorage.getItem('sabc_api_key') || ''
 }
 
 export function setApiKey(key) {
   if (key) {
-    localStorage.setItem('bdc_api_key', key)
+    localStorage.setItem('sabc_api_key', key)
   } else {
-    localStorage.removeItem('bdc_api_key')
+    localStorage.removeItem('sabc_api_key')
   }
 }
 
 export function clearApiKey() {
-  localStorage.removeItem('bdc_api_key')
+  localStorage.removeItem('sabc_api_key')
 }
 
 export function getJwt() {
-  return localStorage.getItem('bdc_jwt_token') || ''
+  return localStorage.getItem('sabc_jwt_token') || ''
 }
 
 export function setJwt(token) {
   if (token) {
-    localStorage.setItem('bdc_jwt_token', token)
+    localStorage.setItem('sabc_jwt_token', token)
   } else {
-    localStorage.removeItem('bdc_jwt_token')
+    localStorage.removeItem('sabc_jwt_token')
   }
 }
 
 export function getUserRole() {
-  return localStorage.getItem('bdc_user_role') || ''
+  return localStorage.getItem('sabc_user_role') || ''
 }
 
 export function getUsername() {
-  return localStorage.getItem('bdc_user_username') || ''
+  return localStorage.getItem('sabc_user_username') || ''
 }
 
 export function isAuthenticated() {
@@ -49,10 +49,10 @@ export function isAuthenticated() {
 }
 
 export function logout() {
-  localStorage.removeItem('bdc_jwt_token')
-  localStorage.removeItem('bdc_user_role')
-  localStorage.removeItem('bdc_user_username')
-  localStorage.removeItem('bdc_api_key')
+  localStorage.removeItem('sabc_jwt_token')
+  localStorage.removeItem('sabc_user_role')
+  localStorage.removeItem('sabc_user_username')
+  localStorage.removeItem('sabc_api_key')
 }
 
 async function request(method, path, body) {
@@ -109,14 +109,14 @@ async function request(method, path, body) {
 export async function login(username, password) {
   const data = await request('POST', '/auth/login', { username, password })
   setJwt(data.access_token)
-  if (data.role)     localStorage.setItem('bdc_user_role', data.role)
-  if (data.username) localStorage.setItem('bdc_user_username', data.username)
+  if (data.role)     localStorage.setItem('sabc_user_role', data.role)
+  if (data.username) localStorage.setItem('sabc_user_username', data.username)
   // Auto-apply the personal API key returned by the server.
   // This replaces any stale key from a previous session.
   if (data.api_key) {
-    localStorage.setItem('bdc_api_key', data.api_key)
+    localStorage.setItem('sabc_api_key', data.api_key)
   } else {
-    localStorage.removeItem('bdc_api_key')
+    localStorage.removeItem('sabc_api_key')
   }
   return data
 }

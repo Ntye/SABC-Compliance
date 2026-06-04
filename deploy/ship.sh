@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# BdC Compliance Platform — EC2 Deployment Script
+# SABC Compliance Platform — EC2 Deployment Script
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Usage:
@@ -12,7 +12,7 @@
 #
 # What it does:
 #   1. Builds Docker images on your local machine
-#   2. Saves them to deploy/bdc-images.tar.gz (~200MB compressed)
+#   2. Saves them to deploy/sabc-images.tar.gz (~200MB compressed)
 #   3. Transfers the archive + compose file + .env to the EC2 instance
 #   4. Loads images and starts the platform with docker compose
 #
@@ -26,8 +26,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARCHIVE="$SCRIPT_DIR/bdc-images.tar.gz"
-REMOTE_DIR="/opt/bdc-compliance"
+ARCHIVE="$SCRIPT_DIR/sabc-images.tar.gz"
+REMOTE_DIR="/opt/sabc-compliance"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 TARGET=""
@@ -69,7 +69,7 @@ build_images() {
 
   if [[ "$BUNDLE" == true ]]; then
     info "Building bundled image (with airgap packages) ..."
-    docker build -f backend/Dockerfile.bundle -t bdc-compliance-backend:bundled backend/
+    docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
   fi
 
   ok "Images built"
@@ -79,9 +79,9 @@ build_images() {
 save_images() {
   info "Saving images to $ARCHIVE ..."
 
-  local images="bdc-compliance-backend:latest bdc-compliance-frontend:latest"
+  local images="sabc-compliance-backend:latest sabc-compliance-frontend:latest"
   if [[ "$BUNDLE" == true ]]; then
-    images="bdc-compliance-backend:bundled bdc-compliance-frontend:latest"
+    images="sabc-compliance-backend:bundled sabc-compliance-frontend:latest"
   fi
 
   docker save $images | gzip > "$ARCHIVE"
@@ -163,7 +163,7 @@ transfer() {
   remote "sudo mkdir -p $REMOTE_DIR && sudo chown \$(whoami):\$(whoami) $REMOTE_DIR"
 
   info "Transferring images archive (this may take a few minutes) ..."
-  scp -o StrictHostKeyChecking=no "$ARCHIVE" "$TARGET:$REMOTE_DIR/bdc-images.tar.gz"
+  scp -o StrictHostKeyChecking=no "$ARCHIVE" "$TARGET:$REMOTE_DIR/sabc-images.tar.gz"
 
   info "Transferring compose file and env ..."
   scp -o StrictHostKeyChecking=no "$PROJECT_DIR/docker-compose.yml" "$TARGET:$REMOTE_DIR/"
@@ -190,7 +190,7 @@ ENV_EOF
 # ── Step 5: Load images and start ────────────────────────────────────────────
 deploy() {
   info "Loading Docker images on $TARGET ..."
-  remote "cd $REMOTE_DIR && docker load -i bdc-images.tar.gz"
+  remote "cd $REMOTE_DIR && docker load -i sabc-images.tar.gz"
 
   info "Starting platform ..."
   remote "cd $REMOTE_DIR && docker compose up -d"
@@ -198,7 +198,7 @@ deploy() {
   ok "Platform deployed!"
   echo ""
   echo "══════════════════════════════════════════════════════"
-  echo "  BdC Compliance Platform is running on:"
+  echo "  SABC Compliance Platform is running on:"
   echo ""
 
   # Try to get the public IP

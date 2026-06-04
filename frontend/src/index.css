@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── CSS custom properties – defaults (BdC, light mode) ─────────────────────
+/* ── CSS custom properties – defaults (SABC, light mode) ─────────────────────
    ThemeContext overwrites these at runtime via style.setProperty.
    They also serve as fallback for the initial paint before React hydrates.    */
 :root {

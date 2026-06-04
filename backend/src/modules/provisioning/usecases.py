@@ -274,7 +274,7 @@ class InstallServiceUseCase:
             if host:
                 extra_vars["wazuh_manager_host"] = host
 
-        pe_password_used = extra_vars.get("pe_console_password", "BdCPuppet1!")
+        pe_password_used = extra_vars.get("pe_console_password", "SABCPuppet1!")
 
         async def on_complete(job: Job, _node: Node | None) -> None:
             if job.status != "success":

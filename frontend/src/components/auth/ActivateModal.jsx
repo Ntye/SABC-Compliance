@@ -47,7 +47,7 @@ export default function ActivateModal({ onClose }) {
               type="password"
               value={pasted}
               onChange={(e) => setPasted(e.target.value)}
-              placeholder="bdc_..."
+              placeholder="sabc_..."
               className="mt-1 w-full px-3 py-2 text-[13px] font-mono border border-gray-200 rounded-md focus:border-brand focus:ring-1 focus:ring-brand outline-none"
             />
           </label>

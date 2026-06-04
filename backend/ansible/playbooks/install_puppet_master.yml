@@ -23,7 +23,7 @@
     # PE console admin password — override via extra_vars: pe_console_password=MySecurePass1!
     # Must be ≥12 chars and contain upper, lower, digit, and special character.
     # --extra-vars @file.json (highest Ansible precedence) overrides this default.
-    pe_console_password: "BdCPuppet2025!"
+    pe_console_password: "SABCPuppet2025!"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 

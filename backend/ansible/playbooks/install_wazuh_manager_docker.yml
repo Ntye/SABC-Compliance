@@ -210,7 +210,7 @@
       shell: |
         openssl req -x509 -newkey rsa:4096 -keyout /etc/ssl/wazuh/root-ca.key \
           -out /etc/ssl/wazuh/root-ca.pem -days 3650 -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-ca"
+          -subj "/C=CM/O=SABC/CN=wazuh-ca"
       args:
         creates: /etc/ssl/wazuh/root-ca.pem
 
@@ -218,7 +218,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/wazuh-indexer.key \
           -out /etc/ssl/wazuh/wazuh-indexer.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-indexer"
+          -subj "/C=CM/O=SABC/CN=wazuh-indexer"
         openssl x509 -req -in /etc/ssl/wazuh/wazuh-indexer.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/wazuh-indexer.pem -days 3650 -sha256
@@ -229,7 +229,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/filebeat.key \
           -out /etc/ssl/wazuh/filebeat.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-manager"
+          -subj "/C=CM/O=SABC/CN=wazuh-manager"
         openssl x509 -req -in /etc/ssl/wazuh/filebeat.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/filebeat.pem -days 3650 -sha256
@@ -240,7 +240,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/dashboard.key \
           -out /etc/ssl/wazuh/dashboard.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-dashboard"
+          -subj "/C=CM/O=SABC/CN=wazuh-dashboard"
         openssl x509 -req -in /etc/ssl/wazuh/dashboard.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/dashboard.pem -days 3650 -sha256

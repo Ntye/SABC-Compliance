@@ -361,7 +361,7 @@ def _detect_admin_user() -> str:
 # ── Setup script ──────────────────────────────────────────────────────────────
 
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
-# BdC Compliance Platform — Node Bootstrap Script
+# SABC Compliance Platform — Node Bootstrap Script
 #
 # Run this directly on the target server with root privileges:
 #   sudo bash setup-node.sh
@@ -383,7 +383,7 @@ PLATFORM_KEY="__PLATFORM_PUBLIC_KEY__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  BdC Compliance — Node Bootstrap"
+echo "  SABC Compliance — Node Bootstrap"
 echo "  Host: $(hostname -f 2>/dev/null || hostname)"
 echo "══════════════════════════════════════════════════════"
 echo ""

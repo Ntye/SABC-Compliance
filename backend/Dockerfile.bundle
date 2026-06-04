@@ -11,19 +11,19 @@
 #   #    (see README for the full export command)
 #
 #   # 2. Build the standard backend image:
-#   docker build -t bdc-compliance-backend ./backend
+#   docker build -t sabc-compliance-backend ./backend
 #
 #   # 3. Build the bundle image on top of it:
-#   docker build -f backend/Dockerfile.bundle -t bdc-compliance-backend:bundle ./backend
+#   docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundle ./backend
 #
 #   # 4. Export the bundle image to ship to an air-gapped machine:
-#   docker save bdc-compliance-backend:bundle | gzip > bdc-backend-bundle.tar.gz
+#   docker save sabc-compliance-backend:bundle | gzip > sabc-backend-bundle.tar.gz
 #
 # On the air-gapped machine:
-#   docker load < bdc-backend-bundle.tar.gz
+#   docker load < sabc-backend-bundle.tar.gz
 #   # Run as normal with docker-compose — the entrypoint seeds packages on first start.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM bdc-compliance-backend:latest
+FROM sabc-compliance-backend:latest
 
 # /app/bundled is NOT declared as a VOLUME so these files survive save/load.
 COPY packages/ /app/bundled/

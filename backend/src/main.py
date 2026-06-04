@@ -47,8 +47,8 @@ logger = logging.getLogger(__name__)
 
 _BANNER = """
 ╔══════════════════════════════════════════════════════╗
-║          BdC Compliance Platform  v1.0.0             ║
-║          Boissons du Cameroun                        ║
+║          SABC Compliance Platform  v1.0.0            ║
+║          Société Anonyme des Brasseries du Cameroun  ║
 ╠══════════════════════════════════════════════════════╣
 ║  API:     http://0.0.0.0:{port:<5}                      ║
 ║  Docs:    http://localhost:{port:<5}/docs                ║
@@ -216,10 +216,10 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="BdC Compliance Platform API",
+        title="SABC Compliance Platform API",
         version="1.0.0",
         description="""
-## BdC Integrated Linux Compliance Platform
+## SABC Integrated Linux Compliance Platform
 
 Manages a fleet of Linux servers (Rocky Linux 9 + Ubuntu 22.04) with automated
 compliance enforcement across **CIS Benchmarks**, **ISO/IEC 27001**, and **PCI-DSS**.
@@ -229,7 +229,7 @@ Wazuh detects a violation → webhook → Puppet remediation → recorded result
 
 ### Authentication
 Two methods accepted on all protected endpoints:
-- `X-API-Key: bdc_...` — machine-to-machine API key
+- `X-API-Key: sabc_...` — machine-to-machine API key
 - `Authorization: Bearer <jwt>` — user session token (from POST /auth/login)
         """,
         lifespan=lifespan,

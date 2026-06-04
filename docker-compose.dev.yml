@@ -15,8 +15,8 @@ services:
   # ── Backend: FastAPI + Ansible ─────────────────────────────────────────────
   backend:
     build: ./backend          # built once — deps cached; rebuild only when
-    image: bdc-compliance-backend  # requirements.txt changes
-    container_name: bdc-backend
+    image: sabc-compliance-backend  # requirements.txt changes
+    container_name: sabc-backend
     restart: unless-stopped
     env_file: .env
     environment:
@@ -34,7 +34,7 @@ services:
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     networks:
-      - bdc-net
+      - sabc-net
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
       interval: 15s
@@ -55,7 +55,7 @@ services:
   # ── Frontend: Vite dev server ──────────────────────────────────────────────
   frontend:
     image: node:20-alpine
-    container_name: bdc-frontend
+    container_name: sabc-frontend
     working_dir: /app
     volumes:
       - ./frontend:/app
@@ -69,7 +69,7 @@ services:
       backend:
         condition: service_healthy
     networks:
-      - bdc-net
+      - sabc-net
     # Vite proxies /api → backend:3000 (configured in vite.config.js),
     # including WebSocket job-log streaming — same behaviour as Nginx in prod.
 
@@ -79,5 +79,5 @@ volumes:
   frontend-node-modules:    # isolated node_modules volume (not on the host)
 
 networks:
-  bdc-net:
+  sabc-net:
     driver: bridge

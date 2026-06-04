@@ -2,12 +2,12 @@ import { Moon, Palette, RotateCcw, Sun, X } from 'lucide-react'
 import { useTheme, THEMES } from '../../context/ThemeContext.jsx'
 import { useLang } from '../../context/LangContext.jsx'
 
-const THEME_KEYS = ['bdc', 'ocean', 'forest', 'midnight', 'slate', 'sunset']
+const THEME_KEYS = ['sabc', 'ocean', 'forest', 'midnight', 'slate', 'sunset']
 
 // Swatch colours shown on the grid cards (always fixed, not CSS-var driven,
 // so the preview makes sense regardless of current active theme)
 const SWATCH = {
-  bdc:      { primary: '#C0281F', secondary: '#D97706' },
+  sabc:     { primary: '#C0281F', secondary: '#D97706' },
   ocean:    { primary: '#1D4ED8', secondary: '#0891B2' },
   forest:   { primary: '#059669', secondary: '#16A34A' },
   midnight: { primary: '#4F46E5', secondary: '#7C3AED' },
@@ -34,7 +34,7 @@ export default function ThemePanel({ onClose }) {
   const { theme, mode, customPrimary, customSecondary, setTheme, setMode, setCustomColors, resetToDefaults } = useTheme()
   const { lang, t, setLang } = useLang()
 
-  const preset = THEMES[theme]?.[mode] ?? THEMES.bdc.light
+  const preset = THEMES[theme]?.[mode] ?? THEMES.sabc.light
   const effectivePrimary   = customPrimary   || preset.brand
   const effectiveSecondary = customSecondary || preset.accent
 

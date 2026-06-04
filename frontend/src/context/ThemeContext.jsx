@@ -24,7 +24,7 @@ function mixWithBlack(hex, weight = 0.20) {
 // ── preset data ───────────────────────────────────────────────────────────────
 
 export const THEMES = {
-  bdc:      { light: { brand: '#C0281F', accent: '#D97706' }, dark: { brand: '#E8453A', accent: '#F59E0B' } },
+  sabc:      { light: { brand: '#C0281F', accent: '#D97706' }, dark: { brand: '#E8453A', accent: '#F59E0B' } },
   ocean:    { light: { brand: '#1D4ED8', accent: '#0891B2' }, dark: { brand: '#3B82F6', accent: '#22D3EE' } },
   forest:   { light: { brand: '#059669', accent: '#16A34A' }, dark: { brand: '#10B981', accent: '#22C55E' } },
   midnight: { light: { brand: '#4F46E5', accent: '#7C3AED' }, dark: { brand: '#6366F1', accent: '#A78BFA' } },
@@ -66,7 +66,7 @@ function applyVars(theme, mode, customPrimary, customSecondary) {
   root.style.setProperty('--border-strong', structural.borderStrong)
   root.style.setProperty('--sidebar-bg',    structural.sidebarBg)
 
-  const preset = THEMES[theme]?.[mode] ?? THEMES.bdc.light
+  const preset = THEMES[theme]?.[mode] ?? THEMES.sabc.light
   const brand  = customPrimary  || preset.brand
   const accent = customSecondary || preset.accent
 
@@ -81,25 +81,25 @@ function applyVars(theme, mode, customPrimary, customSecondary) {
 const ThemeContext = createContext()
 
 export function ThemeProvider({ children }) {
-  const [theme,         setThemeState]   = useState(() => localStorage.getItem('bdc_theme')          || 'bdc')
-  const [mode,          setModeState]    = useState(() => localStorage.getItem('bdc_mode')           || 'light')
-  const [customPrimary, setCustomPrimary]= useState(() => localStorage.getItem('bdc_custom_primary') || '')
-  const [customSecondary,setCustomSecondary]=useState(()=>localStorage.getItem('bdc_custom_secondary')||'')
+  const [theme,         setThemeState]   = useState(() => localStorage.getItem('sabc_theme')          || 'sabc')
+  const [mode,          setModeState]    = useState(() => localStorage.getItem('sabc_mode')           || 'light')
+  const [customPrimary, setCustomPrimary]= useState(() => localStorage.getItem('sabc_custom_primary') || '')
+  const [customSecondary,setCustomSecondary]=useState(()=>localStorage.getItem('sabc_custom_secondary')||'')
 
-  function setTheme(t) { setThemeState(t); localStorage.setItem('bdc_theme', t) }
-  function setMode(m)  { setModeState(m);  localStorage.setItem('bdc_mode',  m) }
+  function setTheme(t) { setThemeState(t); localStorage.setItem('sabc_theme', t) }
+  function setMode(m)  { setModeState(m);  localStorage.setItem('sabc_mode',  m) }
 
   function setCustomColors({ primary, secondary }) {
     const p = primary  ?? customPrimary
     const s = secondary ?? customSecondary
-    setCustomPrimary(p);  p ? localStorage.setItem('bdc_custom_primary', p)   : localStorage.removeItem('bdc_custom_primary')
-    setCustomSecondary(s);s ? localStorage.setItem('bdc_custom_secondary', s) : localStorage.removeItem('bdc_custom_secondary')
+    setCustomPrimary(p);  p ? localStorage.setItem('sabc_custom_primary', p)   : localStorage.removeItem('sabc_custom_primary')
+    setCustomSecondary(s);s ? localStorage.setItem('sabc_custom_secondary', s) : localStorage.removeItem('sabc_custom_secondary')
   }
 
   function resetToDefaults() {
-    setThemeState('bdc'); setModeState('light')
+    setThemeState('sabc'); setModeState('light')
     setCustomPrimary(''); setCustomSecondary('')
-    ;['bdc_theme','bdc_mode','bdc_custom_primary','bdc_custom_secondary'].forEach(k => localStorage.removeItem(k))
+    ;['sabc_theme','sabc_mode','sabc_custom_primary','sabc_custom_secondary'].forEach(k => localStorage.removeItem(k))
   }
 
   useEffect(() => {
