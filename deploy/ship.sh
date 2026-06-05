@@ -61,18 +61,24 @@ remote() {
   ssh -o StrictHostKeyChecking=no "$TARGET" "$@"
 }
 
+# docker on the remote may require sudo (user not yet in docker group)
+remote_docker() {
+  ssh -o StrictHostKeyChecking=no "$TARGET" "sudo $*"
+}
+
 # ── Step 1: Build images ────────────────────────────────────────────────────
 build_images() {
-  info "Building Docker images ..."
+  info "Building Docker images for linux/amd64 ..."
   cd "$PROJECT_DIR"
-  docker compose build
+  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build
 
   if [[ "$BUNDLE" == true ]]; then
     info "Building bundled image (with airgap packages) ..."
-    docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
+    DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
+      -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
   fi
 
-  ok "Images built"
+  ok "Images built (linux/amd64)"
 }
 
 # ── Step 2: Save images to archive ──────────────────────────────────────────
@@ -94,7 +100,7 @@ save_images() {
 # ── Step 3: Install Docker on EC2 (first time only) ─────────────────────────
 setup_ec2() {
   info "Installing Docker on $TARGET ..."
-  remote "bash -s" << 'SETUP_EOF'
+  remote "sudo bash -s" << 'SETUP_EOF'
 set -e
 
 if command -v docker &>/dev/null && command -v docker compose &>/dev/null; then
@@ -182,7 +188,7 @@ ENV_EOF
   fi
 
   # Create packages directory (bind mount target)
-  remote "mkdir -p $REMOTE_DIR/backend/packages"
+  remote "sudo mkdir -p $REMOTE_DIR/backend/packages && sudo chown -R \$(whoami):\$(whoami) $REMOTE_DIR"
 
   ok "Files transferred"
 }
@@ -190,10 +196,10 @@ ENV_EOF
 # ── Step 5: Load images and start ────────────────────────────────────────────
 deploy() {
   info "Loading Docker images on $TARGET ..."
-  remote "cd $REMOTE_DIR && docker load -i sabc-images.tar.gz"
+  remote_docker "docker load -i $REMOTE_DIR/sabc-images.tar.gz"
 
   info "Starting platform ..."
-  remote "cd $REMOTE_DIR && docker compose up -d"
+  remote_docker "docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d"
 
   ok "Platform deployed!"
   echo ""
@@ -203,7 +209,7 @@ deploy() {
 
   # Try to get the public IP
   local pub_ip
-  pub_ip=$(remote "curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || hostname -I | awk '{print \$1}'")
+  pub_ip=$(remote "curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || hostname -I | awk '{print \$1}'" 2>/dev/null || echo "<ec2-public-ip>")
   echo "  UI:      http://${pub_ip}"
   echo "  API:     http://${pub_ip}/api"
   echo "  Swagger: http://${pub_ip}:3000/docs"
