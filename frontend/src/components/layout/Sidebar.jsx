@@ -40,7 +40,7 @@ export default function Sidebar() {
     <aside className="w-[220px] flex-shrink-0 bg-sidebar-bg flex flex-col h-full">
       {/* Logo */}
       <div className="px-4 pt-4 pb-3 border-b border-white/5">
-        <img src={sabcLogo} alt="SABC" className="h-9 brightness-0 invert opacity-90" />
+        <img src={sabcLogo} alt="SABC" className="h-9" />
         <div className="text-[10px] text-gray-500 mt-1.5 pl-0.5">{t('nav.platform')}</div>
       </div>
 
