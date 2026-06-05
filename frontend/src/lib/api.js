@@ -194,6 +194,10 @@ export async function checkNodeDns(id) {
   return request('POST', `/nodes/${id}/check-dns`)
 }
 
+export async function fixNodeDns(id, checks) {
+  return request('POST', `/nodes/${id}/fix-dns`, { checks })
+}
+
 export async function downloadSetupScript() {
   const base = getGatewayUrl()
   const headers = {}
