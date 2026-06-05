@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { login } from '../lib/api.js'
 import Spinner from '../components/common/Spinner.jsx'
 import { useT } from '../context/LangContext.jsx'
-import sabcLogo from '../assets/sabc-logo.svg'
+import sabcLogo from '../assets/sabc-logo.png'
 
 export default function LoginPage() {
   const navigate = useNavigate()
