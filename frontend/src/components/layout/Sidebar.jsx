@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { getGatewayUrl, logout, setGatewayUrl } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
-import sabcLogo from '../../assets/sabc-logo.svg'
+import sabcLogo from '../../assets/sabc-logo.png'
 
 export default function Sidebar() {
   const t = useT()

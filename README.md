@@ -581,7 +581,7 @@ SABC-Compliance/
 │   └── docker-entrypoint.sh
 ├── frontend/
 │   ├── src/
-│   │   ├── assets/        sabc-logo.svg
+│   │   ├── assets/        sabc-logo.png
 │   │   ├── components/    Layout, auth, common, settings UI components
 │   │   ├── context/       ThemeContext, LangContext (EN + FR)
 │   │   ├── i18n/          translations.js (English + French)
