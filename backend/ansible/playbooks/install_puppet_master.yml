@@ -2,8 +2,8 @@
 # Installs Puppet Server on the target node.
 #
 # Airgap modes (checked in order, first match wins):
-#   1. TARBALL  — puppet-enterprise*.tar.gz in packages/puppet-master/
-#                 Runs the PE silent installer.
+#   1. TARBALL  — puppet-enterprise*.tar.gz / *.tar.tar / *.tar
+#                 in packages/puppet-master/; runs the PE silent installer.
 #   2. PACKAGES — puppetserver*.deb or puppetserver*.rpm in packages/puppet-master/
 #                 Uploaded and installed with apt/yum.
 #                 Also looks for openjdk*.deb/rpm for the Java dependency.
@@ -29,10 +29,16 @@
 
   tasks:
     # ── Airgap detection ──────────────────────────────────────────────────────
+    # Accept .tar.gz (standard PE download), .tar.tar (double-extension artefact
+    # from some browsers/downloaders), and plain .tar (already-decompressed).
+    # tar auto-detects the actual compression regardless of file extension.
     - name: Find PE installer tarball on controller
       find:
         paths: "{{ puppet_pkg_dir }}"
-        patterns: "puppet-enterprise*.tar.gz"
+        patterns:
+          - "puppet-enterprise*.tar.gz"
+          - "puppet-enterprise*.tar.tar"
+          - "puppet-enterprise*.tar"
       register: pe_tarball
       delegate_to: localhost
       become: no
@@ -133,7 +139,9 @@
         src: "{{ pe_tarball.files[0].path }}"
         dest: /opt/
         remote_src: no
-        creates: "/opt/{{ pe_tarball.files[0].path | basename | regex_replace('\\.tar\\.gz$', '') }}"
+        # Strip any combination of .tar / .tar.gz / .tar.tar / .tar.bz2 / .tar.xz
+        # so the creates: guard works regardless of how the file was named.
+        creates: "/opt/{{ pe_tarball.files[0].path | basename | regex_replace('(\\.tar)+(\\.gz|\\.bz2|\\.xz)?$', '') }}"
       when: install_mode == 'tarball'
 
     - name: Locate extracted installer directory
