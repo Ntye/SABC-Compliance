@@ -76,6 +76,14 @@ class DnsCheckResponse(BaseModel):
     all_ok: bool
 
 
+class DnsFixRequest(BaseModel):
+    checks: list[str]   # e.g. ["backend_to_node", "node_to_puppet"]
+
+
+class DnsFixResult(BaseModel):
+    results: dict[str, dict]   # check_key → {"ok": bool, "entry"?: str, "error"?: str}
+
+
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
 _register_uc = None
@@ -86,14 +94,15 @@ _ping_all_uc = None
 _update_uc = None
 _delete_uc = None
 _check_dns_uc = None
+_fix_dns_uc = None
 
 
 def set_use_cases(
     register_uc, get_uc, list_uc, ping_uc, ping_all_uc,
-    update_uc, delete_uc, check_dns_uc,
+    update_uc, delete_uc, check_dns_uc, fix_dns_uc,
 ) -> None:
     global _register_uc, _get_uc, _list_uc, _ping_uc, _ping_all_uc
-    global _update_uc, _delete_uc, _check_dns_uc
+    global _update_uc, _delete_uc, _check_dns_uc, _fix_dns_uc
     _register_uc = register_uc
     _get_uc = get_uc
     _list_uc = list_uc
@@ -102,6 +111,7 @@ def set_use_cases(
     _update_uc = update_uc
     _delete_uc = delete_uc
     _check_dns_uc = check_dns_uc
+    _fix_dns_uc = fix_dns_uc
 
 
 def _to_response(node) -> NodeResponse:
@@ -302,6 +312,24 @@ async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_ope
             },
             all_ok=result["all_ok"],
         )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{id}/fix-dns", response_model=DnsFixResult, summary="Auto-apply /etc/hosts fixes for failed DNS checks")
+async def fix_node_dns(id: str, body: DnsFixRequest, principal: AuthPrincipal = Depends(require_operator)):
+    """
+    Applies /etc/hosts entries automatically for each requested check key:
+    - backend_to_node:  writes node IP → hostname to the platform's /etc/hosts
+    - node_to_backend:  SSHes to node (ansible user) and writes platform IP → hostname
+    - node_to_puppet:   SSHes to node and writes puppet master IP → hostname
+    - node_to_wazuh:    SSHes to node and writes wazuh manager IP → hostname
+
+    Returns per-check result with ok, entry written, or error message.
+    """
+    try:
+        results = await _fix_dns_uc.execute(id, body.checks)
+        return DnsFixResult(results=results)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

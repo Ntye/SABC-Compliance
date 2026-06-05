@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle, Info, RefreshCw, Server, Trash2, Wifi, XCircle } from 'lucide-react'
-import { checkNodeDns, deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
+import { AlertTriangle, CheckCircle, Info, RefreshCw, Server, Trash2, Wifi, Wrench, XCircle } from 'lucide-react'
+import { checkNodeDns, fixNodeDns, deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -32,9 +32,10 @@ function relativeTime(iso, t) {
   return new Date(iso).toLocaleDateString()
 }
 
-function CheckRow({ label, check, fix, t }) {
-  const isNull = check.ok === null
+function CheckRow({ label, check, canFix, fixing, fixResult, onFix, t }) {
+  const isNull  = check.ok === null
   const hasTarget = Boolean(check.to)
+  const needsFix = check.ok !== true && (check.ok === false || hasTarget)
 
   const Icon  = check.ok === true  ? CheckCircle
               : check.ok === false ? XCircle
@@ -68,142 +69,49 @@ function CheckRow({ label, check, fix, t }) {
           </div>
           <div className="text-[11px] text-gray-500 mt-0.5">{check.description}</div>
         </div>
+
+        {canFix && needsFix && (
+          <button
+            onClick={onFix}
+            disabled={fixing}
+            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-60 transition-colors flex-shrink-0"
+          >
+            {fixing ? <Spinner size={10} /> : <Wrench size={10} />}
+            {fixing ? t('nodes.dnsModal.fixing') : t('nodes.dnsModal.fixAuto')}
+          </button>
+        )}
       </div>
 
-      {fix && (
-        <div className="ml-[22px] mt-2 bg-console-bg rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-3 pt-2.5 pb-1 border-b border-white/5">
-            <span className="text-[10px] font-semibold text-console-text uppercase tracking-wider">
-              {t('nodes.dnsModal.howToFix')}
-            </span>
-            {fix.cmd && <CopyBtn text={fix.cmd} />}
-          </div>
-          <div className="px-3 py-2 space-y-1.5">
-            <p className="text-[10px] text-console-muted leading-relaxed">{fix.note}</p>
-            {fix.cmd && (
-              <pre className="text-[11px] font-mono text-console-text whitespace-pre-wrap leading-relaxed mt-1">{fix.cmd}</pre>
-            )}
-          </div>
+      {fixResult && (
+        <div className={`ml-[22px] mt-2 px-3 py-2 rounded-lg text-[11px] ${fixResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {fixResult.ok
+            ? <>{t('nodes.dnsModal.fixApplied')}{fixResult.entry && <span className="font-mono ml-1">{fixResult.entry}</span>}</>
+            : <>{t('nodes.dnsModal.fixFailed')}{fixResult.error && <span className="ml-1 opacity-80">{fixResult.error}</span>}</>
+          }
+        </div>
+      )}
+
+      {!canFix && !check.to && isNull && (
+        <div className="ml-[22px] mt-1 text-[11px] text-blue-500">
+          {t('nodes.dnsModal.serviceNotConfiguredShort')}
         </div>
       )}
     </div>
   )
 }
 
-function fixCommands(check, node, t) {
-  const sshHostsCmd = (ip, entry) =>
-    `ssh -i ./keys/ansible_id_rsa ansible@${ip} \\\n  "echo '${entry}' | sudo tee -a /etc/hosts"`
-  const sudoTee = (entry) =>
-    `echo "${entry}" | sudo tee -a /etc/hosts`
-
-  const sshNote = t('nodes.dnsModal.sshCheckFailedNote')
-
-  // ── ok: false — resolution confirmed failing ──────────────────────────────
-  if (check.key === 'backend_to_node' && check.ok === false) {
-    const entry = `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`
-    return {
-      title: t('nodes.dnsModal.fixPlatformNote'),
-      note:  t('nodes.dnsModal.fixPlatformNote'),
-      cmd:   sudoTee(entry),
-    }
-  }
-  if (check.key === 'node_to_backend' && check.ok === false) {
-    return {
-      title: t('nodes.dnsModal.fixNodeNote'),
-      note:  t('nodes.dnsModal.fixNodeNote'),
-      cmd:   sshHostsCmd(node.ip, `$(hostname -I | awk '{print $1}')  $(hostname -f)`),
-    }
-  }
-  if (check.key === 'node_to_puppet' && check.ok === false && check.to) {
-    return {
-      title: t('nodes.dnsModal.fixPuppetNote'),
-      note:  t('nodes.dnsModal.fixPuppetNote'),
-      cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
-    }
-  }
-  if (check.key === 'node_to_wazuh' && check.ok === false && check.to) {
-    return {
-      title: t('nodes.dnsModal.fixWazuhNote'),
-      note:  t('nodes.dnsModal.fixWazuhNote'),
-      cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
-    }
-  }
-
-  // ── ok: null — check did not run ──────────────────────────────────────────
-  if (check.ok === null) {
-    // to is null → the service has not been connected in the platform yet
-    if (!check.to) {
-      const service = check.key === 'node_to_puppet'
-        ? t('nodes.dnsModal.puppetMasterLabel')
-        : check.key === 'node_to_wazuh'
-        ? t('nodes.dnsModal.wazuhManagerLabel')
-        : null
-      if (!service) return null
-      return {
-        title: t('nodes.dnsModal.serviceNotConfiguredTitle', { service }),
-        note:  t('nodes.dnsModal.serviceNotConfiguredNote', { service }),
-        cmd:   null,
-      }
-    }
-
-    // to is set → SSH couldn't verify — show the /etc/hosts fix anyway
-    if (check.key === 'backend_to_node') {
-      const entry = `${node.ip}  ${node.hostname}${node.fqdn && node.fqdn !== node.hostname ? '  ' + node.fqdn : ''}`
-      return { title: t('nodes.dnsModal.fixPlatformNote'), note: sshNote, cmd: sudoTee(entry) }
-    }
-    if (check.key === 'node_to_backend') {
-      return {
-        title: t('nodes.dnsModal.fixNodeNote'),
-        note:  sshNote,
-        cmd:   sshHostsCmd(node.ip, `$(hostname -I | awk '{print $1}')  $(hostname -f)`),
-      }
-    }
-    if (check.key === 'node_to_puppet') {
-      return {
-        title: t('nodes.dnsModal.fixPuppetNote'),
-        note:  sshNote,
-        cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
-      }
-    }
-    if (check.key === 'node_to_wazuh') {
-      return {
-        title: t('nodes.dnsModal.fixWazuhNote'),
-        note:  sshNote,
-        cmd:   sshHostsCmd(node.ip, `${check.to}  ${check.to}`),
-      }
-    }
-  }
-
-  return null
-}
-
-function CopyBtn({ text }) {
-  const t = useT()
-  const [done, setDone] = useState(false)
-  async function copy() {
-    await navigator.clipboard.writeText(text)
-    setDone(true)
-    setTimeout(() => setDone(false), 1500)
-  }
-  return (
-    <button
-      onClick={copy}
-      className="text-[10px] px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-console-muted hover:text-console-text transition-colors"
-    >
-      {done ? t('common.copied') : t('common.copy')}
-    </button>
-  )
-}
-
 function DnsModal({ node, onClose, onRefetch }) {
   const t = useT()
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const [result, setResult]     = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState(null)
+  const [fixing, setFixing]     = useState({})    // { checkKey: true }
+  const [fixResults, setFixResults] = useState({}) // { checkKey: { ok, entry?, error? } }
 
   async function run() {
     setLoading(true)
     setError(null)
+    setFixResults({})
     try {
       const data = await checkNodeDns(node.id)
       setResult(data)
@@ -212,6 +120,19 @@ function DnsModal({ node, onClose, onRefetch }) {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleFix(checkKey) {
+    setFixing((f) => ({ ...f, [checkKey]: true }))
+    try {
+      const data = await fixNodeDns(node.id, [checkKey])
+      const r = data.results?.[checkKey] ?? { ok: false, error: 'No result' }
+      setFixResults((prev) => ({ ...prev, [checkKey]: r }))
+    } catch (err) {
+      setFixResults((prev) => ({ ...prev, [checkKey]: { ok: false, error: err.message } }))
+    } finally {
+      setFixing((f) => ({ ...f, [checkKey]: false }))
     }
   }
 
@@ -290,7 +211,10 @@ function DnsModal({ node, onClose, onRefetch }) {
                     key={c.key}
                     label={CHECK_LABELS[c.key] || c.key}
                     check={c}
-                    fix={c.ok !== true ? fixCommands(c, node, t) : null}
+                    canFix={c.ok !== true && Boolean(c.to)}
+                    fixing={!!fixing[c.key]}
+                    fixResult={fixResults[c.key] ?? null}
+                    onFix={() => handleFix(c.key)}
                     t={t}
                   />
                 ))}

@@ -28,7 +28,8 @@ from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
 from infrastructure.ansible.adapter import AnsibleAdapter
 from modules.nodes.usecases import (
-    CheckNodeDnsUseCase, DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
+    CheckNodeDnsUseCase, DeleteNodeUseCase, FixNodeDnsUseCase,
+    GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
@@ -125,6 +126,12 @@ async def lifespan(app: FastAPI):
         puppet_master_host_env=settings.puppet_master_host,
         wazuh_manager_host_env=settings.wazuh_manager_host,
     )
+    fix_dns_uc = FixNodeDnsUseCase(
+        node_repo, ssh_client,
+        platform_config_repo,
+        puppet_master_host_env=settings.puppet_master_host,
+        wazuh_manager_host_env=settings.wazuh_manager_host,
+    )
 
     nodes_routes.set_use_cases(
         register_uc=register_node_uc,
@@ -135,6 +142,7 @@ async def lifespan(app: FastAPI):
         update_uc=update_node_uc,
         delete_uc=delete_node_uc,
         check_dns_uc=check_dns_uc,
+        fix_dns_uc=fix_dns_uc,
     )
 
     # -- Provisioning / infrastructure use cases --
