@@ -451,3 +451,186 @@ class FixNodeDnsUseCase:
             return results[0][4][0] if results else None
         except Exception:
             return None
+
+
+class ChangeNodeIdentityUseCase:
+    """
+    Safely change a node's IP address and/or hostname (DNS name) and replicate
+    the change across the platform's records and /etc/hosts mappings.
+
+    Designed for the EC2 case where a stop/start assigns a new public IP and
+    public DNS name. The change is validated BEFORE anything is committed:
+
+      1. Preflight — SSH-test the NEW ip (or current ip) with existing creds.
+         If the server is not reachable at the new address, abort cleanly and
+         leave everything untouched.
+      2. Uniqueness — reject a hostname already used by another node.
+      3. Apply (only after preflight passes):
+         a. Rewrite the platform container's /etc/hosts: drop stale lines for
+            the old ip/hostname, add `new_ip  new_hostname [fqdn]`.
+         b. (opt-in) Rename the server's system hostname via hostnamectl.
+         c. Re-detect the FQDN and re-check DNS resolution.
+         d. Persist ip/hostname/fqdn to the database (done last).
+      4. Warn — if the node is Puppet/Wazuh enrolled, the agent identity is
+         bound to the old hostname; report that re-enrollment is required.
+    """
+
+    def __init__(self, node_repository: INodeRepository, ssh_client: ISSHClient) -> None:
+        self._repo = node_repository
+        self._ssh = ssh_client
+
+    async def execute(self, id_or_hostname: str, data: dict) -> dict:
+        node = await _resolve_node(self._repo, id_or_hostname)
+
+        old_ip = node.ip
+        old_hostname = node.hostname
+        old_fqdn = node.fqdn
+
+        new_ip = (data.get("ip") or "").strip() or old_ip
+        new_hostname = (data.get("hostname") or "").strip() or old_hostname
+        apply_system_hostname = bool(data.get("apply_system_hostname", False))
+
+        if new_ip == old_ip and new_hostname == old_hostname and not apply_system_hostname:
+            raise ValidationError("Nothing to change — provide a new IP or hostname")
+
+        # ── 2. Uniqueness ────────────────────────────────────────────────────
+        if new_hostname != old_hostname:
+            clash = await self._repo.find_by_hostname(new_hostname)
+            if clash and clash.id != node.id:
+                raise ConflictError(f"Hostname '{new_hostname}' is already registered to another node")
+
+        # ── 1. Preflight: the new address must be reachable over SSH ──────────
+        ok, error = await self._ssh.test_connectivity(
+            new_ip, node.ssh_port, node.ssh_user, node.ssh_key_path
+        )
+        if not ok:
+            raise SSHConnectError(
+                f"Cannot reach the server at {new_ip} over SSH — aborting, nothing was changed. "
+                f"({error or 'connection failed'})"
+            )
+
+        warnings: list[str] = []
+        steps: dict[str, dict] = {}
+
+        # ── 3b. (opt-in) rename the server's system hostname ─────────────────
+        if apply_system_hostname and new_hostname != old_hostname:
+            steps["system_hostname"] = await self._set_system_hostname(node, new_ip, new_hostname)
+
+        # ── 3c. re-detect FQDN from the (possibly renamed) server ────────────
+        new_fqdn = await self._get_fqdn(node, new_ip) or (
+            new_hostname if new_hostname != old_hostname else old_fqdn
+        )
+
+        # ── 3a. rewrite the platform container's /etc/hosts mapping ──────────
+        steps["platform_hosts"] = await self._rewrite_platform_hosts(
+            remove_tokens=[old_ip, old_hostname] + ([old_fqdn] if old_fqdn else []),
+            new_ip=new_ip,
+            new_hostname=new_hostname,
+            new_fqdn=new_fqdn,
+        )
+
+        # ── 3d. persist to the database (last) ───────────────────────────────
+        node.ip = new_ip
+        node.hostname = new_hostname
+        node.fqdn = new_fqdn
+        node.dns_resolves = await _check_dns_local(new_hostname, new_ip)
+        node.mark_reachable()
+        node.updated_at = datetime.utcnow()
+        await self._repo.update(node)
+
+        # ── 4. enrollment warnings ───────────────────────────────────────────
+        if node.puppet_enrolled and new_hostname != old_hostname:
+            warnings.append(
+                "Puppet agent certificate is bound to the old hostname. Re-enroll the "
+                "Puppet agent (clean the old cert on the master, then re-run enrollment)."
+            )
+        if node.wazuh_enrolled and new_hostname != old_hostname:
+            warnings.append(
+                "Wazuh agent name is bound to the old hostname. Re-enroll the Wazuh agent "
+                "so the manager registers it under the new name."
+            )
+
+        return {
+            "node_id": node.id,
+            "changed": {
+                "ip": {"from": old_ip, "to": new_ip} if new_ip != old_ip else None,
+                "hostname": {"from": old_hostname, "to": new_hostname} if new_hostname != old_hostname else None,
+                "fqdn": {"from": old_fqdn, "to": new_fqdn} if new_fqdn != old_fqdn else None,
+            },
+            "steps": steps,
+            "dns_resolves": node.dns_resolves,
+            "warnings": warnings,
+            "node": node,
+        }
+
+    async def _set_system_hostname(self, node: Node, ip: str, new_hostname: str) -> dict:
+        # Set the hostname and keep a 127.0.1.1 loopback entry so sudo/hostname -f
+        # keep working immediately, before any DNS propagation.
+        short = new_hostname.split(".")[0]
+        cmd = (
+            f"sudo hostnamectl set-hostname {new_hostname} && "
+            f"( grep -q '^127.0.1.1' /etc/hosts "
+            f"&& sudo sed -i 's/^127.0.1.1.*/127.0.1.1\\t{new_hostname} {short}/' /etc/hosts "
+            f"|| echo '127.0.1.1\\t{new_hostname} {short}' | sudo tee -a /etc/hosts >/dev/null )"
+        )
+        try:
+            _, stderr, rc = await self._ssh.run_command(
+                ip, node.ssh_port, node.ssh_user, node.ssh_key_path, cmd
+            )
+            if rc == 0:
+                return {"ok": True}
+            return {"ok": False, "error": (stderr or "").strip() or "Non-zero exit code"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    async def _get_fqdn(self, node: Node, ip: str) -> str | None:
+        try:
+            stdout, _, _ = await self._ssh.run_command(
+                ip, node.ssh_port, node.ssh_user, node.ssh_key_path,
+                "hostname -f 2>/dev/null || hostname"
+            )
+            fqdn = stdout.strip()
+            return fqdn or None
+        except Exception:
+            return None
+
+    async def _rewrite_platform_hosts(
+        self, remove_tokens: list[str], new_ip: str, new_hostname: str, new_fqdn: str | None
+    ) -> dict:
+        """Drop stale managed lines, then append the fresh mapping. Idempotent."""
+        path = "/etc/hosts"
+        tokens = {t for t in remove_tokens if t}
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _rewrite() -> None:
+                try:
+                    with open(path, "r") as f:
+                        lines = f.readlines()
+                except FileNotFoundError:
+                    lines = []
+                kept = []
+                for line in lines:
+                    stripped = line.strip()
+                    # never touch loopback/localhost lines
+                    if not stripped or stripped.startswith("#") or "localhost" in stripped:
+                        kept.append(line)
+                        continue
+                    fields = stripped.split()
+                    # drop any line whose ip or any name matches a stale token
+                    if any(tok in fields for tok in tokens):
+                        continue
+                    kept.append(line)
+                parts = [new_ip, new_hostname]
+                if new_fqdn and new_fqdn not in parts:
+                    parts.append(new_fqdn)
+                if kept and not kept[-1].endswith("\n"):
+                    kept[-1] += "\n"
+                kept.append("  ".join(parts) + "\n")
+                with open(path, "w") as f:
+                    f.writelines(kept)
+
+            await loop.run_in_executor(None, _rewrite)
+            return {"ok": True, "entry": "  ".join([new_ip, new_hostname] + ([new_fqdn] if new_fqdn else []))}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}

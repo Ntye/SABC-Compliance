@@ -4,6 +4,7 @@ import Shell from './components/layout/Shell.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import OverviewPage from './pages/OverviewPage.jsx'
 import NodesPage from './pages/NodesPage.jsx'
+import NodeDetailPage from './pages/NodeDetailPage.jsx'
 import AddVmPage from './pages/AddVmPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import CompliancePage from './pages/CompliancePage.jsx'
@@ -22,6 +23,7 @@ export default function App() {
             <Route index element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/nodes" element={<NodesPage />} />
+            <Route path="/nodes/:id" element={<NodeDetailPage />} />
             <Route path="/add-vm" element={<AddVmPage />} />
             <Route path="/infrastructure" element={<InfrastructurePage />} />
             <Route path="/jobs" element={<JobsPage />} />

@@ -198,6 +198,11 @@ export async function fixNodeDns(id, checks) {
   return request('POST', `/nodes/${id}/fix-dns`, { checks })
 }
 
+export async function changeNodeIdentity(id, data) {
+  // data: { ip?, hostname?, apply_system_hostname? }
+  return request('POST', `/nodes/${id}/change-identity`, data)
+}
+
 export async function downloadSetupScript() {
   const base = getGatewayUrl()
   const headers = {}
@@ -266,6 +271,10 @@ export async function getComplianceSummary() {
 
 export async function getNodeCompliance(id) {
   return request('GET', `/compliance/nodes/${id}`)
+}
+
+export async function collectNodeCompliance(id) {
+  return request('POST', `/compliance/nodes/${id}/collect`)
 }
 
 export async function triggerRemediation(id, description) {

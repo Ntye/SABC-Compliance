@@ -28,18 +28,23 @@ from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
 from infrastructure.ansible.adapter import AnsibleAdapter
 from modules.nodes.usecases import (
-    CheckNodeDnsUseCase, DeleteNodeUseCase, FixNodeDnsUseCase,
-    GetNodeUseCase, ListNodesUseCase,
+    ChangeNodeIdentityUseCase, CheckNodeDnsUseCase, DeleteNodeUseCase,
+    FixNodeDnsUseCase, GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
     InstallServiceUseCase, ListJobsUseCase, SetMasterHostUseCase, StartJobUseCase,
 )
+from modules.compliance.usecases import (
+    CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
+    GetNodeComplianceUseCase, TriggerRemediationUseCase,
+)
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
 from interface.http.routes import jobs as jobs_routes
+from interface.http.routes import compliance as compliance_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -132,6 +137,7 @@ async def lifespan(app: FastAPI):
         puppet_master_host_env=settings.puppet_master_host,
         wazuh_manager_host_env=settings.wazuh_manager_host,
     )
+    change_identity_uc = ChangeNodeIdentityUseCase(node_repo, ssh_client)
 
     nodes_routes.set_use_cases(
         register_uc=register_node_uc,
@@ -143,6 +149,7 @@ async def lifespan(app: FastAPI):
         delete_uc=delete_node_uc,
         check_dns_uc=check_dns_uc,
         fix_dns_uc=fix_dns_uc,
+        change_identity_uc=change_identity_uc,
     )
 
     # -- Provisioning / infrastructure use cases --
@@ -183,6 +190,14 @@ async def lifespan(app: FastAPI):
         get_uc=get_job_uc,
         cancel_uc=cancel_job_uc,
         ws_manager=ws_manager,
+    )
+
+    # -- Compliance use cases --
+    compliance_routes.set_use_cases(
+        summary_uc=GetComplianceSummaryUseCase(compliance_repo),
+        node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
+        collect_uc=CollectNodeComplianceUseCase(node_repo, compliance_repo, ssh_client),
+        remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
 
     # -- Attach audit repo to middleware --
@@ -283,6 +298,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(nodes_routes.router)
     app.include_router(infrastructure_routes.router)
     app.include_router(jobs_routes.router)
+    app.include_router(compliance_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])
