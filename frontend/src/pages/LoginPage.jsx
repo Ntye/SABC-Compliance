@@ -31,7 +31,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-surface-page flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <img src={sabcLogo} alt="SABC Compliance" className="h-20 mx-auto" />
+          <img src={sabcLogo} alt="SABC Compliance" className="h-20 w-20 mx-auto rounded-full border-2 border-gray-300 object-cover" />
           <div className="text-[13px] text-gray-500 mt-2">{t('nav.platform')}</div>
         </div>
 
