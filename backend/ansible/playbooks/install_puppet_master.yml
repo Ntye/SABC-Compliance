@@ -347,6 +347,28 @@
         deb: /tmp/puppet-release.deb
       when: install_mode == 'online' and ansible_os_family == 'Debian'
 
+    # Recover from a previously interrupted install: a half-configured
+    # puppetserver re-runs its postinst (dpkg-statoverride puppet:puppet) on
+    # every apt call and fails because puppet-agent never created the user.
+    # Settle any pending dpkg state before touching the packages again.
+    - name: Repair any half-configured dpkg state (Debian)
+      command: dpkg --configure -a
+      register: dpkg_repair
+      changed_when: dpkg_repair.stdout != ''
+      failed_when: false
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
+
+    # Install puppet-agent FIRST: its postinst creates the `puppet` system
+    # user/group and /usr/share/puppet/modules that puppetserver's postinst
+    # depends on. Installing puppetserver alone (relying on the dependency)
+    # is what leaves the node wedged when configuration is interrupted.
+    - name: Install puppet-agent (Debian, online)
+      apt:
+        name: puppet-agent
+        state: present
+        update_cache: yes
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
+
     - name: Install puppetserver (Debian, online)
       apt:
         name: puppetserver
@@ -380,6 +402,14 @@
         - install_mode == 'online'
         - ansible_os_family == 'RedHat'
         - puppet_release_pkg.files | length == 0
+
+    # Install puppet-agent first so its scriptlets create the `puppet` user
+    # and module dirs before puppetserver is configured (see Debian note).
+    - name: Install puppet-agent (RedHat, online)
+      yum:
+        name: puppet-agent
+        state: present
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
     - name: Install puppetserver (RedHat, online)
       yum:
