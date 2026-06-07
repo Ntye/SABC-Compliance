@@ -204,19 +204,23 @@
       failed_when: false
       when: install_mode == 'tarball'
 
-    # PE installation takes 10-30 minutes.  The task runs synchronously so
-    # all stdout lines stream into the job log in real time.
-    - name: Run PE installer (this takes 10-30 minutes)
+    # PE installation takes 30-90 minutes depending on instance size.
+    # async/poll launches the installer in the background and polls every 60 s
+    # so Ansible never holds a blocking SSH connection for the full duration.
+    # async: 9000 = 2.5 h ceiling — adjust up if running on a very slow instance.
+    - name: Run PE installer (this can take up to 90 minutes)
       shell: |
         cd "{{ pe_dir.stdout }}"
-        ./puppet-enterprise-installer -c conf.d/pe.conf
+        ./puppet-enterprise-installer -c conf.d/pe.conf 2>&1 | \
+          tee /var/log/puppetlabs/installer/pe-install-ansible.log
       register: pe_install
-      timeout: 3600
+      async: 9000
+      poll: 60
       when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
 
     - name: Show final PE installer output
       debug:
-        msg: "{{ pe_install.stdout_lines[-20:] | default([]) }}"
+        msg: "{{ pe_install.stdout_lines[-30:] | default([]) }}"
       when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
 
     # ── Post-install: verify / recover console password ───────────────────────
