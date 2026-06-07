@@ -134,6 +134,30 @@
         msg: "WARNING: only {{ free_gb.stdout }}GB free on /opt — PE needs ~20GB"
       when: install_mode == 'tarball' and (free_gb.stdout | int) < 20
 
+    # PE ships pe-puppetserver and pe-java — both conflict with the open-source
+    # puppetserver/puppet-agent packages if those were left half-configured by a
+    # previous failed open-source install attempt.  Purge them first so dpkg has
+    # no pending state to trip over when the PE installer runs apt-get.
+    - name: Remove conflicting open-source Puppet packages before PE install
+      shell: |
+        # Settle any half-configured dpkg state first
+        dpkg --configure -a || true
+        # Purge open-source packages that conflict with PE equivalents
+        PKGS=""
+        dpkg -l puppetserver 2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS puppetserver"
+        dpkg -l puppet-agent  2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS puppet-agent"
+        dpkg -l 'puppet-module-*' 2>/dev/null | awk '/^\S/{print $2}' | while read p; do
+          dpkg -l "$p" 2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS $p"
+        done
+        if [ -n "$PKGS" ]; then
+          apt-get purge -y $PKGS || true
+          apt-get install -f -y || true
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: install_mode == 'tarball'
+
     - name: Extract PE tarball to /opt (uploads + extracts in one step)
       unarchive:
         src: "{{ pe_tarball.files[0].path }}"
