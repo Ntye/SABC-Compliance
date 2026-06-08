@@ -69,7 +69,7 @@
 - name: Install Wazuh all-in-one (manager + indexer + dashboard)
   hosts: target
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     # ── Version ────────────────────────────────────────────────────────────
@@ -92,6 +92,36 @@
     wazuh_min_ram_mb:    4096   # OpenSearch (indexer) minimum
     wazuh_rec_ram_mb:    8192   # Recommended for comfortable operation
     wazuh_min_disk_gb:   20     # Minimum free space on / for install + data
+
+  # ── Bootstrap: ensure Python exists before gathering facts ────────────────
+  # Minimal/cloud base images (fresh Ubuntu, Debian, RHEL, Rocky) may ship
+  # without python3, which Ansible fact-gathering and most modules require.
+  # The raw module runs over plain SSH with NO Python dependency — use it to
+  # install Python first, then gather facts manually.
+  pre_tasks:
+    - name: Bootstrap Python interpreter (raw SSH, no facts required)
+      raw: |
+        if command -v python3 >/dev/null 2>&1; then exit 0; fi
+        echo "BOOTSTRAP: python3 not found, installing"
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y && apt-get install -y python3
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python3
+        elif command -v zypper >/dev/null 2>&1; then
+          zypper --non-interactive install python3
+        else
+          echo "BOOTSTRAP ERROR: no supported package manager (apt/dnf/yum/zypper)" >&2
+          exit 1
+        fi
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing' in python_bootstrap.stdout"
+
+    - name: Gather facts now that Python is available
+      setup:
 
   tasks:
 
