@@ -3,7 +3,7 @@ export const translations = {
     common: {
       cancel: 'Cancel', save: 'Save', loading: 'Loading…', error: 'Error',
       refresh: 'Refresh', close: 'Close', confirm: 'Confirm', delete: 'Delete',
-      copy: 'Copy', copied: 'Copied', justNow: 'just now', edit: 'Edit',
+      copy: 'Copy', copied: 'Copied', copyFailed: 'Copy failed', justNow: 'just now', edit: 'Edit',
       minutesAgo: '{{n}}m ago', hoursAgo: '{{n}}h ago',
       enrolled: 'enrolled', notEnrolled: 'none', active: 'active', revoked: 'revoked',
     },
@@ -145,7 +145,7 @@ export const translations = {
       running: 'Running ({{count}})', history: 'History',
       status: { pending: 'pending', running: 'running', success: 'success', failed: 'failed', cancelled: 'cancelled' },
       output: 'Output', liveOutput: 'Live output', connecting: 'Connecting…',
-      noOutput: 'No output yet…', cancel: 'Cancel',
+      noOutput: 'No output yet…', cancel: 'Cancel', copyOutput: 'Copy',
     },
     infra: {
       title: 'Infrastructure',
@@ -228,7 +228,7 @@ export const translations = {
     common: {
       cancel: 'Annuler', save: 'Enregistrer', loading: 'Chargement…', error: 'Erreur',
       refresh: 'Actualiser', close: 'Fermer', confirm: 'Confirmer', delete: 'Supprimer',
-      copy: 'Copier', copied: 'Copié', justNow: 'à l\'instant', edit: 'Modifier',
+      copy: 'Copier', copied: 'Copié', copyFailed: 'Échec de la copie', justNow: 'à l\'instant', edit: 'Modifier',
       minutesAgo: 'il y a {{n}}m', hoursAgo: 'il y a {{n}}h',
       enrolled: 'enrôlé', notEnrolled: 'aucun', active: 'actif', revoked: 'révoqué',
     },
@@ -371,7 +371,7 @@ export const translations = {
       running: 'En cours ({{count}})', history: 'Historique',
       status: { pending: 'en attente', running: 'en cours', success: 'succès', failed: 'échoué', cancelled: 'annulé' },
       output: 'Sortie', liveOutput: 'Sortie en direct', connecting: 'Connexion…',
-      noOutput: 'Aucune sortie pour l\'instant…', cancel: 'Annuler',
+      noOutput: 'Aucune sortie pour l\'instant…', cancel: 'Annuler', copyOutput: 'Copier',
     },
     infra: {
       title: 'Infrastructure',

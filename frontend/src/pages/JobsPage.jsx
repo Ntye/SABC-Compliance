@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn, btnSm, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
+import CopyButton from '../components/common/CopyButton.jsx'
 
 function duration(start, end) {
   const ms = new Date(end || Date.now()) - new Date(start)
@@ -42,6 +43,7 @@ function LogPanel({ jobId, initialLogs, isRunning, t }) {
   const [wsConnected, setWsConnected] = useState(false)
   const bottomRef = useRef(null)
   const wsRef = useRef(null)
+  const toast = useToast()
 
   useEffect(() => {
     if (!isRunning) {
@@ -75,7 +77,18 @@ function LogPanel({ jobId, initialLogs, isRunning, t }) {
             ? wsConnected ? t('jobs.liveOutput') : t('jobs.connecting')
             : t('jobs.output')}
         </span>
-        {isRunning && wsConnected && <Spinner size={10} className="text-console-accent" />}
+        <div className="flex items-center gap-3">
+          {isRunning && wsConnected && <Spinner size={10} className="text-console-accent" />}
+          {lines.length > 0 && (
+            <CopyButton
+              text={lines.map((l) => l.line ?? '').join('\n')}
+              size={11}
+              label={t('jobs.copyOutput')}
+              className="text-console-muted hover:text-console-text"
+              onResult={(ok) => toast(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error')}
+            />
+          )}
+        </div>
       </div>
       <div className="h-64 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
         {lines.length === 0 && (
@@ -144,7 +157,15 @@ function JobRow({ job: initial, onRefresh }) {
             <StatusBadge status={job.status} t={t} />
           </div>
           <div className="flex items-center gap-4 mt-0.5">
-            <span className="text-[11px] text-gray-400 font-mono">{job.id.slice(0, 8)}</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-gray-400 font-mono">
+              {job.id.slice(0, 8)}
+              <CopyButton
+                text={job.id}
+                size={11}
+                className="text-gray-300 hover:text-gray-500"
+                onResult={(ok) => toast(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error')}
+              />
+            </span>
             {job.node_hostname && (
               <span className="text-[11px] text-gray-500">→ {job.node_hostname}</span>
             )}
