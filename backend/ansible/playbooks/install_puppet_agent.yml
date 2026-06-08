@@ -234,10 +234,11 @@
              and (repo_metadata is not skipped)
              and ((repo_metadata.matched | default(0)) | int > 0) }}
 
-    # Stage the platform tarball whenever the repo metadata is missing — even if
-    # a (partial) platform directory already exists. The official PE platform
-    # tarball ships with its repodata included, so a clean extract rebuilds the
-    # repo directly without needing internet on the primary. unarchive overwrites.
+    # Stage the platform tarball into a TEMPORARY directory first, then move
+    # RPMs to the correct PE packages path. This works regardless of whether the
+    # tarball has a top-level el-8-x86_64/ prefix, is flat, or has any other
+    # directory structure — we find all .rpm/.deb files and copy them to the
+    # right place before running createrepo_c.
     - name: Copy platform tarball to primary
       copy:
         src: "{{ platform_tarball.files[0].path }}"
@@ -245,57 +246,81 @@
       delegate_to: pe_master_dynamic
       when: platform_tarball.files | length > 0 and pe_version is defined and not (repo_built | bool)
 
-    - name: Extract platform packages into PE packages directory on primary
-      unarchive:
-        src: "/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
-        dest: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/"
-        remote_src: yes
-      delegate_to: pe_master_dynamic
-      register: platform_extract
-      when: platform_tarball.files | length > 0 and pe_version is defined and not (repo_built | bool)
-
-    # For RPM-based platforms, explicitly run createrepo_c after extracting a
-    # manually-supplied tarball. pe_repo's puppet class runs createrepo when IT
-    # downloads the packages, but when we stage them ourselves it may consider
-    # the state "already configured" and skip createrepo — leaving the packages
-    # directory without the repodata/ index that install.bash fetches.
-    # PE ships createrepo_c in its own toolchain on every primary regardless of
-    # the primary's OS family.
-    - name: Build RPM repo metadata for {{ pe_platform | trim }} via createrepo_c
+    # Extract → inspect → normalise → createrepo.  All in one shell script so
+    # we have full visibility and can adapt to whatever the tarball contains.
+    - name: Stage RPM packages and build repo metadata for {{ pe_platform | trim }}
       shell: |
         set -e
+        TARBALL="/tmp/puppet-agent-{{ pe_platform | trim }}.tar.gz"
+        STAGE="/tmp/puppet-agent-staging-{{ pe_platform | trim }}"
         PKG_DIR="/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}"
-        if [ ! -d "$PKG_DIR" ]; then
-          echo "SKIP: directory not found: $PKG_DIR"; exit 0
+
+        echo "=== Cleaning and recreating staging dir ==="
+        rm -rf "$STAGE"
+        mkdir -p "$STAGE"
+
+        echo "=== Extracting tarball ==="
+        tar -xzf "$TARBALL" -C "$STAGE"
+        echo "--- Tarball top-level contents ---"
+        ls -la "$STAGE/"
+        echo "--- All files (depth 4) ---"
+        find "$STAGE" -maxdepth 4 -type f | head -40
+
+        echo "=== Counting package files ==="
+        RPM_COUNT=$(find "$STAGE" -name "*.rpm" | wc -l)
+        DEB_COUNT=$(find "$STAGE" -name "*.deb" | wc -l)
+        echo "Found: $RPM_COUNT RPM(s), $DEB_COUNT DEB(s)"
+
+        if [ "$RPM_COUNT" -eq 0 ] && [ "$DEB_COUNT" -eq 0 ]; then
+          echo "ERROR: no .rpm or .deb files in tarball" >&2
+          exit 1
         fi
-        # PE-bundled createrepo_c is the preferred path; fall back to system paths
-        for cr in /opt/puppetlabs/puppet/bin/createrepo_c \
-                  /opt/puppetlabs/server/bin/createrepo_c \
-                  /usr/bin/createrepo_c \
-                  /usr/bin/createrepo; do
-          [ -x "$cr" ] || continue
-          echo "Using: $cr"
-          "$cr" --update "$PKG_DIR"
-          echo "CREATEREPO_DONE"
-          exit 0
-        done
-        echo "WARN: createrepo_c not found on primary; relying on tarball-included repodata" >&2
+
+        echo "=== Staging packages into $PKG_DIR ==="
+        mkdir -p "$PKG_DIR"
+        if [ "$RPM_COUNT" -gt 0 ]; then
+          find "$STAGE" -name "*.rpm" -exec cp -fv {} "$PKG_DIR/" \;
+        fi
+        if [ "$DEB_COUNT" -gt 0 ]; then
+          find "$STAGE" -name "*.deb" -exec cp -fv {} "$PKG_DIR/" \;
+        fi
+
+        echo "=== Contents of PKG_DIR after staging ==="
+        ls -la "$PKG_DIR/"
+
+        if [ "$RPM_COUNT" -gt 0 ]; then
+          echo "=== Running createrepo_c ==="
+          for cr in /opt/puppetlabs/puppet/bin/createrepo_c \
+                    /opt/puppetlabs/server/bin/createrepo_c \
+                    /usr/bin/createrepo_c \
+                    /usr/bin/createrepo; do
+            [ -x "$cr" ] || continue
+            echo "Using: $cr"
+            "$cr" "$PKG_DIR"
+            echo "=== repodata after createrepo ==="
+            ls -la "$PKG_DIR/repodata/" 2>/dev/null || echo "(repodata dir not found)"
+            echo "CREATEREPO_DONE"
+            rm -rf "$STAGE"
+            exit 0
+          done
+          echo "WARN: createrepo_c binary not found on primary" >&2
+        fi
+
+        rm -rf "$STAGE"
+        echo "STAGE_DONE"
       args:
         executable: /bin/bash
       delegate_to: pe_master_dynamic
-      register: createrepo_run
-      changed_when: "'CREATEREPO_DONE' in (createrepo_run.stdout | default(''))"
-      failed_when: false
-      when: >-
-        platform_extract is defined
-        and platform_extract is changed
-        and pe_version is defined
-        and (pe_platform | trim | regex_search('^el-')) is not none
+      register: platform_extract
+      changed_when: >-
+        'CREATEREPO_DONE' in (platform_extract.stdout | default(''))
+        or 'STAGE_DONE' in (platform_extract.stdout | default(''))
+      when: platform_tarball.files | length > 0 and pe_version is defined and not (repo_built | bool)
 
-    - name: Show createrepo output
+    - name: Show staging and createrepo output
       debug:
-        msg: "{{ createrepo_run.stdout_lines | default([]) }}"
-      when: createrepo_run is not skipped
+        msg: "{{ platform_extract.stdout_lines | default([]) }}"
+      when: platform_extract is not skipped
 
     # ── Classify primary with pe_repo platform class via PE Node Manager API ───
     # puppet apply fails here because pe_repo::bulk_pluginsync has internal
