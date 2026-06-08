@@ -254,6 +254,49 @@
       register: platform_extract
       when: platform_tarball.files | length > 0 and pe_version is defined and not (repo_built | bool)
 
+    # For RPM-based platforms, explicitly run createrepo_c after extracting a
+    # manually-supplied tarball. pe_repo's puppet class runs createrepo when IT
+    # downloads the packages, but when we stage them ourselves it may consider
+    # the state "already configured" and skip createrepo — leaving the packages
+    # directory without the repodata/ index that install.bash fetches.
+    # PE ships createrepo_c in its own toolchain on every primary regardless of
+    # the primary's OS family.
+    - name: Build RPM repo metadata for {{ pe_platform | trim }} via createrepo_c
+      shell: |
+        set -e
+        PKG_DIR="/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}"
+        if [ ! -d "$PKG_DIR" ]; then
+          echo "SKIP: directory not found: $PKG_DIR"; exit 0
+        fi
+        # PE-bundled createrepo_c is the preferred path; fall back to system paths
+        for cr in /opt/puppetlabs/puppet/bin/createrepo_c \
+                  /opt/puppetlabs/server/bin/createrepo_c \
+                  /usr/bin/createrepo_c \
+                  /usr/bin/createrepo; do
+          [ -x "$cr" ] || continue
+          echo "Using: $cr"
+          "$cr" --update "$PKG_DIR"
+          echo "CREATEREPO_DONE"
+          exit 0
+        done
+        echo "WARN: createrepo_c not found on primary; relying on tarball-included repodata" >&2
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: createrepo_run
+      changed_when: "'CREATEREPO_DONE' in (createrepo_run.stdout | default(''))"
+      failed_when: false
+      when: >-
+        platform_extract is defined
+        and platform_extract is changed
+        and pe_version is defined
+        and (pe_platform | trim | regex_search('^el-')) is not none
+
+    - name: Show createrepo output
+      debug:
+        msg: "{{ createrepo_run.stdout_lines | default([]) }}"
+      when: createrepo_run is not skipped
+
     # ── Classify primary with pe_repo platform class via PE Node Manager API ───
     # puppet apply fails here because pe_repo::bulk_pluginsync has internal
     # `require => Package['pe-java17']` that only exists in a full PE catalog.
@@ -340,6 +383,51 @@
       debug:
         msg: "{{ primary_puppet_run.stdout_lines[-10:] | default([]) }}"
 
+    # Probe the packages HTTP endpoint from the primary's localhost. This bypasses
+    # DNS and network variables and directly tests whether pe-puppetserver is
+    # serving the platform repo metadata. A 404 at this point means the files are
+    # either not at the expected path on disk, or pe-puppetserver needs a restart
+    # to reload its static-content route configuration. Restart + wait to recover.
+    - name: Probe PE packages HTTP endpoint for {{ pe_platform | trim }}
+      shell: >-
+        curl -sk -o /dev/null -w "%{http_code}"
+        https://localhost:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: packages_probe
+      changed_when: false
+      failed_when: false
+      when: pe_version is defined and (pe_platform | trim | regex_search('^el-')) is not none
+
+    - name: Show packages endpoint probe result
+      debug:
+        msg: >-
+          packages endpoint HTTP {{ packages_probe.stdout | default('(skipped)') }}
+          → https://{{ puppet_master }}:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+      when: packages_probe is not skipped
+
+    - name: Restart pe-puppetserver to reload static packages route (probe returned 404)
+      service:
+        name: pe-puppetserver
+        state: restarted
+      delegate_to: pe_master_dynamic
+      when: >-
+        packages_probe is not skipped
+        and (packages_probe.stdout | default('')) == '404'
+
+    - name: Wait for pe-puppetserver to be ready after restart
+      wait_for:
+        host: "{{ puppet_master }}"
+        port: 8140
+        timeout: 180
+        delay: 10
+      delegate_to: localhost
+      become: no
+      when: >-
+        packages_probe is not skipped
+        and (packages_probe.stdout | default('')) == '404'
+
     # ── Final gate: the repo metadata MUST exist before install.bash runs ─────
     # If it still doesn't, install.bash will 404 on repomd.xml — fail here with a
     # clear, actionable message instead of leaving a half-broken install.
@@ -356,18 +444,26 @@
       failed_when: false
       when: pe_version is defined
 
-    - name: Fail early if the platform repo could not be built on the primary
+    - name: Fail early if the platform repo metadata is still missing on the primary
       fail:
         msg: >-
-          The pe_repo repository for platform '{{ pe_platform | trim }}' was not built
-          on the primary ({{ puppet_master }}): no repodata/repomd.xml (or Packages)
-          under /opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}.
-          install.bash would 404. To fix, either:
-            1. Place the matching platform tarball in packages/puppet-agent/
-               (puppet-agent-{{ pe_platform | trim }}.tar.gz) and re-run — it is
-               extracted onto the primary and includes the repo metadata; or
-            2. Give the primary outbound internet so pe_repo can download the
-               packages from Puppet, then re-run.
+          The pe_repo repository for platform '{{ pe_platform | trim }}' is not ready
+          on the primary ({{ puppet_master }}):
+          no repodata/repomd.xml (or Packages) found under
+          /opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}.
+          install.bash would 404 on the metadata endpoint. To fix:
+            1. Ensure your packages/puppet-agent/ directory contains
+               puppet-agent-{{ pe_platform | trim }}.tar.gz and re-run. The
+               tarball is extracted on the primary and createrepo_c builds the
+               repodata. Download it from:
+               https://pm.puppetlabs.com/puppet-agent/<version>/repos/pe/
+               puppet-agent-{{ pe_platform | trim }}.tar.gz
+            2. OR give the primary outbound internet access so pe_repo can
+               download the packages itself from Puppet, then re-run.
+            3. If the tarball was extracted but pe-puppetserver returned 404
+               even after a restart, check that the tarball's top-level
+               directory is '{{ pe_platform | trim }}/' so packages land at
+               the correct path after extraction.
       when: >-
         pe_version is defined
         and (repo_metadata_final is not skipped)
