@@ -201,12 +201,11 @@
       delegate_to: pe_master_dynamic
       changed_when: false
       failed_when: false
-      when: platform_tarball.files | length > 0
 
     - name: Set PE version fact
       set_fact:
         pe_version: "{{ pe_version_raw.stdout | trim }}"
-      when: platform_tarball.files | length > 0 and (pe_version_raw.rc | default(1)) == 0
+      when: (pe_version_raw.rc | default(1)) == 0
 
     - name: Check if platform packages already in PE packages directory
       find:
@@ -302,6 +301,22 @@
       register: classifier_result
       changed_when: "'Classified PE Master' in classifier_result.stdout"
 
+    # Check whether pe_repo already generated the repo metadata for this platform.
+    # We need this even on re-runs where the tarball and class were already present:
+    # if a previous run extracted packages but the puppet run never completed, the
+    # repo metadata won't exist yet and install.bash will 404.
+    - name: Check if pe_repo metadata already exists for platform {{ pe_platform | trim }}
+      find:
+        paths: "/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}"
+        recurse: yes
+        patterns:
+          - "repomd.xml"    # RPM-based platforms
+          - "Packages.gz"   # Debian/Ubuntu platforms
+      register: repo_metadata
+      delegate_to: pe_master_dynamic
+      failed_when: false
+      when: pe_version is defined
+
     - name: Run puppet agent on primary to apply pe_repo classification
       command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
       delegate_to: pe_master_dynamic
@@ -311,7 +326,9 @@
       # failed_when: false so unrelated catalog failures don't abort the job.
       failed_when: false
       timeout: 600
-      when: classifier_result is changed
+      when: >-
+        classifier_result is changed
+        or (repo_metadata is not skipped and (repo_metadata.matched | default(0)) == 0)
 
     - name: Show puppet primary run result
       debug:
