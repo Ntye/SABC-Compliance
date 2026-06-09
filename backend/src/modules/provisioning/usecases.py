@@ -362,7 +362,15 @@ class InspecControllerUseCase:
             return {"success": False, "error": str(exc)}
 
     async def verify_node(self, node_id: str) -> dict:
-        """Probe a single node via `inspec detect` over SSH and persist the result."""
+        """Probe a single node over SSH and persist the result.
+
+        We deliberately use plain SSH (not `inspec detect`) for the reachability
+        check: InSpec runs over the same SSH channel that Ansible already uses,
+        so if SSH works the controller can drive InSpec controls. Plain SSH
+        also sidesteps InSpec's Ruby Net::SSH host-key check (which doesn't
+        honor the container's defaults on first connect) and the Chef license
+        prompt entirely.
+        """
         node = await self._node_repo.find_by_id(node_id)
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
@@ -371,45 +379,52 @@ class InspecControllerUseCase:
         if not status["installed"]:
             return {
                 "node_id": node_id,
+                "hostname": node.hostname,
                 "reachable": False,
                 "error": "InSpec is not installed on the platform",
             }
 
         key = node.ssh_key_path or self._default_key
-        target = f"ssh://{node.ssh_user}@{node.ip}:{node.ssh_port}"
         args = [
-            self.INSPEC_BIN, "detect",
-            "-t", target,
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
             "-i", key,
-            "--chef-license", "accept-silent",
+            "-p", str(node.ssh_port),
+            f"{node.ssh_user}@{node.ip}",
+            "echo INSPEC_REACHABLE",
         ]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
-            output = stdout.decode(errors="replace") if stdout else ""
-            ok = proc.returncode == 0
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+            out = (stdout or b"").decode(errors="replace")
+            err = (stderr or b"").decode(errors="replace")
+            ok = proc.returncode == 0 and "INSPEC_REACHABLE" in out
+            output = (out + "\n" + err).strip() if not ok else None
         except asyncio.TimeoutError:
             ok = False
-            output = "inspec detect timed out after 45s"
+            output = "ssh timed out after 20s"
         except Exception as exc:
             ok = False
             output = str(exc)
 
-        # Persist the result so the UI badge reflects reality.
-        if node.inspec_installed != ok:
-            node.inspec_installed = ok
-            node.updated_at = datetime.utcnow()
-            await self._node_repo.update(node)
+        # Always persist — the user's expectation is "click verify, see the
+        # current truth", so we record this run's result unconditionally.
+        node.inspec_installed = ok
+        node.updated_at = datetime.utcnow()
+        await self._node_repo.update(node)
 
         return {
             "node_id": node_id,
             "hostname": node.hostname,
             "reachable": ok,
-            "output": output[-1500:] if not ok else None,
+            "output": output[-1500:] if output else None,
         }
 
     async def verify_all_nodes(self) -> dict:

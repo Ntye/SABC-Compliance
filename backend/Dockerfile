@@ -11,11 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # over SSH (agentless). Used by the compliance engine to evaluate the InSpec
 # controls defined on each rule. The omnitruck installer drops the binary at
 # /usr/bin/inspec. If unavailable at build time (e.g. air-gapped build), the
-# runtime status endpoint will report "not installed" with manual install
-# instructions.
-RUN curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec \
-    && /usr/bin/inspec version \
-    || echo "WARN: InSpec install failed at build time — install manually in the container"
+# runtime status endpoint will report "not installed" and the operator can
+# click "Install on platform" in the UI.
+RUN set -e; \
+    echo "── Installing Chef InSpec via omnitruck ──"; \
+    if curl -fsSL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec; then \
+        /usr/bin/inspec version && echo "✓ InSpec installed at build time"; \
+    else \
+        echo "WARN: InSpec install failed at build time — install via UI at runtime"; \
+    fi
 
 WORKDIR /app
 
