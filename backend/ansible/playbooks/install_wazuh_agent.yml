@@ -345,6 +345,14 @@
       failed_when: false
       when: wazuh_enroll_stuck | bool
 
+    - name: Fix stale agent_name in ossec.conf to match current hostname
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '<agent_name>[^<]*</agent_name>'
+        replace: '<agent_name>{{ ansible_hostname }}</agent_name>'
+      failed_when: false
+      when: wazuh_enroll_stuck | bool
+
     - name: Start wazuh-agent to trigger fresh auto-enrollment
       service:
         name: wazuh-agent

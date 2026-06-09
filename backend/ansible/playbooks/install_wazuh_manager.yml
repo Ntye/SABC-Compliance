@@ -875,6 +875,39 @@
       ignore_errors: yes
 
     # ══════════════════════════════════════════════════════════════════════
+    # POST-INSTALL: enable force re-registration in authd
+    #
+    # Without <force>, the manager rejects any agent that tries to re-enrol
+    # with a name already in its database — including "never connected" stale
+    # entries.  Setting disconnected_time/after_registration_time to 0s means
+    # an agent can always reclaim its name immediately.
+    # ══════════════════════════════════════════════════════════════════════
+    - name: Enable authd force re-registration (allows disconnected agents to re-enrol)
+      shell: |
+        python3 << 'PYEOF'
+        import re, sys
+        path = '/var/ossec/etc/ossec.conf'
+        content = open(path).read()
+        force = (
+          '    <force>\n'
+          '      <enabled>yes</enabled>\n'
+          '      <key_mismatch>yes</key_mismatch>\n'
+          '      <disconnected_time enabled="yes">0s</disconnected_time>\n'
+          '      <after_registration_time>0s</after_registration_time>\n'
+          '    </force>'
+        )
+        if '<force>' in content:
+            content = re.sub(r'<force>[\s\S]*?</force>', force, content)
+        else:
+            content = content.replace('</auth>', force + '\n  </auth>', 1)
+        open(path, 'w').write(content)
+        print('changed')
+        PYEOF
+      register: authd_force_cfg
+      changed_when: "'changed' in authd_force_cfg.stdout"
+      notify: Restart wazuh-manager
+
+    # ══════════════════════════════════════════════════════════════════════
     # POST-INSTALL VERIFICATION
     # ══════════════════════════════════════════════════════════════════════
 
@@ -969,3 +1002,12 @@
           - "  ── Service status ────────────────────────────────────────────"
           - "{{ wazuh_ctl_status.stdout_lines | default([]) | join('\n') }}"
           - "══════════════════════════════════════════════════════════════════"
+
+
+  # ── Handlers ─────────────────────────────────────────────────────────────────
+  handlers:
+    - name: Restart wazuh-manager
+      service:
+        name: wazuh-manager
+        state: restarted
+      ignore_errors: yes
