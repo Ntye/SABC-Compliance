@@ -1,0 +1,243 @@
+---
+# Installs Chef InSpec on the target node (compliance scanner used by the
+# SABC compliance engine to run InSpec controls defined per rule).
+#
+# ── ONLINE MODE ──────────────────────────────────────────────────────────────
+# Downloads the official Chef InSpec installer from omnitruck.chef.io and
+# runs it on the target. Requires internet access on the target.
+#
+# ── OFFLINE / AIRGAP MODE ────────────────────────────────────────────────────
+# Triggered automatically when backend/packages/inspec/ contains a matching
+# .deb (Debian/Ubuntu) or .rpm (RHEL/Rocky/CentOS) package:
+#
+#     inspec_<version>-1_amd64.deb     (Debian/Ubuntu)
+#     inspec-<version>-1.x86_64.rpm    (RHEL/Rocky/CentOS)
+#
+# Download once on an internet-connected machine:
+#     curl -LO https://packages.chef.io/files/stable/inspec/<VERSION>/ubuntu/22.04/inspec_<VERSION>-1_amd64.deb
+#     curl -LO https://packages.chef.io/files/stable/inspec/<VERSION>/el/9/inspec-<VERSION>-1.el9.x86_64.rpm
+# then copy into backend/packages/inspec/.
+
+- name: Install Chef InSpec
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    inspec_pkg_dir: "{{ packages_dir }}/inspec"
+
+  # ── Bootstrap: ensure a MODERN Python (>=3.8) before gathering facts ───────
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python38 || yum install -y python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        exit 1
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
+
+  tasks:
+
+    # ── Idempotency ──────────────────────────────────────────────────────────
+    - name: Check if inspec is already installed
+      stat:
+        path: /usr/bin/inspec
+      register: inspec_bin
+
+    - name: Get installed InSpec version (if any)
+      command: /usr/bin/inspec version
+      register: inspec_existing_version
+      changed_when: false
+      failed_when: false
+      when: inspec_bin.stat.exists
+
+    # ── Airgap detection ─────────────────────────────────────────────────────
+    - name: Find offline InSpec packages on controller
+      find:
+        paths: "{{ inspec_pkg_dir }}"
+        patterns:
+          - "inspec*.deb"
+          - "inspec*.rpm"
+      register: inspec_offline_pkgs
+      delegate_to: localhost
+      become: no
+      failed_when: false
+
+    - name: Set airgap mode
+      set_fact:
+        inspec_airgap: "{{ inspec_offline_pkgs.files | length > 0 }}"
+
+    - name: Report OS family, install mode, and existing state
+      debug:
+        msg: >-
+          Target: {{ ansible_fqdn }}
+          ({{ ansible_distribution }} {{ ansible_distribution_version }},
+          {{ ansible_os_family }} family).
+          Mode: {{ 'AIRGAP — packages from ' + inspec_pkg_dir if inspec_airgap else 'ONLINE' }}.
+          Already installed: {{ inspec_bin.stat.exists }}
+          {{ '(' + (inspec_existing_version.stdout_lines | default(['unknown']) | first) + ')' if inspec_bin.stat.exists else '' }}.
+
+    - name: Fail on unsupported OS family
+      fail:
+        msg: >-
+          Unsupported OS family '{{ ansible_os_family }}'.
+          Supported: Debian (Ubuntu/Debian) and RedHat (RHEL/CentOS/Rocky/AlmaLinux).
+      when: ansible_os_family not in ['Debian', 'RedHat']
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ONLINE MODE — install via Chef omnitruck installer
+    # ══════════════════════════════════════════════════════════════════════
+    - name: Online — check connectivity to omnitruck.chef.io
+      shell: >-
+        curl -s --connect-timeout 10 --max-time 15
+          -o /dev/null -w "%{http_code}"
+          https://omnitruck.chef.io/install.sh
+      register: inet_check
+      changed_when: false
+      failed_when: false
+      when:
+        - not inspec_airgap
+        - not inspec_bin.stat.exists
+
+    - name: Show airgap setup instructions (no internet on target)
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║         InSpec — AIRGAP SETUP REQUIRED                       ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  The target node cannot reach omnitruck.chef.io."
+          - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
+          - ""
+          - "  Download InSpec on an internet-connected machine:"
+          - ""
+          - "  ── Debian / Ubuntu ──────────────────────────────────────────"
+          - "    curl -LO https://packages.chef.io/files/stable/inspec/<VERSION>/ubuntu/22.04/inspec_<VERSION>-1_amd64.deb"
+          - ""
+          - "  ── RHEL / CentOS / Rocky / AlmaLinux ────────────────────────"
+          - "    curl -LO https://packages.chef.io/files/stable/inspec/<VERSION>/el/9/inspec-<VERSION>-1.el9.x86_64.rpm"
+          - ""
+          - "  Then copy the file into the platform packages directory:"
+          - ""
+          - "    cp inspec*.deb  backend/packages/inspec/   # Debian"
+          - "    cp inspec*.rpm  backend/packages/inspec/   # RedHat"
+          - ""
+          - "  Re-run this job — the playbook detects the file and switches"
+          - "  to offline installation automatically."
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+      when:
+        - not inspec_airgap
+        - not inspec_bin.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    - name: Abort — target has no internet access (see instructions above)
+      fail:
+        msg: "No internet on target. Follow the airgap instructions printed above, then re-run."
+      when:
+        - not inspec_airgap
+        - not inspec_bin.stat.exists
+        - inet_check.stdout | default('000') != '200'
+
+    - name: Online — install InSpec via omnitruck
+      shell: |
+        curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec
+      args:
+        creates: /usr/bin/inspec
+      register: omnitruck_install
+      when:
+        - not inspec_airgap
+        - not inspec_bin.stat.exists
+        - inet_check.stdout | default('000') == '200'
+
+    # ══════════════════════════════════════════════════════════════════════
+    # AIRGAP MODE — install from local .deb / .rpm
+    # ══════════════════════════════════════════════════════════════════════
+    - name: Upload InSpec package to node (airgap)
+      copy:
+        src:  "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+        mode: '0644'
+      loop: "{{ inspec_offline_pkgs.files }}"
+      when:
+        - inspec_airgap
+        - not inspec_bin.stat.exists
+        - (ansible_os_family == 'Debian' and item.path is search('\\.deb$'))
+          or (ansible_os_family == 'RedHat' and item.path is search('\\.rpm$'))
+
+    - name: Install InSpec from .deb (airgap, Debian/Ubuntu)
+      apt:
+        deb: "/tmp/{{ item.path | basename }}"
+      loop: "{{ inspec_offline_pkgs.files }}"
+      when:
+        - inspec_airgap
+        - not inspec_bin.stat.exists
+        - ansible_os_family == 'Debian'
+        - item.path is search('\\.deb$')
+
+    - name: Install InSpec from .rpm (airgap, RHEL/Rocky/CentOS)
+      yum:
+        name: "/tmp/{{ item.path | basename }}"
+        state: present
+        disable_gpg_check: yes
+      loop: "{{ inspec_offline_pkgs.files }}"
+      when:
+        - inspec_airgap
+        - not inspec_bin.stat.exists
+        - ansible_os_family == 'RedHat'
+        - item.path is search('\\.rpm$')
+
+    # ══════════════════════════════════════════════════════════════════════
+    # VERIFICATION
+    # ══════════════════════════════════════════════════════════════════════
+    - name: Verify InSpec binary is now installed
+      stat:
+        path: /usr/bin/inspec
+      register: inspec_bin_after
+
+    - name: Fail if InSpec install did not produce /usr/bin/inspec
+      fail:
+        msg: >-
+          InSpec install completed without error but /usr/bin/inspec is missing.
+          Check the task output above.
+      when: not inspec_bin_after.stat.exists
+
+    - name: Get installed InSpec version
+      command: /usr/bin/inspec version
+      register: inspec_version
+      changed_when: false
+
+    - name: InSpec installed
+      debug:
+        msg: >-
+          InSpec installed on {{ ansible_fqdn }}
+          ({{ inspec_version.stdout_lines | first }}).
+          Mode: {{ 'AIRGAP' if inspec_airgap else 'ONLINE' }}.

@@ -225,6 +225,7 @@ class InstallServiceUseCase:
         "wazuh_manager": "install_wazuh_manager.yml",
         "puppet_agent":  "install_puppet_agent.yml",
         "wazuh_agent":   "install_wazuh_agent.yml",
+        "inspec":        "install_inspec.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master": "puppet_master_host",
@@ -234,6 +235,7 @@ class InstallServiceUseCase:
         "puppet_agent":  "puppet_enrolled",
         "wazuh_manager": "wazuh_enrolled",
         "wazuh_agent":   "wazuh_enrolled",
+        "inspec":        "inspec_installed",
     }
 
     def __init__(

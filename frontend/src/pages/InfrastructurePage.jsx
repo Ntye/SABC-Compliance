@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Cpu, Link, RefreshCw, Server, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Cpu, Link, RefreshCw, Server, ShieldCheck, XCircle } from 'lucide-react'
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
@@ -159,6 +159,7 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
     'wazuh-manager': t('infra.installWazuhManager'),
     'puppet-agent':  t('infra.installPuppetAgentTitle'),
     'wazuh-agent':   t('infra.installWazuhAgentTitle'),
+    'inspec':        t('infra.installInspecTitle'),
   }
 
   async function handleNodeChange(nodeId) {
@@ -376,6 +377,57 @@ function ServiceCard({ service, status, nodes, onStatusRefresh, t }) {
   )
 }
 
+function InspecCard({ nodes, t }) {
+  const [showInstall, setShowInstall] = useState(false)
+  const [activeJob, setActiveJob] = useState(null)
+
+  const eligibleNodes = nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned')
+  const installedCount = nodes.filter((n) => n.inspec_installed).length
+
+  return (
+    <>
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center">
+              <ShieldCheck size={16} className="text-brand" />
+            </div>
+            <div>
+              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.inspec')}</h3>
+              <p className="text-[11px] text-gray-400">{t('infra.inspecDesc')}</p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
+            {t('infra.inspecInstalledCount', { count: installedCount, total: nodes.length })}
+          </span>
+        </div>
+
+        <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">{t('infra.inspecExplain')}</p>
+
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setShowInstall(true)} className={btnSm(true)}>
+            <Server size={11} />
+            {t('infra.installInspecOnNode')}
+          </button>
+        </div>
+      </div>
+
+      {showInstall && (
+        <InstallModal
+          service="inspec"
+          nodes={eligibleNodes}
+          onClose={() => setShowInstall(false)}
+          onJobStarted={(job) => { setActiveJob(job); setShowInstall(false) }}
+          t={t}
+        />
+      )}
+      {activeJob && (
+        <LogDrawer job={activeJob} onClose={() => setActiveJob(null)} t={t} />
+      )}
+    </>
+  )
+}
+
 export default function InfrastructurePage() {
   const t = useT()
   const [status, setStatus] = useState(null)
@@ -437,6 +489,12 @@ export default function InfrastructurePage() {
             onStatusRefresh={handleRefresh}
             t={t}
           />
+        </div>
+      )}
+
+      {!loading && (
+        <div className="mt-4">
+          <InspecCard nodes={nodes} t={t} />
         </div>
       )}
 
