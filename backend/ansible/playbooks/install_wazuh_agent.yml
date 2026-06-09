@@ -373,12 +373,13 @@
           {{ (agent_connected_retry.rc == 0) if wazuh_enroll_stuck | bool
              else (agent_connected.rc == 0) }}
 
-    - name: Warn if the agent still has not connected
-      debug:
+    - name: Fail if agent never connected to manager
+      fail:
         msg: >-
-          WARNING: wazuh-agent installed on {{ ansible_fqdn }} but it has not yet
-          reported "Connected to the server". Check /var/ossec/logs/ossec.log on
-          the node and confirm 1514/1515 are open to {{ wazuh_manager }}.
+          wazuh-agent was installed on {{ ansible_fqdn }} but never connected to
+          the manager at {{ wazuh_manager }}. Check /var/ossec/logs/ossec.log on
+          the node and confirm ports 1514/1515 TCP are open between the node and
+          manager. Re-run this job once connectivity is confirmed.
       when: not (wazuh_connected_final | bool)
 
     - name: Wazuh Agent ready

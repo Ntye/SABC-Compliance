@@ -231,8 +231,9 @@ class InstallServiceUseCase:
         "wazuh_manager": "wazuh_manager_host",
     }
     _ENROLL_ATTRS = {
-        "puppet_agent": "puppet_enrolled",
-        "wazuh_agent":  "wazuh_enrolled",
+        "puppet_agent":  "puppet_enrolled",
+        "wazuh_manager": "wazuh_enrolled",
+        "wazuh_agent":   "wazuh_enrolled",
     }
 
     def __init__(
