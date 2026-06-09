@@ -675,10 +675,10 @@
         mode: '0750'
       when: not wazuh_installed
 
-    - name: Run Wazuh installer — AIRGAP offline mode (-a -o)
+    - name: Run Wazuh installer — AIRGAP offline mode (-a --offline-installation)
       shell: |
         bash wazuh-install.sh \
-          --install all \
+          -a \
           --offline-installation \
           --ignore-check \
           2>&1 | tee /var/log/wazuh-install/wazuh-install-$(date +%Y%m%dT%H%M%S).log
@@ -695,7 +695,7 @@
     - name: Run Wazuh installer — ONLINE mode (-a)
       shell: |
         bash wazuh-install.sh \
-          --install all \
+          -a \
           --ignore-check \
           2>&1 | tee /var/log/wazuh-install/wazuh-install-$(date +%Y%m%dT%H%M%S).log
       args:
@@ -812,83 +812,65 @@
       ignore_errors: yes
 
     # ── firewalld (RHEL/Rocky/CentOS) ─────────────────────────────────────
-
-    - name: Firewall (firewalld) — allow agent communication port {{ wazuh_manager_port }}/tcp
-      firewalld:
-        port:      "{{ wazuh_manager_port }}/tcp"
-        permanent: yes
-        state:     enabled
-        immediate: yes
+    # Use firewall-cmd directly — avoids the Ansible firewalld module's
+    # dependency on the Python `firewall` library, which is only installed
+    # for the system Python and not for the bootstrapped modern interpreter.
+    - name: Firewall (firewalld) — open all Wazuh ports
+      shell: |
+        if ! command -v firewall-cmd >/dev/null 2>&1; then
+          echo "firewalld not installed, skipping"; exit 0
+        fi
+        if ! firewall-cmd --state >/dev/null 2>&1; then
+          echo "firewalld not running, skipping"; exit 0
+        fi
+        for port in \
+          {{ wazuh_manager_port }}/tcp \
+          {{ wazuh_manager_port }}/udp \
+          {{ wazuh_auth_port }}/tcp \
+          {{ wazuh_api_port }}/tcp \
+          {{ wazuh_dashboard_port }}/tcp \
+          {{ wazuh_syslog_port }}/tcp \
+          {{ wazuh_syslog_port }}/udp \
+          {{ wazuh_indexer_port }}/tcp \
+          {{ wazuh_cluster_port }}/tcp; do
+          firewall-cmd --permanent --add-port="$port" && echo "opened $port"
+        done
+        firewall-cmd --reload
+        echo "firewall rules applied"
+      args:
+        executable: /bin/bash
+      register: firewalld_result
+      changed_when: "'firewall rules applied' in (firewalld_result.stdout | default(''))"
+      failed_when: false
       when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Firewall (firewalld) — allow agent communication port {{ wazuh_manager_port }}/udp
-      firewalld:
-        port:      "{{ wazuh_manager_port }}/udp"
-        permanent: yes
-        state:     enabled
-        immediate: yes
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Firewall (firewalld) — allow agent enrolment port {{ wazuh_auth_port }}/tcp
-      firewalld:
-        port:      "{{ wazuh_auth_port }}/tcp"
-        permanent: yes
-        state:     enabled
-        immediate: yes
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Firewall (firewalld) — allow REST API port {{ wazuh_api_port }}/tcp
-      firewalld:
-        port:      "{{ wazuh_api_port }}/tcp"
-        permanent: yes
-        state:     enabled
-        immediate: yes
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Firewall (firewalld) — allow dashboard port {{ wazuh_dashboard_port }}/tcp
-      firewalld:
-        port:      "{{ wazuh_dashboard_port }}/tcp"
-        permanent: yes
-        state:     enabled
-        immediate: yes
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
-
-    - name: Firewall (firewalld) — allow syslog port {{ wazuh_syslog_port }}/tcp+udp
-      firewalld:
-        port:      "{{ wazuh_syslog_port }}/{{ item }}"
-        permanent: yes
-        state:     enabled
-        immediate: yes
-      loop: [tcp, udp]
-      when: ansible_os_family == 'RedHat'
-      ignore_errors: yes
 
     # ══════════════════════════════════════════════════════════════════════
     # SERVICE MANAGEMENT — ensure all three Wazuh services are running
     # ══════════════════════════════════════════════════════════════════════
 
+    # The installer already starts all three services. These tasks ensure they
+    # are enabled at boot and running — if a service is missing it means the
+    # install failed, and the subsequent wait_for tasks will surface that.
     - name: Enable and start wazuh-indexer (OpenSearch)
       service:
         name:    wazuh-indexer
         state:   started
         enabled: yes
+      ignore_errors: yes
 
     - name: Enable and start wazuh-manager
       service:
         name:    wazuh-manager
         state:   started
         enabled: yes
+      ignore_errors: yes
 
     - name: Enable and start wazuh-dashboard
       service:
         name:    wazuh-dashboard
         state:   started
         enabled: yes
+      ignore_errors: yes
 
     # ══════════════════════════════════════════════════════════════════════
     # POST-INSTALL VERIFICATION
