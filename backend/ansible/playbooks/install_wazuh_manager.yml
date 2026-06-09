@@ -399,6 +399,7 @@
           - apt-transport-https
           - ca-certificates
           - libcap2-bin     # Wazuh uses file capabilities
+          - lsof            # required by wazuh-install.sh --offline-installation
         state: present
         update_cache: yes
       when:
@@ -412,6 +413,7 @@
           - tar
           - libcap
           - gnupg2
+          - lsof        # required by wazuh-install.sh --offline-installation
         state: present
       when:
         - not wazuh_installed
