@@ -289,21 +289,47 @@
         ls -la "$PKG_DIR/"
 
         if [ "$RPM_COUNT" -gt 0 ]; then
-          echo "=== Running createrepo_c ==="
-          for cr in /opt/puppetlabs/puppet/bin/createrepo_c \
-                    /opt/puppetlabs/server/bin/createrepo_c \
-                    /usr/bin/createrepo_c \
-                    /usr/bin/createrepo; do
-            [ -x "$cr" ] || continue
-            echo "Using: $cr"
-            "$cr" "$PKG_DIR"
-            echo "=== repodata after createrepo ==="
-            ls -la "$PKG_DIR/repodata/" 2>/dev/null || echo "(repodata dir not found)"
-            echo "CREATEREPO_DONE"
-            rm -rf "$STAGE"
-            exit 0
+          echo "=== Locating createrepo_c ==="
+          CR=""
+          # 1. Check well-known PE and system paths
+          for p in /opt/puppetlabs/puppet/bin/createrepo_c \
+                   /opt/puppetlabs/server/bin/createrepo_c \
+                   /usr/bin/createrepo_c \
+                   /usr/bin/createrepo; do
+            if [ -x "$p" ]; then CR="$p"; break; fi
           done
-          echo "WARN: createrepo_c binary not found on primary" >&2
+          # 2. Search the entire PE tree (handles non-standard install layouts)
+          if [ -z "$CR" ]; then
+            CR=$(find /opt/puppetlabs -name "createrepo_c" -type f -perm /111 2>/dev/null | head -1)
+            [ -n "$CR" ] && echo "Found via search: $CR"
+          fi
+          # 3. Last resort: install the createrepo-c package on the primary.
+          #    PE on Ubuntu primaries does not bundle createrepo_c — it must be
+          #    installed as a system package so we can build RPM repo metadata.
+          if [ -z "$CR" ]; then
+            echo "createrepo_c not found; installing createrepo-c package"
+            if command -v apt-get >/dev/null 2>&1; then
+              DEBIAN_FRONTEND=noninteractive apt-get install -y createrepo-c 2>&1
+              CR=$(command -v createrepo_c 2>/dev/null || true)
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y createrepo_c 2>&1
+              CR=$(command -v createrepo_c 2>/dev/null || true)
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y createrepo_c 2>&1
+              CR=$(command -v createrepo_c 2>/dev/null || true)
+            fi
+          fi
+          if [ -z "$CR" ]; then
+            echo "ERROR: could not find or install createrepo_c on primary" >&2
+            rm -rf "$STAGE"; exit 1
+          fi
+          echo "=== Running: $CR $PKG_DIR ==="
+          "$CR" "$PKG_DIR"
+          echo "=== repodata after createrepo ==="
+          ls -la "$PKG_DIR/repodata/" 2>/dev/null || echo "(repodata dir not found)"
+          echo "CREATEREPO_DONE"
+          rm -rf "$STAGE"
+          exit 0
         fi
 
         rm -rf "$STAGE"
