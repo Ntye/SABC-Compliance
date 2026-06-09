@@ -373,13 +373,41 @@
           {{ (agent_connected_retry.rc == 0) if wazuh_enroll_stuck | bool
              else (agent_connected.rc == 0) }}
 
+    - name: Show ossec.log tail on connection failure (diagnostic)
+      shell: tail -30 /var/ossec/logs/ossec.log 2>/dev/null || echo "(log not found)"
+      register: ossec_log_tail
+      changed_when: false
+      failed_when: false
+      when: not (wazuh_connected_final | bool)
+
+    - name: Show agent ossec.conf manager section (diagnostic)
+      shell: grep -A3 '<server>' /var/ossec/etc/ossec.conf 2>/dev/null || echo "(not found)"
+      register: ossec_conf_server
+      changed_when: false
+      failed_when: false
+      when: not (wazuh_connected_final | bool)
+
+    - name: Print connection failure diagnostics
+      debug:
+        msg:
+          - "── /var/ossec/logs/ossec.log (last 30 lines) ─────────────────"
+          - "{{ ossec_log_tail.stdout_lines | default([]) | join('\n') }}"
+          - ""
+          - "── ossec.conf <server> block ──────────────────────────────────"
+          - "{{ ossec_conf_server.stdout_lines | default([]) | join('\n') }}"
+          - ""
+          - "── Manual test from agent node ────────────────────────────────"
+          - "  sudo /var/ossec/bin/agent-auth -m {{ wazuh_manager }}"
+          - "  sudo /var/ossec/bin/wazuh-control status"
+          - "  nc -vz {{ wazuh_manager }} 1515 && nc -vz {{ wazuh_manager }} 1514"
+      when: not (wazuh_connected_final | bool)
+
     - name: Fail if agent never connected to manager
       fail:
         msg: >-
-          wazuh-agent was installed on {{ ansible_fqdn }} but never connected to
-          the manager at {{ wazuh_manager }}. Check /var/ossec/logs/ossec.log on
-          the node and confirm ports 1514/1515 TCP are open between the node and
-          manager. Re-run this job once connectivity is confirmed.
+          wazuh-agent installed on {{ ansible_fqdn }} but never connected to
+          {{ wazuh_manager }}. See diagnostics above (ossec.log tail + manual
+          test commands). Re-run once the issue is resolved.
       when: not (wazuh_connected_final | bool)
 
     - name: Wazuh Agent ready
