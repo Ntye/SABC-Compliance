@@ -34,7 +34,8 @@ from modules.nodes.usecases import (
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
-    InstallServiceUseCase, ListJobsUseCase, SetMasterHostUseCase, StartJobUseCase,
+    InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    SetMasterHostUseCase, StartJobUseCase,
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
@@ -174,7 +175,7 @@ async def lifespan(app: FastAPI):
     install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
     install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
     install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
-    install_inspec_uc        = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "inspec")
+    inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
@@ -183,7 +184,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
-        install_inspec_uc=install_inspec_uc,
+        inspec_uc=inspec_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,
     )

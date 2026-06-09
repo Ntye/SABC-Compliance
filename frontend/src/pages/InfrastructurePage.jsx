@@ -4,6 +4,7 @@ import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
   checkPuppetAgentPlatform,
+  getInspecStatus, installInspecOnController, verifyInspecAllNodes,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -159,7 +160,6 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
     'wazuh-manager': t('infra.installWazuhManager'),
     'puppet-agent':  t('infra.installPuppetAgentTitle'),
     'wazuh-agent':   t('infra.installWazuhAgentTitle'),
-    'inspec':        t('infra.installInspecTitle'),
   }
 
   async function handleNodeChange(nodeId) {
@@ -377,54 +377,140 @@ function ServiceCard({ service, status, nodes, onStatusRefresh, t }) {
   )
 }
 
-function InspecCard({ nodes, t }) {
-  const [showInstall, setShowInstall] = useState(false)
-  const [activeJob, setActiveJob] = useState(null)
+function InspecCard({ nodes, onNodesRefresh, t }) {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [installing, setInstalling] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [results, setResults] = useState(null)
+  const toast = useToast()
 
-  const eligibleNodes = nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned')
+  async function loadStatus() {
+    try {
+      setStatus(await getInspecStatus())
+    } catch (_) {
+      setStatus({ installed: false, version: null })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadStatus() }, [])
+
+  async function handleInstall() {
+    setInstalling(true)
+    try {
+      const res = await installInspecOnController()
+      toast(t('infra.inspecInstallDone', { version: res.version || '' }), 'success')
+      await loadStatus()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  async function handleVerify() {
+    setVerifying(true)
+    setResults(null)
+    try {
+      const res = await verifyInspecAllNodes()
+      setResults(res)
+      toast(t('infra.inspecVerifyDone', { ok: res.reachable, total: res.total }), 'success')
+      onNodesRefresh?.()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setVerifying(false)
+    }
+  }
+
   const installedCount = nodes.filter((n) => n.inspec_installed).length
 
   return (
-    <>
-      <div className="bg-white rounded-xl border border-gray-100 p-5">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center">
-              <ShieldCheck size={16} className="text-brand" />
-            </div>
-            <div>
-              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.inspec')}</h3>
-              <p className="text-[11px] text-gray-400">{t('infra.inspecDesc')}</p>
-            </div>
+    <div className="bg-white rounded-xl border border-gray-100 p-5">
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center">
+            <ShieldCheck size={16} className={status?.installed ? 'text-brand' : 'text-gray-300'} />
           </div>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
-            {t('infra.inspecInstalledCount', { count: installedCount, total: nodes.length })}
-          </span>
+          <div>
+            <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.inspec')}</h3>
+            <p className="text-[11px] text-gray-400">{t('infra.inspecDesc')}</p>
+          </div>
         </div>
+        {loading ? (
+          <Spinner size={12} />
+        ) : status?.installed ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-50 text-green-700">
+            <CheckCircle size={9} /> {t('infra.inspecInstalled')}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">
+            {t('infra.inspecMissing')}
+          </span>
+        )}
+      </div>
 
-        <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">{t('infra.inspecExplain')}</p>
+      <p className="text-[11px] text-gray-500 mb-4 leading-relaxed">{t('infra.inspecExplain')}</p>
 
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setShowInstall(true)} className={btnSm(true)}>
-            <Server size={11} />
-            {t('infra.installInspecOnNode')}
-          </button>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <div className="px-3 py-2 bg-gray-50 rounded-lg">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecPlatformVersion')}</p>
+          <p className="text-[12px] font-mono text-gray-700">
+            {status?.installed ? status.version : t('infra.inspecNotInstalled')}
+          </p>
+        </div>
+        <div className="px-3 py-2 bg-gray-50 rounded-lg">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecCoverage')}</p>
+          <p className="text-[12px] font-mono text-gray-700">
+            {installedCount} / {nodes.length} {t('infra.inspecNodesReachable')}
+          </p>
         </div>
       </div>
 
-      {showInstall && (
-        <InstallModal
-          service="inspec"
-          nodes={eligibleNodes}
-          onClose={() => setShowInstall(false)}
-          onJobStarted={(job) => { setActiveJob(job); setShowInstall(false) }}
-          t={t}
-        />
+      <div className="flex flex-wrap gap-2">
+        {!status?.installed && (
+          <button onClick={handleInstall} disabled={installing} className={btnSm(true)}>
+            {installing ? <Spinner size={11} /> : <Server size={11} />}
+            {installing ? t('infra.inspecInstalling') : t('infra.inspecInstallBtn')}
+          </button>
+        )}
+        <button
+          onClick={handleVerify}
+          disabled={!status?.installed || verifying || nodes.length === 0}
+          className={btnSm(status?.installed)}
+        >
+          {verifying ? <Spinner size={11} /> : <RefreshCw size={11} />}
+          {verifying ? t('infra.inspecVerifying') : t('infra.inspecVerifyBtn')}
+        </button>
+      </div>
+
+      {results && results.results?.length > 0 && (
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider mb-2">
+            {t('infra.inspecLastVerify')}
+          </p>
+          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            {results.results.map((r) => (
+              <div key={r.node_id || r.hostname} className="flex items-start gap-2 text-[11px]">
+                {r.reachable ? (
+                  <CheckCircle size={11} className="text-green-500 mt-0.5 flex-shrink-0" />
+                ) : (
+                  <XCircle size={11} className="text-red-500 mt-0.5 flex-shrink-0" />
+                )}
+                <span className="font-mono text-gray-700">{r.hostname || r.node_id?.slice(0, 8)}</span>
+                {!r.reachable && r.output && (
+                  <span className="text-red-600 truncate" title={r.output}>
+                    — {r.output.split('\n').slice(-2).join(' ').slice(0, 80)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
-      {activeJob && (
-        <LogDrawer job={activeJob} onClose={() => setActiveJob(null)} t={t} />
-      )}
-    </>
+    </div>
   )
 }
 
@@ -494,7 +580,7 @@ export default function InfrastructurePage() {
 
       {!loading && (
         <div className="mt-4">
-          <InspecCard nodes={nodes} t={t} />
+          <InspecCard nodes={nodes} onNodesRefresh={handleRefresh} t={t} />
         </div>
       )}
 

@@ -7,6 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Chef InSpec — runs locally on the platform and connects to managed nodes
+# over SSH (agentless). Used by the compliance engine to evaluate the InSpec
+# controls defined on each rule. The omnitruck installer drops the binary at
+# /usr/bin/inspec. If unavailable at build time (e.g. air-gapped build), the
+# runtime status endpoint will report "not installed" with manual install
+# instructions.
+RUN curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec \
+    && /usr/bin/inspec version \
+    || echo "WARN: InSpec install failed at build time — install manually in the container"
+
 WORKDIR /app
 
 # Python deps first — layer cached unless requirements.txt changes.

@@ -225,7 +225,6 @@ class InstallServiceUseCase:
         "wazuh_manager": "install_wazuh_manager.yml",
         "puppet_agent":  "install_puppet_agent.yml",
         "wazuh_agent":   "install_wazuh_agent.yml",
-        "inspec":        "install_inspec.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master": "puppet_master_host",
@@ -235,7 +234,6 @@ class InstallServiceUseCase:
         "puppet_agent":  "puppet_enrolled",
         "wazuh_manager": "wazuh_enrolled",
         "wazuh_agent":   "wazuh_enrolled",
-        "inspec":        "inspec_installed",
     }
 
     def __init__(
@@ -300,3 +298,144 @@ class InstallServiceUseCase:
             "extra_vars": extra_vars,
             "on_complete": on_complete,
         })
+
+
+class InspecControllerUseCase:
+    """Manages the platform-side (controller) InSpec installation.
+
+    InSpec is agentless: it lives once on the SABC platform server and reaches
+    each registered node over SSH. This use case answers two questions:
+      1. Is InSpec installed on the controller? (and at what version)
+      2. Can InSpec actually reach a given node over SSH? (which marks the
+         node as inspec_installed = True so the compliance engine knows it
+         can run controls against it).
+    """
+
+    INSPEC_BIN = "/usr/bin/inspec"
+
+    def __init__(self, node_repo: INodeRepository, default_ssh_key_path: str) -> None:
+        self._node_repo = node_repo
+        self._default_key = default_ssh_key_path
+
+    async def get_status(self) -> dict:
+        """Return {installed, version, executable_path}."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.INSPEC_BIN, "version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode == 0:
+                version = stdout.decode().strip().splitlines()[0] if stdout else "unknown"
+                return {"installed": True, "version": version, "executable_path": self.INSPEC_BIN}
+        except (FileNotFoundError, asyncio.TimeoutError, Exception):
+            pass
+        return {"installed": False, "version": None, "executable_path": self.INSPEC_BIN}
+
+    async def install_on_controller(self) -> dict:
+        """Install InSpec on the platform server via the official omnitruck script.
+
+        Requires root (typical inside the backend container). On bare-metal
+        deploys without root, returns an error with the manual install command.
+        """
+        cmd = "curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+            output = stdout.decode(errors="replace") if stdout else ""
+            if proc.returncode == 0:
+                status = await self.get_status()
+                return {"success": True, "output": output[-2000:], **status}
+            return {
+                "success": False,
+                "output": output[-2000:],
+                "error": f"installer exited with code {proc.returncode}",
+            }
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "installer timed out after 5 minutes"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    async def verify_node(self, node_id: str) -> dict:
+        """Probe a single node via `inspec detect` over SSH and persist the result."""
+        node = await self._node_repo.find_by_id(node_id)
+        if not node:
+            raise NotFoundError(f"Node '{node_id}' not found")
+
+        status = await self.get_status()
+        if not status["installed"]:
+            return {
+                "node_id": node_id,
+                "reachable": False,
+                "error": "InSpec is not installed on the platform",
+            }
+
+        key = node.ssh_key_path or self._default_key
+        target = f"ssh://{node.ssh_user}@{node.ip}:{node.ssh_port}"
+        args = [
+            self.INSPEC_BIN, "detect",
+            "-t", target,
+            "-i", key,
+            "--chef-license", "accept-silent",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45)
+            output = stdout.decode(errors="replace") if stdout else ""
+            ok = proc.returncode == 0
+        except asyncio.TimeoutError:
+            ok = False
+            output = "inspec detect timed out after 45s"
+        except Exception as exc:
+            ok = False
+            output = str(exc)
+
+        # Persist the result so the UI badge reflects reality.
+        if node.inspec_installed != ok:
+            node.inspec_installed = ok
+            node.updated_at = datetime.utcnow()
+            await self._node_repo.update(node)
+
+        return {
+            "node_id": node_id,
+            "hostname": node.hostname,
+            "reachable": ok,
+            "output": output[-1500:] if not ok else None,
+        }
+
+    async def verify_all_nodes(self) -> dict:
+        """Probe every registered node in parallel; persist per-node results."""
+        status = await self.get_status()
+        if not status["installed"]:
+            return {
+                "controller": status,
+                "error": "InSpec is not installed on the platform",
+                "results": [],
+            }
+
+        nodes = await self._node_repo.find_all({})
+        results = await asyncio.gather(
+            *(self.verify_node(n.id) for n in nodes),
+            return_exceptions=True,
+        )
+        normalized = [
+            r if isinstance(r, dict)
+            else {"node_id": None, "reachable": False, "error": str(r)}
+            for r in results
+        ]
+        reachable = sum(1 for r in normalized if r.get("reachable"))
+        return {
+            "controller": status,
+            "total": len(nodes),
+            "reachable": reachable,
+            "results": normalized,
+        }

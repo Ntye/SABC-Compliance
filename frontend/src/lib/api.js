@@ -263,6 +263,26 @@ export async function checkPuppetAgentPlatform(nodeId) {
   return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
 }
 
+// ── InSpec (platform / controller) ──────────────────────────────────────────
+// InSpec runs only on the SABC platform server and reaches each node over SSH.
+// No InSpec install on the managed nodes.
+
+export async function getInspecStatus() {
+  return request('GET', '/infrastructure/inspec/status')
+}
+
+export async function installInspecOnController() {
+  return request('POST', '/infrastructure/inspec/install')
+}
+
+export async function verifyInspecAllNodes() {
+  return request('POST', '/infrastructure/inspec/verify')
+}
+
+export async function verifyInspecNode(nodeId) {
+  return request('POST', `/infrastructure/inspec/verify/${encodeURIComponent(nodeId)}`)
+}
+
 // ── Compliance ────────────────────────────────────────────────────────────────
 
 export async function getComplianceSummary() {
