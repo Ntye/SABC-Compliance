@@ -123,6 +123,8 @@ export const translations = {
       description: 'Description', tags: 'Tags', tagsHint: '(comma-separated)',
       register: 'Register server', registering: 'Registering…',
       successTitle: 'Node registered successfully', failTitle: 'Registration failed',
+      advancedSetup: 'Advanced setup',
+      detectTitle: 'Agent Detection',
       helper: {
         title: 'SSH Setup',
         description: 'Before registering a server, run the bootstrap script on it. It creates the ansible user, installs the platform\'s SSH key, and grants sudo. Run once per server.',
@@ -402,6 +404,8 @@ export const translations = {
       description: 'Description', tags: 'Étiquettes', tagsHint: '(séparées par des virgules)',
       register: 'Enregistrer le serveur', registering: 'Enregistrement…',
       successTitle: 'Noeud enregistré avec succès', failTitle: 'Échec de l\'enregistrement',
+      advancedSetup: 'Configuration avancée',
+      detectTitle: 'Détection des agents',
       helper: {
         title: 'Configuration SSH',
         description: 'Avant d\'enregistrer un serveur, exécutez le script de bootstrap dessus. Il crée l\'utilisateur ansible, installe la clé SSH de la plateforme et accorde sudo. À exécuter une fois par serveur.',

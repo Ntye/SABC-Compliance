@@ -37,6 +37,7 @@ class NodeResponse(BaseModel):
     last_seen: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    detect_job_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -111,14 +112,17 @@ _delete_uc = None
 _check_dns_uc = None
 _fix_dns_uc = None
 _change_identity_uc = None
+_detect_agents_uc = None
 
 
 def set_use_cases(
     register_uc, get_uc, list_uc, ping_uc, ping_all_uc,
     update_uc, delete_uc, check_dns_uc, fix_dns_uc, change_identity_uc,
+    detect_agents_uc=None,
 ) -> None:
     global _register_uc, _get_uc, _list_uc, _ping_uc, _ping_all_uc
     global _update_uc, _delete_uc, _check_dns_uc, _fix_dns_uc, _change_identity_uc
+    global _detect_agents_uc
     _register_uc = register_uc
     _get_uc = get_uc
     _list_uc = list_uc
@@ -129,9 +133,10 @@ def set_use_cases(
     _check_dns_uc = check_dns_uc
     _fix_dns_uc = fix_dns_uc
     _change_identity_uc = change_identity_uc
+    _detect_agents_uc = detect_agents_uc
 
 
-def _to_response(node) -> NodeResponse:
+def _to_response(node, detect_job_id: str | None = None) -> NodeResponse:
     return NodeResponse(
         id=node.id,
         hostname=node.hostname,
@@ -153,6 +158,7 @@ def _to_response(node) -> NodeResponse:
         last_seen=node.last_seen,
         created_at=node.created_at,
         updated_at=node.updated_at,
+        detect_job_id=detect_job_id,
     )
 
 
@@ -182,10 +188,18 @@ async def register_node(
     """
     Register a Linux server. Tests SSH connectivity and detects OS before saving.
     Also captures FQDN and checks DNS resolution. Returns 422 if SSH fails.
+    Automatically launches an agent-detection job and returns its ID.
     """
     try:
         node = await _register_uc.execute(body.model_dump())
-        return _to_response(node)
+        detect_job_id: str | None = None
+        if _detect_agents_uc is not None:
+            try:
+                detect_job = await _detect_agents_uc.execute(node.id)
+                detect_job_id = detect_job.id
+            except Exception:
+                pass
+        return _to_response(node, detect_job_id=detect_job_id)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except SSHConnectError as exc:

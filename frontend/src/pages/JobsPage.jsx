@@ -17,6 +17,7 @@ const SERVICE_LABELS = {
   'provision':             'VM Provision (Add VM)',
   'inspec-verify':         'Compliance Scan (InSpec)',
   'install_check_health':  'Node Health Check',
+  'detect_agents':         'Agent Detection',
 }
 
 function serviceLabel(type) {

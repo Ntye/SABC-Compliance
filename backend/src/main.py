@@ -33,8 +33,8 @@ from modules.nodes.usecases import (
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
-    CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
-    InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
+    GetJobUseCase, InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
     SetMasterHostUseCase, StartJobUseCase,
 )
 from modules.compliance.usecases import (
@@ -151,6 +151,7 @@ async def lifespan(app: FastAPI):
         check_dns_uc=check_dns_uc,
         fix_dns_uc=fix_dns_uc,
         change_identity_uc=change_identity_uc,
+        detect_agents_uc=detect_agents_uc,
     )
 
     # -- Provisioning / infrastructure use cases --
@@ -167,6 +168,7 @@ async def lifespan(app: FastAPI):
         settings.wazuh_api_port,
     )
     start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
+    detect_agents_uc = DetectAgentsUseCase(start_job_uc, node_repo, job_repo)
     list_jobs_uc = ListJobsUseCase(job_repo)
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)

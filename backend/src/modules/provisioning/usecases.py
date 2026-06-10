@@ -320,6 +320,59 @@ class InstallServiceUseCase:
         })
 
 
+class DetectAgentsUseCase:
+    """Launch a read-only Ansible job that detects Puppet / Wazuh enrollment.
+
+    Requires become: yes on the target to read protected cert directories and
+    Wazuh logs. On success, updates node.puppet_enrolled / wazuh_enrolled by
+    scanning the job log for PUPPET_STATUS=ENROLLED / WAZUH_STATUS=ENROLLED
+    sentinel strings output by detect_agents.yml.
+    """
+
+    PLAYBOOK = "detect_agents.yml"
+
+    def __init__(
+        self,
+        start_job_uc: StartJobUseCase,
+        node_repo: INodeRepository,
+        job_repo: IJobRepository,
+    ) -> None:
+        self._start    = start_job_uc
+        self._node_repo = node_repo
+        self._job_repo  = job_repo
+
+    async def execute(self, node_id: str) -> Job:
+        node = await self._node_repo.find_by_id(node_id)
+        if not node:
+            raise NotFoundError(f"Node '{node_id}' not found")
+
+        node_repo = self._node_repo
+        job_repo  = self._job_repo
+
+        async def on_complete(job: Job, _node: Node | None) -> None:
+            if job.status != "success":
+                return
+            full_job = await job_repo.find_by_id(job.id)
+            if not full_job:
+                return
+            all_text = " ".join(entry.get("line", "") for entry in full_job.logs)
+            fresh = await node_repo.find_by_id(node_id)
+            if not fresh:
+                return
+            fresh.puppet_enrolled = "PUPPET_STATUS=ENROLLED" in all_text
+            fresh.wazuh_enrolled  = "WAZUH_STATUS=ENROLLED"  in all_text
+            fresh.updated_at = datetime.utcnow()
+            await node_repo.update(fresh)
+
+        return await self._start.execute({
+            "type":       "detect_agents",
+            "node_id":    node_id,
+            "playbook":   self.PLAYBOOK,
+            "extra_vars": {},
+            "on_complete": on_complete,
+        })
+
+
 class InspecControllerUseCase:
     """Manages the platform-side (controller) InSpec installation.
 
