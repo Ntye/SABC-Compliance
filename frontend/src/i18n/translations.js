@@ -241,6 +241,9 @@ export const translations = {
       nodeInspection: 'Node inspection',
       colSshReach: 'SSH reachability', colLastProbe: 'Last probe',
       inspect: 'Inspect',
+      diagnose: 'Diagnose', diagnosing: 'Diagnosing…',
+      diagStarted: 'Diagnostic job started — open the Jobs page to follow the log.',
+      diagnoseHint: 'Run a read-only health check (Puppet, Wazuh, network, clock)',
     },
     keys: {
       title: 'API Keys', createTitle: 'Create new key',
@@ -515,6 +518,9 @@ export const translations = {
       nodeInspection: 'Inspection des nœuds',
       colSshReach: 'Accessibilité SSH', colLastProbe: 'Dernière sonde',
       inspect: 'Inspecter',
+      diagnose: 'Diagnostiquer', diagnosing: 'Diagnostic…',
+      diagStarted: 'Diagnostic démarré — ouvrez la page Tâches pour suivre le journal.',
+      diagnoseHint: 'Vérification lecture seule (Puppet, Wazuh, réseau, horloge)',
     },
     keys: {
       title: 'Clés API', createTitle: 'Créer une nouvelle clé',

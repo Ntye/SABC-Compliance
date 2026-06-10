@@ -47,6 +47,7 @@ _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
+_check_health_uc = None
 _inspec_uc = None
 _node_repo = None
 _packages_dir: str = ""
@@ -59,6 +60,7 @@ def set_use_cases(
     install_wazuh_manager_uc,
     install_puppet_agent_uc,
     install_wazuh_agent_uc,
+    check_health_uc=None,
     inspec_uc=None,
     node_repo=None,
     packages_dir: str = "",
@@ -66,7 +68,7 @@ def set_use_cases(
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
-    global _inspec_uc
+    global _check_health_uc, _inspec_uc
     global _node_repo, _packages_dir
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
@@ -74,6 +76,7 @@ def set_use_cases(
     _install_wazuh_manager_uc = install_wazuh_manager_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
+    _check_health_uc = check_health_uc
     _inspec_uc = inspec_uc
     _node_repo = node_repo
     _packages_dir = packages_dir
@@ -207,6 +210,21 @@ async def install_wazuh_agent(
     """Start an Ansible job to install and enroll the Wazuh agent on the specified node."""
     try:
         job = await _install_wazuh_agent_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/check-health", response_model=JobRef, status_code=202, summary="Run a read-only node health check")
+async def check_node_health(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Start a read-only Ansible diagnostic job that reports Puppet/Wazuh/network state."""
+    if _check_health_uc is None:
+        raise HTTPException(status_code=503, detail="Health check use case not configured")
+    try:
+        job = await _check_health_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

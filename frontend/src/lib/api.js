@@ -283,6 +283,10 @@ export async function verifyInspecNode(nodeId) {
   return request('POST', `/infrastructure/inspec/verify/${encodeURIComponent(nodeId)}`)
 }
 
+export async function checkNodeHealth(nodeId) {
+  return request('POST', '/infrastructure/check-health', { node_id: nodeId })
+}
+
 // ── Compliance ────────────────────────────────────────────────────────────────
 
 export async function getComplianceSummary() {

@@ -175,6 +175,7 @@ async def lifespan(app: FastAPI):
     install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
     install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
     install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+    check_health_uc          = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
     inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
@@ -184,6 +185,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
+        check_health_uc=check_health_uc,
         inspec_uc=inspec_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,

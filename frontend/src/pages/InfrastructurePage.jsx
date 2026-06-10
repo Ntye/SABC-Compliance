@@ -8,6 +8,7 @@ import {
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
   checkPuppetAgentPlatform,
   getInspecStatus, installInspecOnController, verifyInspecAllNodes, verifyInspecNode,
+  checkNodeHealth,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -725,6 +726,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
   const [installing, setInstalling] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [probing, setProbing]     = useState({})
+  const [probeErrors, setProbeErrors] = useState({})
+  const [diagnosing, setDiagnosing]   = useState({})
+  const [activeJob, setActiveJob]     = useState(null)
   const [results, setResults]     = useState(null)
   const toast = useToast()
 
@@ -770,13 +774,30 @@ function VerifyTab({ nodes, onRefresh, t }) {
 
   async function handleProbeNode(nodeId) {
     setProbing((p) => ({ ...p, [nodeId]: true }))
+    setProbeErrors((p) => ({ ...p, [nodeId]: null }))
     try {
-      await verifyInspecNode(nodeId)
+      const result = await verifyInspecNode(nodeId)
+      if (!result.reachable && result.output) {
+        setProbeErrors((p) => ({ ...p, [nodeId]: result.output }))
+      }
       onRefresh?.()
     } catch (err) {
       toast(err.message, 'error')
     } finally {
       setProbing((p) => ({ ...p, [nodeId]: false }))
+    }
+  }
+
+  async function handleDiagnose(nodeId) {
+    setDiagnosing((p) => ({ ...p, [nodeId]: true }))
+    try {
+      const job = await checkNodeHealth(nodeId)
+      setActiveJob(job)
+      toast(t('infra.diagStarted'), 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setDiagnosing((p) => ({ ...p, [nodeId]: false }))
     }
   }
 
@@ -898,19 +919,38 @@ function VerifyTab({ nodes, onRefresh, t }) {
                   </td>
                   <td className="px-5 py-3">
                     <Pip ok={n.inspec_installed || false} label={n.inspec_installed ? t('infra.reachable') : t('infra.unreachable')} />
+                    {probeErrors[n.id] && (
+                      <p
+                        className="text-[10px] text-red-500 font-mono mt-1 max-w-[220px] truncate cursor-help"
+                        title={probeErrors[n.id]}
+                      >
+                        {probeErrors[n.id].split('\n')[0]}
+                      </p>
+                    )}
                   </td>
                   <td className="px-5 py-3 text-gray-500">
                     {timeAgo(n.updated_at)}
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => handleProbeNode(n.id)}
-                      disabled={!status?.installed || probing[n.id]}
-                      className={btnSm(false)}
-                    >
-                      {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
-                      {t('infra.inspect')}
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleProbeNode(n.id)}
+                        disabled={!status?.installed || probing[n.id]}
+                        className={btnSm(false)}
+                      >
+                        {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
+                        {t('infra.inspect')}
+                      </button>
+                      <button
+                        onClick={() => handleDiagnose(n.id)}
+                        disabled={diagnosing[n.id]}
+                        className={btnSm(false)}
+                        title={t('infra.diagnoseHint')}
+                      >
+                        {diagnosing[n.id] ? <Spinner size={11} /> : <AlertTriangle size={11} />}
+                        {diagnosing[n.id] ? t('infra.diagnosing') : t('infra.diagnose')}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -918,6 +958,10 @@ function VerifyTab({ nodes, onRefresh, t }) {
           </table>
         )}
       </div>
+
+      {activeJob && (
+        <LogDrawer job={activeJob} onClose={() => { setActiveJob(null); onRefresh() }} t={t} />
+      )}
     </>
   )
 }

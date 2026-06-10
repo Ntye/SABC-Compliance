@@ -226,6 +226,7 @@ class InstallServiceUseCase:
         "wazuh_manager": "install_wazuh_manager.yml",
         "puppet_agent":  "install_puppet_agent.yml",
         "wazuh_agent":   "install_wazuh_agent.yml",
+        "check_health":  "check_node_health.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master": "puppet_master_host",
@@ -286,6 +287,13 @@ class InstallServiceUseCase:
             if settings.wazuh_api_pass:
                 extra_vars["wazuh_api_pass"] = settings.wazuh_api_pass
             extra_vars["wazuh_api_port"] = settings.wazuh_api_port
+        elif self._service == "check_health":
+            host = await self._config.get("puppet_master_host")
+            if host:
+                extra_vars["puppet_master_host"] = host
+            host = await self._config.get("wazuh_manager_host")
+            if host:
+                extra_vars["wazuh_manager_host"] = host
 
         pe_password_used = extra_vars.get("pe_console_password", "SABCPuppet1!")
 
