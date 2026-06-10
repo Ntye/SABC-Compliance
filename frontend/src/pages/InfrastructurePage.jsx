@@ -16,9 +16,14 @@ import Spinner from '../components/common/Spinner.jsx'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function utcDate(iso) {
+  if (!iso) return null
+  return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z')
+}
+
 function timeAgo(iso) {
   if (!iso) return 'never'
-  const s = Math.floor((Date.now() - new Date(iso)) / 1000)
+  const s = Math.floor((Date.now() - utcDate(iso)) / 1000)
   if (s < 60)  return 'just now'
   const m = Math.floor(s / 60)
   if (m < 60)  return `${m}m ago`

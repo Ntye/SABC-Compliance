@@ -46,15 +46,22 @@ function fmtDuration(totalSeconds) {
   return parts.slice(0, 3).join(' ') || '0s'
 }
 
+// Backend stores UTC datetimes without timezone suffix. Append 'Z' so the
+// browser always parses them as UTC rather than local time.
+function utcDate(iso) {
+  if (!iso) return null
+  return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z')
+}
+
 function duration(start, end) {
-  const ms = new Date(end || Date.now()) - new Date(start)
+  const ms = (end ? utcDate(end) : new Date()) - utcDate(start)
   if (ms < 0) return '—'
   return fmtDuration(Math.floor(ms / 1000))
 }
 
 function timeAgo(iso) {
   if (!iso) return '—'
-  const s = Math.floor((Date.now() - new Date(iso)) / 1000)
+  const s = Math.floor((Date.now() - utcDate(iso)) / 1000)
   if (s < 60)  return 'just now'
   const m = Math.floor(s / 60)
   if (m < 60)  return `${m}m ago`

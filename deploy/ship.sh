@@ -207,9 +207,43 @@ deploy() {
   echo "  SABC Compliance Platform is running on:"
   echo ""
 
-  # Try to get the public IP
+  # Detect the public IP of the EC2 instance.
+  # Modern EC2 instances require IMDSv2 (token-based); a plain IMDSv1 curl
+  # returns a 401 with an empty body which leaves pub_ip blank.
   local pub_ip
-  pub_ip=$(remote "curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || hostname -I | awk '{print \$1}'" 2>/dev/null || echo "<ec2-public-ip>")
+  pub_ip=$(remote 'bash -s' << 'IPEOF' 2>/dev/null
+set -e
+ip=""
+# 1) IMDSv2 — get a short-lived token, then request the public IPv4
+token=$(curl -sf --connect-timeout 2 -X PUT \
+  "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 10" 2>/dev/null || true)
+if [ -n "$token" ]; then
+  ip=$(curl -sf --connect-timeout 2 \
+    -H "X-aws-ec2-metadata-token: $token" \
+    "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+fi
+# 2) IMDSv1 fallback
+if [ -z "$ip" ]; then
+  ip=$(curl -sf --connect-timeout 2 \
+    "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+fi
+# 3) hostname fallback
+if [ -z "$ip" ]; then
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+fi
+printf "%s" "$ip"
+IPEOF
+  )
+
+  # Strip stray whitespace/newlines from the captured output
+  pub_ip=$(printf "%s" "${pub_ip}" | tr -d '[:space:]')
+
+  # Final fallback: extract the host from the SSH target (user@host → host)
+  if [ -z "$pub_ip" ]; then
+    pub_ip="${TARGET#*@}"
+  fi
+
   echo "  UI:      http://${pub_ip}"
   echo "  API:     http://${pub_ip}/api"
   echo "  Swagger: http://${pub_ip}:3000/docs"
