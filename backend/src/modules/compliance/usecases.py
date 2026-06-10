@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import re
 import uuid
 from datetime import datetime
@@ -147,6 +148,11 @@ class CollectNodeComplianceUseCase:
                 await self._repo.save_report(puppet_report)
                 collected.append(self._summarise(puppet_report))
 
+            patching_report = await self._collect_os_patching(node)
+            if patching_report:
+                await self._repo.save_report(patching_report)
+                collected.append(self._summarise(patching_report))
+
         if not collected:
             raise ValidationError("No compliance data could be collected from the node over SSH.")
 
@@ -235,6 +241,69 @@ class CollectNodeComplianceUseCase:
             passed_checks=passed,
             failed_checks=failed,
             total_checks=total,
+            details=details,
+            collected_at=datetime.utcnow(),
+        )
+
+
+    async def _collect_os_patching(self, node: Node) -> ComplianceReport | None:
+        """Read the os_patching Facter fact written by albatrossflavour/os_patching."""
+        facts_path = "/opt/puppetlabs/facter/facts.d/os_patching.json"
+        try:
+            stdout, _, rc = await self._ssh.run_command(
+                node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path,
+                f"sudo cat {facts_path} 2>/dev/null || cat {facts_path} 2>/dev/null",
+            )
+        except Exception:
+            return None
+        if not stdout.strip():
+            return None
+
+        try:
+            data = json.loads(stdout)
+            # os_patching writes facts as {"os_patching": {...}} or flat
+            facts = data.get("os_patching", data)
+        except (json.JSONDecodeError, AttributeError):
+            return None
+
+        pkg_updates = int(facts.get("package_updates", 0) or 0)
+        sec_updates = int(facts.get("security_package_updates", 0) or 0)
+        blocked = bool(facts.get("blocked", False))
+
+        if pkg_updates == 0 and sec_updates == 0:
+            return None
+
+        security_status = "fail" if sec_updates > 0 else "pass"
+        details = [
+            {
+                "control_id": "os_patching.updates",
+                "title": "Available package updates",
+                "status": "info",
+                "value": pkg_updates,
+            },
+            {
+                "control_id": "os_patching.security_updates",
+                "title": "Available security updates",
+                "status": security_status,
+                "value": sec_updates,
+            },
+            {
+                "control_id": "os_patching.blocked",
+                "title": "Patch window blocked",
+                "status": "warn" if blocked else "pass",
+                "value": blocked,
+            },
+        ]
+        passed = sum(1 for d in details if d["status"] == "pass")
+        failed = sum(1 for d in details if d["status"] == "fail")
+        return ComplianceReport(
+            id=str(uuid.uuid4()),
+            node_id=node.id,
+            source="os_patching",
+            framework="cis",
+            passed_checks=passed,
+            failed_checks=failed,
+            total_checks=len(details),
             details=details,
             collected_at=datetime.utcnow(),
         )

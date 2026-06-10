@@ -1,0 +1,101 @@
+---
+# Install the albatrossflavour/os_patching Puppet Forge module on the Puppet Server
+# and configure it via Hiera so every managed node reports patch status as a
+# Facter fact at /opt/puppetlabs/facter/facts.d/os_patching.json.
+#
+# The SABC compliance collector reads that file over SSH and surfaces:
+#   - package_updates (total available updates)
+#   - security_package_updates (security-specific updates)
+#   - blocked (whether the patch window is currently locked)
+#
+# Run this against the Puppet Server node (master or primary) after puppetserver
+# is installed and running.  Works with both PE and open-source Puppet Server.
+#
+- name: Install os_patching Forge module and configure Hiera
+  hosts: target
+  become: yes
+  gather_facts: yes
+
+  vars:
+    hiera_common: /etc/puppetlabs/code/environments/production/hieradata/common.yaml
+
+  tasks:
+    - name: Verify puppetserver is running
+      command: systemctl is-active puppetserver
+      register: puppetserver_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check if pe-puppetserver is running (PE installs)
+      command: systemctl is-active pe-puppetserver
+      register: pe_puppetserver_status
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if neither puppetserver nor pe-puppetserver is running
+      fail:
+        msg: >-
+          Neither puppetserver nor pe-puppetserver is active on {{ ansible_fqdn }}.
+          Install Puppet Server first, then run this playbook.
+      when:
+        - puppetserver_status.rc != 0
+        - pe_puppetserver_status.rc != 0
+
+    - name: Install os_patching Forge module
+      command: >
+        /opt/puppetlabs/bin/puppet module install
+        albatrossflavour-os_patching --force
+      register: module_install
+      changed_when: "'Installing' in module_install.stdout or 'Installed' in module_install.stdout"
+
+    - name: Show module install output
+      debug:
+        msg: "{{ module_install.stdout_lines }}"
+
+    - name: Ensure hieradata directory exists
+      file:
+        path: "{{ hiera_common | dirname }}"
+        state: directory
+        owner: puppet
+        group: puppet
+        mode: '0755'
+
+    - name: Ensure common.yaml exists
+      copy:
+        dest: "{{ hiera_common }}"
+        content: "---\n"
+        force: no
+        owner: puppet
+        group: puppet
+        mode: '0644'
+
+    - name: Add os_patching class to Hiera common.yaml
+      blockinfile:
+        path: "{{ hiera_common }}"
+        marker: "# {mark} SABC os_patching configuration"
+        block: |
+          classes:
+            - os_patching
+          os_patching::patch_window: 'Week3'
+          os_patching::reboot_override: 'default'
+
+    - name: Run puppet agent to apply os_patching class (may take a few minutes)
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      register: puppet_run
+      changed_when: puppet_run.rc == 2
+      # rc 0 = no changes, rc 2 = changes applied — both are success
+      failed_when: puppet_run.rc not in [0, 2]
+      timeout: 300
+      ignore_errors: yes
+
+    - name: Show puppet agent run output
+      debug:
+        msg: "{{ puppet_run.stdout_lines[-30:] | default([]) }}"
+
+    - name: os_patching configuration complete
+      debug:
+        msg: >-
+          os_patching Forge module installed and configured via Hiera on {{ ansible_fqdn }}.
+          After the next Puppet run on each managed node, the fact file
+          /opt/puppetlabs/facter/facts.d/os_patching.json will appear and the
+          SABC compliance collector will include patch status in compliance reports.

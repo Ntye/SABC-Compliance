@@ -27,9 +27,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 24
 
-    # Puppet Enterprise
+    # Puppet
+    puppet_edition: str = "enterprise"          # "enterprise" | "community"
     puppet_master_host: str | None = None
-    puppet_master_port: int = 8143
+    puppet_master_port: int | None = None       # auto-selects 8143 (PE) or 8140 (OSS) when None
     puppet_rbac_port: int = 4433
     puppet_admin_user: str = "admin"
     puppet_admin_pass: str | None = None

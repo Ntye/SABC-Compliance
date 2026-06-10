@@ -1,0 +1,82 @@
+---
+# Export the Puppet Enterprise CA for migration to open-source Puppet Server.
+#
+# Run this playbook against the EXISTING PE primary BEFORE decommissioning it.
+# The CA archive is fetched to the Ansible controller (platform server) at:
+#   packages/puppet-master/puppet-ca-export.tar.gz
+#
+# Then run install_puppet_server_oss.yml with puppet_ca_archive pointing to
+# that file to restore the CA on the new OSS server.  Agents retain their
+# existing certificates and do not need to re-enroll.
+#
+# !! SECURITY NOTES !!
+#   The archive contains ca_key.pem — the crown jewel of the Puppet PKI.
+#   • This playbook transfers it ONLY over SSH (Ansible fetch = SCP/SFTP).
+#   • The archive is deleted from the PE server immediately after fetch.
+#   • The archive lands in packages/puppet-master/ on the controller.
+#     Run install_puppet_server_oss.yml promptly; it deletes the file on success.
+#   • If the play fails, DELETE packages/puppet-master/puppet-ca-export.tar.gz
+#     from the controller manually before retrying.
+#
+- name: Export Puppet Enterprise CA for migration
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
+    ca_export_dest: "{{ packages_dir }}/puppet-master/puppet-ca-export.tar.gz"
+
+  pre_tasks:
+    - name: Gather facts
+      setup:
+
+  tasks:
+    - name: Verify PE CA directory exists on this host
+      stat:
+        path: /etc/puppetlabs/puppet/ssl/ca
+      register: ca_dir_stat
+
+    - name: Fail if CA directory is missing
+      fail:
+        msg: >-
+          /etc/puppetlabs/puppet/ssl/ca not found on {{ ansible_fqdn }}.
+          This playbook must run against the Puppet Enterprise primary server.
+      when: not ca_dir_stat.stat.exists
+
+    - name: Archive PE CA directory on remote host
+      archive:
+        path: /etc/puppetlabs/puppet/ssl/ca
+        dest: /tmp/puppet-ca-export.tar.gz
+        format: gz
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Ensure destination directory exists on controller
+      local_action:
+        module: file
+        path: "{{ packages_dir }}/puppet-master"
+        state: directory
+        mode: '0700'
+      become: no
+
+    - name: Fetch CA archive to Ansible controller (SSH only — never HTTP)
+      fetch:
+        src: /tmp/puppet-ca-export.tar.gz
+        dest: "{{ ca_export_dest }}"
+        flat: yes
+
+    - name: Remove CA archive from PE server after fetch
+      file:
+        path: /tmp/puppet-ca-export.tar.gz
+        state: absent
+
+    - name: CA export complete
+      debug:
+        msg: >-
+          CA archive fetched to {{ ca_export_dest }} on the controller.
+          Next step: run install_puppet_server_oss.yml with
+          puppet_ca_archive={{ ca_export_dest }}
+          to migrate this CA to the new open-source Puppet Server.
+          The archive will be deleted from the controller after a successful migration.

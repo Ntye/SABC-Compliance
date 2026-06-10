@@ -237,6 +237,23 @@ export const translations = {
       // masters tab
       mastersFirst: 'Masters first',
       mastersFirstDesc: 'Both masters must be Reachable (green) before you enroll agents. Once they\'re up, move to the Agents tab to install the Puppet and Wazuh agents on your nodes.',
+      // edition badges
+      editionEnterprise: 'Puppet Enterprise',
+      editionCommunity: 'Puppet Open Source',
+      // migrate CA
+      migrateCaBtn: 'Migrate CA',
+      migrateCaTitle: 'Migrate Puppet CA to Open Source',
+      migrateCaDesc: 'Export the Puppet Enterprise CA to enable a zero-re-enrollment migration to open-source Puppet Server. Existing agent certificates remain valid — they are signed by the same CA.',
+      migrateCaWarning: 'The CA archive contains ca_key.pem — the root key of your Puppet PKI. It will be transferred exclusively over SSH and deleted from disk after a successful migration.',
+      migrateCaStep1: 'Export CA from PE primary',
+      migrateCaStep1Desc: 'Archives the CA directory from the currently configured Puppet master and stores it on the platform server.',
+      migrateCaConfirmLabel: 'I understand the security implications and have SSH access to the Puppet master',
+      migrateCaStart: 'Export CA',
+      migrateCaExporting: 'Exporting…',
+      migrateCaSuccess: 'CA archive ready. Run "Install on a node" to provision the new open-source Puppet Server using the migrated CA.',
+      migrateCaError: 'CA export failed',
+      // agents tab — CA migration tooltip
+      puppetCaTooltip: 'Re-enrollment not required — existing PE certificates are honoured by the OSS server (same CA)',
       // verify tab
       nodeInspection: 'Node inspection',
       colSshReach: 'SSH reachability', colLastProbe: 'Last probe',
@@ -512,6 +529,23 @@ export const translations = {
       enroll: 'Enrôler',
       mastersFirst: 'Maîtres en premier',
       mastersFirstDesc: 'Les deux maîtres doivent être Accessibles (vert) avant d\'enrôler les agents. Une fois prêts, passez à l\'onglet Agents.',
+      // badges d'édition
+      editionEnterprise: 'Puppet Enterprise',
+      editionCommunity: 'Puppet Open Source',
+      // migration CA
+      migrateCaBtn: 'Migrer CA',
+      migrateCaTitle: 'Migrer la CA Puppet vers Open Source',
+      migrateCaDesc: 'Exporte la CA de Puppet Enterprise pour permettre une migration vers Puppet Server open source sans ré-enrôlement. Les certificats agents existants restent valides — ils sont signés par la même CA.',
+      migrateCaWarning: 'L\'archive CA contient ca_key.pem — la clé racine de votre PKI Puppet. Elle sera transférée exclusivement par SSH et supprimée après une migration réussie.',
+      migrateCaStep1: 'Exporter la CA depuis le primaire PE',
+      migrateCaStep1Desc: 'Archive le répertoire CA depuis le maître Puppet configuré et le stocke sur le serveur de la plateforme.',
+      migrateCaConfirmLabel: 'Je comprends les implications de sécurité et j\'ai un accès SSH au maître Puppet',
+      migrateCaStart: 'Exporter la CA',
+      migrateCaExporting: 'Export en cours…',
+      migrateCaSuccess: 'Archive CA prête. Utilisez « Installer sur un nœud » pour provisionner le nouveau serveur Puppet open source avec la CA migrée.',
+      migrateCaError: 'Échec de l\'export CA',
+      // info-bulle migration CA
+      puppetCaTooltip: 'Ré-enrôlement non requis — les certificats PE existants sont acceptés par le serveur OSS (même CA)',
       nodeInspection: 'Inspection des nœuds',
       colSshReach: 'Accessibilité SSH', colLastProbe: 'Dernière sonde',
       inspect: 'Inspecter',

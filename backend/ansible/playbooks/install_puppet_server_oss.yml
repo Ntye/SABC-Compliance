@@ -1,0 +1,424 @@
+---
+# Installs open-source Puppet Server (community edition) on the target node.
+#
+# Two modes, controlled by whether puppet_ca_archive is set:
+#
+#   Mode A — Fresh install (puppet_ca_archive NOT defined):
+#     • Adds the official Puppet APT/YUM repository
+#     • Installs puppetserver
+#     • Writes autosign.conf containing '*' (enables autosigning for initial enroll)
+#     • Configures puppet.conf [master] section
+#     • Starts and enables puppetserver
+#
+#   Mode B — CA migration from existing PE (puppet_ca_archive IS defined):
+#     • puppet_ca_archive must be a path on the Ansible controller to a .tar.gz
+#       that contains the full ca/ subtree from the old PE server.
+#       Obtain it by running export_puppet_ca.yml against the old PE server first.
+#     • Installs puppetserver but stops it before it initialises its own CA
+#     • Wipes the freshly-initialised CA
+#     • Extracts the migrated CA archive in its place
+#     • Generates a new SSL certificate for THIS server, signed by the migrated CA
+#       — agents trust this cert because they already trust the CA that signed it
+#     • Verifies the SHA-256 fingerprint of the served CA matches the migrated CA
+#     • Cleans up the local CA archive after a successful migration
+#
+# !! SECURITY NOTES !!
+#   ca_key.pem is the crown jewel of the Puppet PKI.
+#   • Transfer the archive ONLY over SSH (SCP/SFTP), never HTTP.
+#   • The post_tasks block deletes the archive from the Ansible controller on
+#     success. If the play fails mid-flight you MUST delete
+#     packages/puppet-master/puppet-ca-export.tar.gz manually.
+#   • autosign = * is acceptable only during initial setup. Replace it with a
+#     policy-based autosign script (/etc/puppetlabs/puppet/autosign.rb) for
+#     production use. The playbook logs a WARNING to the job output as a reminder.
+#
+- name: Install Puppet Server (open source)
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    puppet_version: "8"
+    puppet_server_memory: "512m"
+
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: could not provide python >= 3.8 on target" >&2
+        exit 1
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
+
+  tasks:
+    # ── Preflight ─────────────────────────────────────────────────────────────
+    - name: Assert puppet_ca_archive is not an HTTP URL (security gate)
+      assert:
+        that: >-
+          puppet_ca_archive is not defined
+          or not (puppet_ca_archive | string | lower | regex_search('^https?://'))
+        fail_msg: >-
+          puppet_ca_archive must be a local filesystem path on the Ansible
+          controller, not an HTTP/HTTPS URL. ca_key.pem must never travel over HTTP.
+      when: puppet_ca_archive is defined
+
+    - name: Preflight — warn on low memory (puppetserver JVM minimum is 4 GB)
+      debug:
+        msg: >-
+          WARNING: {{ ansible_fqdn }} has {{ ansible_memtotal_mb }} MB RAM.
+          puppetserver requires at least 4096 MB — installation may be slow or
+          unstable. Proceeding anyway.
+      when: ansible_memtotal_mb < 4096
+
+    - name: Preflight — check free disk on /opt
+      shell: df -BG --output=avail /opt | tail -1 | tr -d 'G '
+      register: opt_free_gb
+      changed_when: false
+      failed_when: false
+
+    - name: Preflight — warn on low disk
+      debug:
+        msg: >-
+          WARNING: only {{ opt_free_gb.stdout | trim }} GB free on /opt.
+          puppetserver needs at least 5 GB. Proceeding anyway.
+      when:
+        - opt_free_gb.stdout | trim | length > 0
+        - (opt_free_gb.stdout | trim | int) < 5
+
+    # ── Repository setup ──────────────────────────────────────────────────────
+    - name: Download Puppet {{ puppet_version }} release package (Debian)
+      get_url:
+        url: "https://apt.puppet.com/puppet{{ puppet_version }}-release-{{ ansible_distribution_release }}.deb"
+        dest: /tmp/puppet-release.deb
+        timeout: 60
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Puppet release package (Debian)
+      apt:
+        deb: /tmp/puppet-release.deb
+      when: ansible_os_family == 'Debian'
+
+    - name: Add Puppet {{ puppet_version }} repo (RedHat)
+      yum:
+        name: "https://yum.puppet.com/puppet{{ puppet_version }}-release-el-{{ ansible_distribution_major_version }}.noarch.rpm"
+        state: present
+      when: ansible_os_family == 'RedHat'
+
+    # ── Install puppetserver ──────────────────────────────────────────────────
+    # Mode B: install but do NOT start — we must replace the CA before puppetserver
+    # ever serves TLS. Starting with a fresh self-signed CA and then replacing it
+    # would cause a brief window where agents get the wrong CA fingerprint.
+    - name: Install puppet-agent (Debian) — creates puppet user/group before server
+      apt:
+        name: puppet-agent
+        state: present
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Install puppetserver (Debian)
+      apt:
+        name: puppetserver
+        state: present
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Install puppet-agent (RedHat) — creates puppet user/group before server
+      yum:
+        name: puppet-agent
+        state: present
+      when: ansible_os_family == 'RedHat'
+
+    - name: Install puppetserver (RedHat)
+      yum:
+        name: puppetserver
+        state: present
+      when: ansible_os_family == 'RedHat'
+
+    - name: Set JVM heap for puppetserver (Debian)
+      lineinfile:
+        path: /etc/default/puppetserver
+        regexp: '^JAVA_ARGS='
+        line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
+        create: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Set JVM heap for puppetserver (RedHat)
+      lineinfile:
+        path: /etc/sysconfig/puppetserver
+        regexp: '^JAVA_ARGS='
+        line: 'JAVA_ARGS="-Xms{{ puppet_server_memory }} -Xmx{{ puppet_server_memory }}"'
+        create: yes
+      when: ansible_os_family == 'RedHat'
+
+    # ── Mode B: stop puppetserver before CA surgery ───────────────────────────
+    - name: Stop puppetserver before CA surgery (Mode B — CA migration)
+      service:
+        name: puppetserver
+        state: stopped
+      when: puppet_ca_archive is defined
+
+    # The package postinst may have started the service and initialised a fresh CA.
+    # Wipe both possible CA locations before restoring the migrated one.
+    - name: Wipe freshly-initialised CA (Mode B)
+      shell: |
+        rm -rf /etc/puppetlabs/puppet/ssl/ca
+        rm -rf /etc/puppetlabs/puppetserver/ca
+      args:
+        executable: /bin/bash
+      when: puppet_ca_archive is defined
+
+    - name: Ensure ssl directory exists for CA restore (Mode B)
+      file:
+        path: /etc/puppetlabs/puppet/ssl
+        state: directory
+        owner: puppet
+        group: puppet
+        mode: '0771'
+      when: puppet_ca_archive is defined
+
+    - name: Restore PE CA onto new Puppet Server (Mode B)
+      unarchive:
+        src: "{{ puppet_ca_archive }}"
+        dest: /etc/puppetlabs/puppet/ssl/
+        owner: puppet
+        group: puppet
+        mode: preserve
+      when: puppet_ca_archive is defined
+
+    # Fix permissions BEFORE puppetserver reads the CA files.
+    # Sequence matters: chown/chmod must complete before the service starts.
+    - name: Fix CA directory ownership (Mode B)
+      shell: chown -R puppet:puppet /etc/puppetlabs/puppet/ssl
+      args:
+        executable: /bin/bash
+      when: puppet_ca_archive is defined
+
+    - name: Set restrictive permissions on CA private key (Mode B)
+      file:
+        path: /etc/puppetlabs/puppet/ssl/ca/ca_key.pem
+        owner: puppet
+        group: puppet
+        mode: '0640'
+      when: puppet_ca_archive is defined
+
+    - name: Set permissions on CA certificate (Mode B)
+      file:
+        path: /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem
+        owner: puppet
+        group: puppet
+        mode: '0644'
+      when: puppet_ca_archive is defined
+
+    - name: Set permissions on CRL (Mode B — keep exactly as-is, revocations preserved)
+      file:
+        path: /etc/puppetlabs/puppet/ssl/ca/ca_crl.pem
+        owner: puppet
+        group: puppet
+        mode: '0644'
+      when: puppet_ca_archive is defined
+
+    # Generate a new SSL cert for THIS server, signed by the migrated CA.
+    # Agents trust this cert because they already trust the CA that signed it.
+    # The new server may have a different FQDN than the old PE primary — that
+    # is fine: a new cert with the new hostname is generated and signed by the
+    # same trusted CA, so no agent needs to re-enroll.
+    - name: Generate new SSL cert for this Puppet Server signed by migrated CA (Mode B)
+      shell: >
+        /opt/puppetlabs/bin/puppetserver ca generate
+        --certname {{ ansible_fqdn }}
+        --subject-alt-names puppet,{{ ansible_fqdn }},{{ ansible_hostname }},{{ ansible_default_ipv4.address }}
+      args:
+        executable: /bin/bash
+      register: ca_generate
+      when: puppet_ca_archive is defined
+
+    - name: Show CA generate output (Mode B)
+      debug:
+        msg: "{{ ca_generate.stdout_lines | default([]) }}"
+      when: puppet_ca_archive is defined
+
+    # ── puppet.conf ───────────────────────────────────────────────────────────
+    - name: Ensure puppet config directory exists
+      file:
+        path: /etc/puppetlabs/puppet
+        state: directory
+        mode: '0755'
+
+    - name: Configure puppet.conf [master] section
+      ini_file:
+        path: /etc/puppetlabs/puppet/puppet.conf
+        section: "{{ item.section }}"
+        option: "{{ item.key }}"
+        value: "{{ item.value }}"
+        create: yes
+      loop:
+        - { section: 'main',   key: 'certname',     value: '{{ ansible_fqdn }}' }
+        - { section: 'main',   key: 'environment',  value: 'production' }
+        - { section: 'master', key: 'autosign',      value: '/etc/puppetlabs/puppet/autosign.conf' }
+        - { section: 'master', key: 'dns_alt_names', value: 'puppet,{{ ansible_fqdn }},{{ ansible_hostname }}' }
+
+    # ── Mode A: write autosign.conf ───────────────────────────────────────────
+    # Enable autosigning for initial agent enrollment (Mode A only).
+    # Mode B agents are already enrolled and present their existing valid certs.
+    - name: Write autosign.conf (Mode A — fresh install)
+      copy:
+        dest: /etc/puppetlabs/puppet/autosign.conf
+        content: |
+          # Autosign any CSR. Replace with a policy script for production:
+          #   autosign = /etc/puppetlabs/puppet/autosign.rb
+          *
+        owner: puppet
+        group: puppet
+        mode: '0644'
+      when: puppet_ca_archive is not defined
+
+    - name: "SECURITY WARNING: autosign = * is set"
+      debug:
+        msg: >-
+          WARNING: autosign.conf contains '*' which auto-signs all CSRs.
+          This is acceptable for initial enrollment but should be replaced
+          with a policy-based autosign script (/etc/puppetlabs/puppet/autosign.rb)
+          before this server is exposed to untrusted networks.
+      when: puppet_ca_archive is not defined
+
+    # ── Start puppetserver ────────────────────────────────────────────────────
+    - name: Enable and start puppetserver
+      service:
+        name: puppetserver
+        state: started
+        enabled: yes
+
+    # ── Firewall ──────────────────────────────────────────────────────────────
+    - name: Allow port 8140 agent traffic (ufw)
+      ufw:
+        rule: allow
+        port: "8140"
+        proto: tcp
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: Allow port 8140 agent traffic (firewalld)
+      firewalld:
+        port: "8140/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: ansible_os_family == 'RedHat'
+      ignore_errors: yes
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Wait for puppetserver port 8140
+      wait_for:
+        port: 8140
+        timeout: 120
+        delay: 5
+
+    - name: Verify port 8140 is listening
+      shell: ss -ltn | grep ':8140'
+      changed_when: false
+      register: port_check
+
+    - name: Show port 8140 listening status
+      debug:
+        msg: "{{ port_check.stdout_lines }}"
+
+    - name: Health-check the CA endpoint
+      shell: >
+        curl -sk https://localhost:8140/puppet-ca/v1/certificate/ca
+        | openssl x509 -noout -subject
+      register: ca_health
+      changed_when: false
+      failed_when: ca_health.rc != 0 or ca_health.stdout == ''
+
+    - name: Show CA endpoint subject
+      debug:
+        msg: "CA subject: {{ ca_health.stdout | trim }}"
+
+    # Mode B: verify the CA fingerprint matches the migrated CA exactly.
+    # If fingerprints differ, stop puppetserver immediately and fail.
+    - name: Verify CA fingerprint matches migrated CA (Mode B — security gate)
+      shell: |
+        set -e
+        ORIG=$(openssl x509 -noout -fingerprint -sha256 \
+          -in /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem \
+          | sed 's/.*Fingerprint=//')
+        SERVED=$(curl -sk https://localhost:8140/puppet-ca/v1/certificate/ca \
+          | openssl x509 -noout -fingerprint -sha256 \
+          | sed 's/.*Fingerprint=//')
+        if [ -z "$SERVED" ]; then
+          echo "CA_FINGERPRINT_ERROR: could not retrieve the served CA certificate"
+          systemctl stop puppetserver || true
+          exit 1
+        fi
+        if [ "$ORIG" != "$SERVED" ]; then
+          echo "CA_FINGERPRINT_MISMATCH"
+          echo "  expected (migrated CA): $ORIG"
+          echo "  served   (new server) : $SERVED"
+          echo "Rolling back: stopping puppetserver"
+          systemctl stop puppetserver || true
+          exit 1
+        fi
+        echo "CA_FINGERPRINT_OK: $ORIG"
+      args:
+        executable: /bin/bash
+      register: fp_check
+      changed_when: false
+      when: puppet_ca_archive is defined
+
+    - name: Show fingerprint verification result (Mode B)
+      debug:
+        msg: "{{ fp_check.stdout_lines | default([]) }}"
+      when: puppet_ca_archive is defined
+
+    - name: Verify puppet version
+      command: /opt/puppetlabs/bin/puppet --version
+      register: puppet_ver
+      changed_when: false
+
+    - name: Puppet Server (open source) ready
+      debug:
+        msg: >-
+          Puppet Server (open source) installed —
+          version {{ puppet_ver.stdout | trim }} —
+          {{ 'CA migrated from PE (agents do not need re-enrollment)' if puppet_ca_archive is defined
+             else 'fresh CA initialised — autosign * enabled (replace with policy script for production)' }}
+
+  post_tasks:
+    # Delete the CA archive from the Ansible controller after a successful migration.
+    # If the play failed mid-flight the operator must delete it manually.
+    - name: Delete CA archive from controller after successful migration (Mode B)
+      local_action:
+        module: file
+        path: "{{ puppet_ca_archive }}"
+        state: absent
+      when: puppet_ca_archive is defined
+      become: no

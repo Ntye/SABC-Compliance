@@ -33,8 +33,8 @@ from modules.nodes.usecases import (
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
-    CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
-    InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    CancelJobUseCase, ExportPuppetCaUseCase, GetInfrastructureStatusUseCase,
+    GetJobUseCase, InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
     SetMasterHostUseCase, StartJobUseCase,
 )
 from modules.compliance.usecases import (
@@ -153,17 +153,24 @@ async def lifespan(app: FastAPI):
         change_identity_uc=change_identity_uc,
     )
 
+    # -- Effective Puppet port (auto-select if not explicitly set) --
+    effective_puppet_port = settings.puppet_master_port or (
+        8143 if settings.puppet_edition == "enterprise" else 8140
+    )
+    puppet_base_vars = {"puppet_edition": settings.puppet_edition}
+
     # -- Provisioning / infrastructure use cases --
     get_infra_status_uc = GetInfrastructureStatusUseCase(
         platform_config_repo,
         settings.puppet_master_host,
         settings.wazuh_manager_host,
-        settings.puppet_master_port,
+        effective_puppet_port,
         settings.wazuh_api_port,
+        puppet_edition=settings.puppet_edition,
     )
     set_master_host_uc = SetMasterHostUseCase(
         platform_config_repo,
-        settings.puppet_master_port,
+        effective_puppet_port,
         settings.wazuh_api_port,
     )
     start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
@@ -171,10 +178,17 @@ async def lifespan(app: FastAPI):
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)
 
-    install_puppet_master_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
+    install_puppet_master_uc = InstallServiceUseCase(
+        start_job_uc, platform_config_repo, node_repo, "puppet_master",
+        base_extra_vars=puppet_base_vars,
+    )
     install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
-    install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
+    install_puppet_agent_uc  = InstallServiceUseCase(
+        start_job_uc, platform_config_repo, node_repo, "puppet_agent",
+        base_extra_vars=puppet_base_vars,
+    )
     install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+    export_ca_uc             = ExportPuppetCaUseCase(start_job_uc, platform_config_repo, node_repo)
     inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
@@ -184,6 +198,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
+        export_ca_uc=export_ca_uc,
         inspec_uc=inspec_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,

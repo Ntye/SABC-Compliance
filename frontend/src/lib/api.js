@@ -263,6 +263,10 @@ export async function checkPuppetAgentPlatform(nodeId) {
   return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
 }
 
+export async function exportPuppetCa() {
+  return request('POST', '/infrastructure/puppet-master/export-ca')
+}
+
 // ── InSpec (platform / controller) ──────────────────────────────────────────
 // InSpec runs only on the SABC platform server and reaches each node over SSH.
 // No InSpec install on the managed nodes.

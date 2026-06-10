@@ -6,7 +6,7 @@ import {
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
-  checkPuppetAgentPlatform,
+  checkPuppetAgentPlatform, exportPuppetCa,
   getInspecStatus, installInspecOnController, verifyInspecAllNodes, verifyInspecNode,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -34,24 +34,122 @@ function timeAgo(iso) {
   return `${Math.floor(d / 7)}w ago`
 }
 
-function Pip({ ok, label }) {
-  if (ok === true)  return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-green-700 font-medium">
-      <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
-      {label || 'Installed'}
-    </span>
-  )
-  if (ok === 'warn') return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-medium">
-      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
-      {label || 'Unreachable'}
-    </span>
-  )
+function Pip({ ok, label, tooltip }) {
+  const dot = ok === true
+    ? <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+    : ok === 'warn'
+      ? <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+      : <span className="w-1.5 h-1.5 rounded-full bg-gray-300 flex-shrink-0" />
+  const textCls = ok === true
+    ? 'text-green-700'
+    : ok === 'warn'
+      ? 'text-amber-600'
+      : 'text-gray-400'
+  const defaultLabel = ok === true ? 'Installed' : ok === 'warn' ? 'Unreachable' : 'Not installed'
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-gray-400">
-      <span className="w-1.5 h-1.5 rounded-full bg-gray-300 flex-shrink-0" />
-      {label || 'Not installed'}
+    <span
+      className={`inline-flex items-center gap-1 text-[11px] font-medium ${textCls}`}
+      title={tooltip || undefined}
+    >
+      {dot}
+      {label || defaultLabel}
     </span>
+  )
+}
+
+// ── Edition badge ─────────────────────────────────────────────────────────────
+
+function EditionBadge({ edition, t }) {
+  if (!edition) return null
+  if (edition === 'enterprise') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+        {t('infra.editionEnterprise')}
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-50 text-green-700 border border-green-200">
+      {t('infra.editionCommunity')}
+    </span>
+  )
+}
+
+// ── Migrate CA modal ──────────────────────────────────────────────────────────
+
+function MigrateCAModal({ onClose, onJobStarted, t }) {
+  const [confirmed, setConfirmed] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [done, setDone] = useState(false)
+  const toast = useToast()
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const job = await exportPuppetCa()
+      setDone(true)
+      onJobStarted(job)
+    } catch (err) {
+      toast(`${t('infra.migrateCaError')}: ${err.message}`, 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.migrateCaTitle')}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-[18px] leading-none">&times;</button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          <p className="text-[12px] text-gray-600 leading-relaxed">{t('infra.migrateCaDesc')}</p>
+
+          <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+            <AlertTriangle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+            <p className="text-[11px] text-amber-800 leading-relaxed">{t('infra.migrateCaWarning')}</p>
+          </div>
+
+          <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
+            <p className="text-[11px] font-semibold text-gray-700 mb-1">{t('infra.migrateCaStep1')}</p>
+            <p className="text-[11px] text-gray-500">{t('infra.migrateCaStep1Desc')}</p>
+          </div>
+
+          {done && (
+            <div className="flex items-start gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
+              <CheckCircle size={14} className="text-green-600 mt-0.5 flex-shrink-0" />
+              <p className="text-[12px] text-green-800 leading-relaxed">{t('infra.migrateCaSuccess')}</p>
+            </div>
+          )}
+
+          {!done && (
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+                className="mt-0.5 accent-brand flex-shrink-0"
+              />
+              <span className="text-[11px] text-gray-600">{t('infra.migrateCaConfirmLabel')}</span>
+            </label>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button onClick={onClose} className={btn(false)}>{t('common.close')}</button>
+          {!done && (
+            <button
+              onClick={handleExport}
+              disabled={!confirmed || exporting}
+              className={btn(confirmed && !exporting)}
+            >
+              {exporting && <Spinner size={13} />}
+              {exporting ? t('infra.migrateCaExporting') : t('infra.migrateCaStart')}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -307,10 +405,12 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
 // ── Tab 1: Masters & Managers ─────────────────────────────────────────────────
 
 function MasterCard({ service, status, nodes, onJobStarted, t }) {
-  const [showConnect, setShowConnect] = useState(false)
-  const [showInstall, setShowInstall] = useState(false)
+  const [showConnect, setShowConnect]     = useState(false)
+  const [showInstall, setShowInstall]     = useState(false)
+  const [showMigrateCA, setShowMigrateCA] = useState(false)
   const isPuppet      = service === 'puppet'
   const masterService = isPuppet ? 'puppet-master' : 'wazuh-manager'
+  const isEnterprise  = isPuppet && status?.edition === 'enterprise'
 
   return (
     <>
@@ -321,9 +421,14 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
               <Cpu size={16} className={status?.reachable ? 'text-brand' : 'text-gray-300'} />
             </div>
             <div>
-              <h3 className="text-[14px] font-semibold text-gray-900">
-                {isPuppet ? t('infra.puppetMaster') : t('infra.wazuhManager')}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-[14px] font-semibold text-gray-900">
+                  {isPuppet ? t('infra.puppetMaster') : t('infra.wazuhManager')}
+                </h3>
+                {isPuppet && status?.edition && (
+                  <EditionBadge edition={status.edition} t={t} />
+                )}
+              </div>
               <p className="text-[11px] text-gray-400">
                 {isPuppet ? t('infra.puppetDesc') : t('infra.wazuhDesc')}
               </p>
@@ -354,6 +459,14 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
             <Server size={11} />
             {t('infra.installOnNode')}
           </button>
+          {isEnterprise && (
+            <button
+              onClick={() => { setShowMigrateCA(true); setShowConnect(false); setShowInstall(false) }}
+              className={btnSm(false)}
+            >
+              {t('infra.migrateCaBtn')}
+            </button>
+          )}
         </div>
 
         {showConnect && (
@@ -372,6 +485,14 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
           nodes={nodes}
           onClose={() => setShowInstall(false)}
           onJobStarted={(job) => { setShowInstall(false); onJobStarted(job) }}
+          t={t}
+        />
+      )}
+
+      {showMigrateCA && (
+        <MigrateCAModal
+          onClose={() => setShowMigrateCA(false)}
+          onJobStarted={(job) => { onJobStarted(job) }}
           t={t}
         />
       )}
@@ -420,7 +541,7 @@ function MastersTab({ status, nodes, onRefresh, t }) {
 
 // ── Tab 2: Agents ─────────────────────────────────────────────────────────────
 
-function AgentsTab({ nodes, onRefresh, t }) {
+function AgentsTab({ nodes, status, onRefresh, t }) {
   const [selectedNode, setSelectedNode] = useState('')
   const [agentSel, setAgentSel]         = useState({ puppet: true, wazuh: true })
   const [platformCheck, setPlatformCheck]     = useState(null)
@@ -663,7 +784,11 @@ function AgentsTab({ nodes, onRefresh, t }) {
                     <p className="text-[11px] text-gray-400 font-mono">{n.ip}</p>
                   </td>
                   <td className="px-5 py-3">
-                    <Pip ok={n.puppet_enrolled || false} label={n.puppet_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
+                    <Pip
+                      ok={n.puppet_enrolled || false}
+                      label={n.puppet_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')}
+                      tooltip={n.puppet_enrolled && status?.puppet?.edition === 'community' ? t('infra.puppetCaTooltip') : undefined}
+                    />
                   </td>
                   <td className="px-5 py-3">
                     <Pip ok={n.wazuh_enrolled || false} label={n.wazuh_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
@@ -981,7 +1106,7 @@ export default function InfrastructurePage() {
             <MastersTab status={status} nodes={nodes} onRefresh={handleRefresh} t={t} />
           )}
           {activeTab === 'agents' && (
-            <AgentsTab nodes={nodes} onRefresh={handleRefresh} t={t} />
+            <AgentsTab nodes={nodes} status={status} onRefresh={handleRefresh} t={t} />
           )}
           {activeTab === 'verify' && (
             <VerifyTab nodes={nodes} onRefresh={handleRefresh} t={t} />

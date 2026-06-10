@@ -33,12 +33,14 @@ class GetInfrastructureStatusUseCase:
         wazuh_manager_host_env: str | None,
         puppet_port: int,
         wazuh_port: int,
+        puppet_edition: str = "enterprise",
     ) -> None:
         self._config = config_repo
         self._puppet_env = puppet_master_host_env
         self._wazuh_env = wazuh_manager_host_env
         self._puppet_port = puppet_port
         self._wazuh_port = wazuh_port
+        self._puppet_edition = puppet_edition
 
     async def execute(self) -> dict:
         puppet_host = await self._config.get("puppet_master_host") or self._puppet_env
@@ -55,6 +57,7 @@ class GetInfrastructureStatusUseCase:
                 "host": puppet_host,
                 "port": self._puppet_port,
                 "reachable": puppet_reachable,
+                "edition": self._puppet_edition,
             },
             "wazuh": {
                 "configured": bool(wazuh_host),
@@ -226,6 +229,10 @@ class InstallServiceUseCase:
         "puppet_agent":  "install_puppet_agent.yml",
         "wazuh_agent":   "install_wazuh_agent.yml",
     }
+    # When puppet_edition == 'community', puppet_master uses the OSS playbook.
+    _PLAYBOOKS_OSS = {
+        "puppet_master": "install_puppet_server_oss.yml",
+    }
     _CONFIG_KEYS = {
         "puppet_master": "puppet_master_host",
         "wazuh_manager": "wazuh_manager_host",
@@ -242,6 +249,7 @@ class InstallServiceUseCase:
         config_repo: IPlatformConfigRepository,
         node_repo: INodeRepository,
         service: str,
+        base_extra_vars: dict | None = None,
     ) -> None:
         if service not in self._PLAYBOOKS:
             raise ValueError(f"Unknown service: {service}")
@@ -249,6 +257,13 @@ class InstallServiceUseCase:
         self._config = config_repo
         self._node_repo = node_repo
         self._service = service
+        self._base_extra_vars = base_extra_vars or {}
+
+    def _select_playbook(self) -> str:
+        edition = self._base_extra_vars.get("puppet_edition", "enterprise")
+        if edition == "community" and self._service in self._PLAYBOOKS_OSS:
+            return self._PLAYBOOKS_OSS[self._service]
+        return self._PLAYBOOKS[self._service]
 
     async def execute(self, node_id: str) -> Job:
         node = await self._node_repo.find_by_id(node_id)
@@ -261,7 +276,7 @@ class InstallServiceUseCase:
         node_repo = self._node_repo
         config_repo = self._config
 
-        extra_vars: dict = {}
+        extra_vars: dict = dict(self._base_extra_vars)
         if self._service == "puppet_master":
             pw = await self._config.get("pe_console_password")
             if pw:
@@ -294,7 +309,7 @@ class InstallServiceUseCase:
         return await self._start.execute({
             "type": f"install_{self._service}",
             "node_id": node_id,
-            "playbook": self._PLAYBOOKS[self._service],
+            "playbook": self._select_playbook(),
             "extra_vars": extra_vars,
             "on_complete": on_complete,
         })
@@ -454,3 +469,47 @@ class InspecControllerUseCase:
             "reachable": reachable,
             "results": normalized,
         }
+
+
+class ExportPuppetCaUseCase:
+    """
+    Export the Puppet CA from the currently configured PE primary server so
+    it can be migrated onto a new open-source Puppet Server.
+
+    Runs export_puppet_ca.yml against the puppet master node (must be a
+    registered node in the platform). The resulting archive lands at
+    packages/puppet-master/puppet-ca-export.tar.gz on the Ansible controller.
+    """
+
+    def __init__(
+        self,
+        start_job_uc: StartJobUseCase,
+        config_repo: IPlatformConfigRepository,
+        node_repo: INodeRepository,
+    ) -> None:
+        self._start = start_job_uc
+        self._config = config_repo
+        self._node_repo = node_repo
+
+    async def execute(self) -> Job:
+        puppet_host = await self._config.get("puppet_master_host")
+        if not puppet_host:
+            raise ValidationError("No Puppet master host configured — set it on the Infrastructure page first")
+
+        nodes = await self._node_repo.find_all({})
+        master_node = next(
+            (n for n in nodes if n.ip == puppet_host or n.hostname == puppet_host),
+            None,
+        )
+        if not master_node:
+            raise NotFoundError(
+                f"Puppet master '{puppet_host}' is not a registered node. "
+                "Register it in Node Registry before exporting the CA."
+            )
+
+        return await self._start.execute({
+            "type": "export_puppet_ca",
+            "node_id": master_node.id,
+            "playbook": "export_puppet_ca.yml",
+            "extra_vars": {},
+        })

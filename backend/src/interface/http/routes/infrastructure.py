@@ -17,6 +17,7 @@ class ServiceStatus(BaseModel):
     host: str | None = None
     port: int
     reachable: bool | None = None
+    edition: str | None = None
 
 
 class InfrastructureStatusResponse(BaseModel):
@@ -47,6 +48,7 @@ _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
+_export_ca_uc = None
 _inspec_uc = None
 _node_repo = None
 _packages_dir: str = ""
@@ -59,6 +61,7 @@ def set_use_cases(
     install_wazuh_manager_uc,
     install_puppet_agent_uc,
     install_wazuh_agent_uc,
+    export_ca_uc=None,
     inspec_uc=None,
     node_repo=None,
     packages_dir: str = "",
@@ -66,7 +69,7 @@ def set_use_cases(
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
-    global _inspec_uc
+    global _export_ca_uc, _inspec_uc
     global _node_repo, _packages_dir
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
@@ -74,6 +77,7 @@ def set_use_cases(
     _install_wazuh_manager_uc = install_wazuh_manager_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
+    _export_ca_uc = export_ca_uc
     _inspec_uc = inspec_uc
     _node_repo = node_repo
     _packages_dir = packages_dir
@@ -145,6 +149,28 @@ async def set_puppet_master(
     try:
         return await _set_master_uc.execute("puppet", body.host)
     except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/puppet-master/export-ca", response_model=JobRef, status_code=202, summary="Export Puppet CA for OSS migration")
+async def export_puppet_ca(
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Run export_puppet_ca.yml against the configured Puppet master to archive its CA.
+
+    The archive (puppet-ca-export.tar.gz) lands in packages/puppet-master/ on the
+    Ansible controller and is used by install_puppet_server_oss.yml (Mode B) to
+    migrate the CA to a new open-source Puppet Server without re-enrolling agents.
+
+    Security: ca_key.pem is transferred exclusively over SSH (Ansible fetch module).
+    The archive is deleted from packages/puppet-master/ after a successful OSS install.
+    """
+    if _export_ca_uc is None:
+        raise HTTPException(status_code=503, detail="Export CA use case not configured")
+    try:
+        job = await _export_ca_uc.execute()
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except (NotFoundError, ValidationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
