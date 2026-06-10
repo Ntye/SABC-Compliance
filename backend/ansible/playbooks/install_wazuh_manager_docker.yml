@@ -23,7 +23,7 @@
 - name: Deploy Wazuh (Docker-based, airgap)
   hosts: target
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     wazuh_version: "4.10.4"
@@ -35,6 +35,60 @@
     wazuh_manager_port: 1514
     wazuh_auth_port: 1515
     wazuh_dashboard_port: 443
+
+  # ── Bootstrap: ensure a MODERN Python (>=3.8) before gathering facts ───────
+  # Fresh/minimal cloud images may ship without python3 at all, OR with a
+  # version too old for modern Ansible — e.g. Amazon Linux 2 / RHEL 7 default
+  # to python3.6, which fails on "from __future__ import annotations" (needs
+  # >=3.7) and on ansible-core modules (need >=3.8). The raw module runs over
+  # plain SSH with NO Python dependency: use it to install/locate a suitable
+  # interpreter, then pin ansible_python_interpreter to it before setup runs.
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        # Echo the first python on PATH whose version is >= 3.8, else nothing
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+          find_py >/dev/null 2>&1 || apt-get install -y python3.8 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          # Amazon Linux 2 / RHEL 7 / CentOS 7: default python3 is 3.6 — pull 3.8
+          yum install -y python38 \
+            || amazon-linux-extras install -y python3.8 \
+            || { amazon-linux-extras enable python3.8 && yum clean metadata && yum install -y python38; } \
+            || yum install -y python3 \
+            || true
+        elif command -v zypper >/dev/null 2>&1; then
+          zypper --non-interactive install python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: could not provide python >= 3.8 on target" >&2
+        exit 1
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
 
   tasks:
 
@@ -210,7 +264,7 @@
       shell: |
         openssl req -x509 -newkey rsa:4096 -keyout /etc/ssl/wazuh/root-ca.key \
           -out /etc/ssl/wazuh/root-ca.pem -days 3650 -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-ca"
+          -subj "/C=CM/O=SABC/CN=wazuh-ca"
       args:
         creates: /etc/ssl/wazuh/root-ca.pem
 
@@ -218,7 +272,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/wazuh-indexer.key \
           -out /etc/ssl/wazuh/wazuh-indexer.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-indexer"
+          -subj "/C=CM/O=SABC/CN=wazuh-indexer"
         openssl x509 -req -in /etc/ssl/wazuh/wazuh-indexer.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/wazuh-indexer.pem -days 3650 -sha256
@@ -229,7 +283,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/filebeat.key \
           -out /etc/ssl/wazuh/filebeat.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-manager"
+          -subj "/C=CM/O=SABC/CN=wazuh-manager"
         openssl x509 -req -in /etc/ssl/wazuh/filebeat.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/filebeat.pem -days 3650 -sha256
@@ -240,7 +294,7 @@
       shell: |
         openssl req -newkey rsa:4096 -keyout /etc/ssl/wazuh/dashboard.key \
           -out /etc/ssl/wazuh/dashboard.csr -nodes \
-          -subj "/C=CM/O=BdC/CN=wazuh-dashboard"
+          -subj "/C=CM/O=SABC/CN=wazuh-dashboard"
         openssl x509 -req -in /etc/ssl/wazuh/dashboard.csr \
           -CA /etc/ssl/wazuh/root-ca.pem -CAkey /etc/ssl/wazuh/root-ca.key \
           -CAcreateserial -out /etc/ssl/wazuh/dashboard.pem -days 3650 -sha256

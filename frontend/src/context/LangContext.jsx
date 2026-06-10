@@ -17,7 +17,7 @@ const LangContext = createContext()
 
 export function LangProvider({ children }) {
   const [lang, setLangState] = useState(
-    () => localStorage.getItem('bdc_lang') || 'en',
+    () => localStorage.getItem('sabc_lang') || 'en',
   )
 
   function t(key, vars) {
@@ -27,7 +27,7 @@ export function LangProvider({ children }) {
 
   function setLang(l) {
     setLangState(l)
-    localStorage.setItem('bdc_lang', l)
+    localStorage.setItem('sabc_lang', l)
   }
 
   return (

@@ -1,28 +1,11 @@
 import { useState } from 'react'
-import { CheckCircle, Copy, Download, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
+import { CheckCircle, Download, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
 import { downloadSetupScript, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
-
-function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false)
-  async function handleCopy() {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <button
-      onClick={handleCopy}
-      className="p-1 rounded hover:bg-white/10 text-console-muted hover:text-console-text transition-colors"
-      title="Copy"
-    >
-      <Copy size={12} className={copied ? 'text-console-success' : ''} />
-    </button>
-  )
-}
+import CopyButton from '../components/common/CopyButton.jsx'
 
 const DEFAULT_FORM = {
   hostname: '',
@@ -244,7 +227,11 @@ export default function AddVmPage() {
           <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.runOnTarget')}</p>
           <div className="bg-console-surface rounded-lg p-3 flex items-start justify-between gap-3">
             <pre className="text-[12px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{curlCmd}</pre>
-            <CopyButton text={curlCmd} />
+            <CopyButton
+              text={curlCmd}
+              className="p-1 rounded hover:bg-white/10 text-console-muted hover:text-console-text flex-shrink-0"
+              onResult={(ok) => toast(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error')}
+            />
           </div>
         </div>
 
@@ -285,7 +272,11 @@ export default function AddVmPage() {
           <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.thenRun')}</p>
           <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
             <pre className="text-[12px] font-mono text-console-text">{airgapCmd}</pre>
-            <CopyButton text={airgapCmd} />
+            <CopyButton
+              text={airgapCmd}
+              className="p-1 rounded hover:bg-white/10 text-console-muted hover:text-console-text flex-shrink-0"
+              onResult={(ok) => toast(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error')}
+            />
           </div>
         </div>
       </div>

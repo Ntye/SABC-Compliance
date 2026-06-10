@@ -2,8 +2,8 @@
 # Installs Puppet Server on the target node.
 #
 # Airgap modes (checked in order, first match wins):
-#   1. TARBALL  — puppet-enterprise*.tar.gz in packages/puppet-master/
-#                 Runs the PE silent installer.
+#   1. TARBALL  — puppet-enterprise*.tar.gz / *.tar.tar / *.tar
+#                 in packages/puppet-master/; runs the PE silent installer.
 #   2. PACKAGES — puppetserver*.deb or puppetserver*.rpm in packages/puppet-master/
 #                 Uploaded and installed with apt/yum.
 #                 Also looks for openjdk*.deb/rpm for the Java dependency.
@@ -14,7 +14,7 @@
 - name: Install Puppet Server
   hosts: target
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     puppet_version: "8"
@@ -23,16 +23,76 @@
     # PE console admin password — override via extra_vars: pe_console_password=MySecurePass1!
     # Must be ≥12 chars and contain upper, lower, digit, and special character.
     # --extra-vars @file.json (highest Ansible precedence) overrides this default.
-    pe_console_password: "BdCPuppet2025!"
+    pe_console_password: "SABCPuppet2025!"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
 
+  # ── Bootstrap: ensure a MODERN Python (>=3.8) before gathering facts ───────
+  # Fresh/minimal cloud images may ship without python3 at all, OR with a
+  # version too old for modern Ansible — e.g. Amazon Linux 2 / RHEL 7 default
+  # to python3.6, which fails on "from __future__ import annotations" (needs
+  # >=3.7) and on ansible-core modules (need >=3.8). The raw module runs over
+  # plain SSH with NO Python dependency: use it to install/locate a suitable
+  # interpreter, then pin ansible_python_interpreter to it before setup runs.
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        # Echo the first python on PATH whose version is >= 3.8, else nothing
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+          find_py >/dev/null 2>&1 || apt-get install -y python3.8 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          # Amazon Linux 2 / RHEL 7 / CentOS 7: default python3 is 3.6 — pull 3.8
+          yum install -y python38 \
+            || amazon-linux-extras install -y python3.8 \
+            || { amazon-linux-extras enable python3.8 && yum clean metadata && yum install -y python38; } \
+            || yum install -y python3 \
+            || true
+        elif command -v zypper >/dev/null 2>&1; then
+          zypper --non-interactive install python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: could not provide python >= 3.8 on target" >&2
+        exit 1
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
+
   tasks:
     # ── Airgap detection ──────────────────────────────────────────────────────
+    # Accept .tar.gz (standard PE download), .tar.tar (double-extension artefact
+    # from some browsers/downloaders), and plain .tar (already-decompressed).
+    # tar auto-detects the actual compression regardless of file extension.
     - name: Find PE installer tarball on controller
       find:
         paths: "{{ puppet_pkg_dir }}"
-        patterns: "puppet-enterprise*.tar.gz"
+        patterns:
+          - "puppet-enterprise*.tar.gz"
+          - "puppet-enterprise*.tar.tar"
+          - "puppet-enterprise*.tar"
       register: pe_tarball
       delegate_to: localhost
       become: no
@@ -128,12 +188,38 @@
         msg: "WARNING: only {{ free_gb.stdout }}GB free on /opt — PE needs ~20GB"
       when: install_mode == 'tarball' and (free_gb.stdout | int) < 20
 
+    # PE ships pe-puppetserver and pe-java — both conflict with the open-source
+    # puppetserver/puppet-agent packages if those were left half-configured by a
+    # previous failed open-source install attempt.  Purge them first so dpkg has
+    # no pending state to trip over when the PE installer runs apt-get.
+    - name: Remove conflicting open-source Puppet packages before PE install
+      shell: |
+        # Settle any half-configured dpkg state first
+        dpkg --configure -a || true
+        # Purge open-source packages that conflict with PE equivalents
+        PKGS=""
+        dpkg -l puppetserver 2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS puppetserver"
+        dpkg -l puppet-agent  2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS puppet-agent"
+        dpkg -l 'puppet-module-*' 2>/dev/null | awk '/^\S/{print $2}' | while read p; do
+          dpkg -l "$p" 2>/dev/null | grep -q '^[iuph]' && PKGS="$PKGS $p"
+        done
+        if [ -n "$PKGS" ]; then
+          apt-get purge -y $PKGS || true
+          apt-get install -f -y || true
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: install_mode == 'tarball'
+
     - name: Extract PE tarball to /opt (uploads + extracts in one step)
       unarchive:
         src: "{{ pe_tarball.files[0].path }}"
         dest: /opt/
         remote_src: no
-        creates: "/opt/{{ pe_tarball.files[0].path | basename | regex_replace('\\.tar\\.gz$', '') }}"
+        # Strip any combination of .tar / .tar.gz / .tar.tar / .tar.bz2 / .tar.xz
+        # so the creates: guard works regardless of how the file was named.
+        creates: "/opt/{{ pe_tarball.files[0].path | basename | regex_replace('(\\.tar)+(\\.gz|\\.bz2|\\.xz)?$', '') }}"
       when: install_mode == 'tarball'
 
     - name: Locate extracted installer directory
@@ -172,19 +258,23 @@
       failed_when: false
       when: install_mode == 'tarball'
 
-    # PE installation takes 10-30 minutes.  The task runs synchronously so
-    # all stdout lines stream into the job log in real time.
-    - name: Run PE installer (this takes 10-30 minutes)
+    # PE installation takes 30-90 minutes depending on instance size.
+    # async/poll launches the installer in the background and polls every 60 s
+    # so Ansible never holds a blocking SSH connection for the full duration.
+    # async: 9000 = 2.5 h ceiling — adjust up if running on a very slow instance.
+    - name: Run PE installer (this can take up to 90 minutes)
       shell: |
         cd "{{ pe_dir.stdout }}"
-        ./puppet-enterprise-installer -c conf.d/pe.conf
+        ./puppet-enterprise-installer -c conf.d/pe.conf 2>&1 | \
+          tee /var/log/puppetlabs/installer/pe-install-ansible.log
       register: pe_install
-      timeout: 3600
+      async: 9000
+      poll: 60
       when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
 
     - name: Show final PE installer output
       debug:
-        msg: "{{ pe_install.stdout_lines[-20:] | default([]) }}"
+        msg: "{{ pe_install.stdout_lines[-30:] | default([]) }}"
       when: install_mode == 'tarball' and (pe_running.rc | default(1)) != 0
 
     # ── Post-install: verify / recover console password ───────────────────────
@@ -347,6 +437,28 @@
         deb: /tmp/puppet-release.deb
       when: install_mode == 'online' and ansible_os_family == 'Debian'
 
+    # Recover from a previously interrupted install: a half-configured
+    # puppetserver re-runs its postinst (dpkg-statoverride puppet:puppet) on
+    # every apt call and fails because puppet-agent never created the user.
+    # Settle any pending dpkg state before touching the packages again.
+    - name: Repair any half-configured dpkg state (Debian)
+      command: dpkg --configure -a
+      register: dpkg_repair
+      changed_when: dpkg_repair.stdout != ''
+      failed_when: false
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
+
+    # Install puppet-agent FIRST: its postinst creates the `puppet` system
+    # user/group and /usr/share/puppet/modules that puppetserver's postinst
+    # depends on. Installing puppetserver alone (relying on the dependency)
+    # is what leaves the node wedged when configuration is interrupted.
+    - name: Install puppet-agent (Debian, online)
+      apt:
+        name: puppet-agent
+        state: present
+        update_cache: yes
+      when: install_mode == 'online' and ansible_os_family == 'Debian'
+
     - name: Install puppetserver (Debian, online)
       apt:
         name: puppetserver
@@ -380,6 +492,14 @@
         - install_mode == 'online'
         - ansible_os_family == 'RedHat'
         - puppet_release_pkg.files | length == 0
+
+    # Install puppet-agent first so its scriptlets create the `puppet` user
+    # and module dirs before puppetserver is configured (see Debian note).
+    - name: Install puppet-agent (RedHat, online)
+      yum:
+        name: puppet-agent
+        state: present
+      when: install_mode == 'online' and ansible_os_family == 'RedHat'
 
     - name: Install puppetserver (RedHat, online)
       yum:

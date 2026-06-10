@@ -23,7 +23,7 @@ def _hash_key(raw: str) -> str:
 
 
 def _gen_key() -> str:
-    return "bdc_" + secrets.token_hex(24)
+    return "sabc_" + secrets.token_hex(24)
 
 
 def _hash_password(password: str) -> str:

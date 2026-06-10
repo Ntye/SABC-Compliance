@@ -1,47 +1,47 @@
 import config from '../config.js'
 
 export function getGatewayUrl() {
-  return localStorage.getItem('bdc_gateway_url') || config.apiBase
+  return localStorage.getItem('sabc_gateway_url') || config.apiBase
 }
 
 export function setGatewayUrl(url) {
-  localStorage.setItem('bdc_gateway_url', url)
+  localStorage.setItem('sabc_gateway_url', url)
 }
 
 export function getStoredApiKey() {
-  return localStorage.getItem('bdc_api_key') || ''
+  return localStorage.getItem('sabc_api_key') || ''
 }
 
 export function setApiKey(key) {
   if (key) {
-    localStorage.setItem('bdc_api_key', key)
+    localStorage.setItem('sabc_api_key', key)
   } else {
-    localStorage.removeItem('bdc_api_key')
+    localStorage.removeItem('sabc_api_key')
   }
 }
 
 export function clearApiKey() {
-  localStorage.removeItem('bdc_api_key')
+  localStorage.removeItem('sabc_api_key')
 }
 
 export function getJwt() {
-  return localStorage.getItem('bdc_jwt_token') || ''
+  return localStorage.getItem('sabc_jwt_token') || ''
 }
 
 export function setJwt(token) {
   if (token) {
-    localStorage.setItem('bdc_jwt_token', token)
+    localStorage.setItem('sabc_jwt_token', token)
   } else {
-    localStorage.removeItem('bdc_jwt_token')
+    localStorage.removeItem('sabc_jwt_token')
   }
 }
 
 export function getUserRole() {
-  return localStorage.getItem('bdc_user_role') || ''
+  return localStorage.getItem('sabc_user_role') || ''
 }
 
 export function getUsername() {
-  return localStorage.getItem('bdc_user_username') || ''
+  return localStorage.getItem('sabc_user_username') || ''
 }
 
 export function isAuthenticated() {
@@ -49,10 +49,10 @@ export function isAuthenticated() {
 }
 
 export function logout() {
-  localStorage.removeItem('bdc_jwt_token')
-  localStorage.removeItem('bdc_user_role')
-  localStorage.removeItem('bdc_user_username')
-  localStorage.removeItem('bdc_api_key')
+  localStorage.removeItem('sabc_jwt_token')
+  localStorage.removeItem('sabc_user_role')
+  localStorage.removeItem('sabc_user_username')
+  localStorage.removeItem('sabc_api_key')
 }
 
 async function request(method, path, body) {
@@ -109,14 +109,14 @@ async function request(method, path, body) {
 export async function login(username, password) {
   const data = await request('POST', '/auth/login', { username, password })
   setJwt(data.access_token)
-  if (data.role)     localStorage.setItem('bdc_user_role', data.role)
-  if (data.username) localStorage.setItem('bdc_user_username', data.username)
+  if (data.role)     localStorage.setItem('sabc_user_role', data.role)
+  if (data.username) localStorage.setItem('sabc_user_username', data.username)
   // Auto-apply the personal API key returned by the server.
   // This replaces any stale key from a previous session.
   if (data.api_key) {
-    localStorage.setItem('bdc_api_key', data.api_key)
+    localStorage.setItem('sabc_api_key', data.api_key)
   } else {
-    localStorage.removeItem('bdc_api_key')
+    localStorage.removeItem('sabc_api_key')
   }
   return data
 }
@@ -194,6 +194,15 @@ export async function checkNodeDns(id) {
   return request('POST', `/nodes/${id}/check-dns`)
 }
 
+export async function fixNodeDns(id, checks) {
+  return request('POST', `/nodes/${id}/fix-dns`, { checks })
+}
+
+export async function changeNodeIdentity(id, data) {
+  // data: { ip?, hostname?, apply_system_hostname? }
+  return request('POST', `/nodes/${id}/change-identity`, data)
+}
+
 export async function downloadSetupScript() {
   const base = getGatewayUrl()
   const headers = {}
@@ -254,6 +263,26 @@ export async function checkPuppetAgentPlatform(nodeId) {
   return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
 }
 
+// ── InSpec (platform / controller) ──────────────────────────────────────────
+// InSpec runs only on the SABC platform server and reaches each node over SSH.
+// No InSpec install on the managed nodes.
+
+export async function getInspecStatus() {
+  return request('GET', '/infrastructure/inspec/status')
+}
+
+export async function installInspecOnController() {
+  return request('POST', '/infrastructure/inspec/install')
+}
+
+export async function verifyInspecAllNodes() {
+  return request('POST', '/infrastructure/inspec/verify')
+}
+
+export async function verifyInspecNode(nodeId) {
+  return request('POST', `/infrastructure/inspec/verify/${encodeURIComponent(nodeId)}`)
+}
+
 // ── Compliance ────────────────────────────────────────────────────────────────
 
 export async function getComplianceSummary() {
@@ -262,6 +291,10 @@ export async function getComplianceSummary() {
 
 export async function getNodeCompliance(id) {
   return request('GET', `/compliance/nodes/${id}`)
+}
+
+export async function collectNodeCompliance(id) {
+  return request('POST', `/compliance/nodes/${id}/collect`)
 }
 
 export async function triggerRemediation(id, description) {

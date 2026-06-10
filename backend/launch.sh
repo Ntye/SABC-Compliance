@@ -48,7 +48,7 @@ mkdir -p "$ROOT/keys" "$ROOT/data" \
 SSH_KEY_PATH="${SSH_KEY_PATH:-$ROOT/keys/ansible_id_rsa}"
 if [ ! -f "$SSH_KEY_PATH" ]; then
     echo "Generating SSH key pair..."
-    ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_PATH" -N "" -C "bdc-ansible"
+    ssh-keygen -t rsa -b 4096 -f "$SSH_KEY_PATH" -N "" -C "sabc-ansible"
 fi
 
 # Load .env

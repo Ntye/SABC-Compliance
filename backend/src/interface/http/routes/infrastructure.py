@@ -47,6 +47,7 @@ _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
+_inspec_uc = None
 _node_repo = None
 _packages_dir: str = ""
 
@@ -58,12 +59,14 @@ def set_use_cases(
     install_wazuh_manager_uc,
     install_puppet_agent_uc,
     install_wazuh_agent_uc,
+    inspec_uc=None,
     node_repo=None,
     packages_dir: str = "",
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
+    global _inspec_uc
     global _node_repo, _packages_dir
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
@@ -71,6 +74,7 @@ def set_use_cases(
     _install_wazuh_manager_uc = install_wazuh_manager_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
+    _inspec_uc = inspec_uc
     _node_repo = node_repo
     _packages_dir = packages_dir
 
@@ -204,5 +208,71 @@ async def install_wazuh_agent(
     try:
         job = await _install_wazuh_agent_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ── InSpec (platform controller) ──────────────────────────────────────────────
+# InSpec is agentless: it lives on the SABC platform and reaches each node over
+# SSH. These endpoints expose the controller-side install state and let the
+# operator verify that the platform can actually probe each node.
+
+class InspecStatusResponse(BaseModel):
+    installed: bool
+    version: str | None = None
+    executable_path: str
+
+
+class InspecVerifyResult(BaseModel):
+    node_id: str | None = None
+    hostname: str | None = None
+    reachable: bool
+    output: str | None = None
+    error: str | None = None
+
+
+class InspecVerifyAllResponse(BaseModel):
+    controller: InspecStatusResponse
+    total: int = 0
+    reachable: int = 0
+    results: list[InspecVerifyResult] = []
+    error: str | None = None
+
+
+@router.get("/inspec/status", response_model=InspecStatusResponse, summary="InSpec platform install status")
+async def get_inspec_status(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Return whether InSpec is installed on the SABC platform server."""
+    if _inspec_uc is None:
+        raise HTTPException(status_code=503, detail="InSpec use case not configured")
+    return InspecStatusResponse(**(await _inspec_uc.get_status()))
+
+
+@router.post("/inspec/install", summary="Install InSpec on the platform server")
+async def install_inspec_on_controller(principal: AuthPrincipal = Depends(require_operator)):
+    """Run the official Chef InSpec installer inside the platform container."""
+    if _inspec_uc is None:
+        raise HTTPException(status_code=503, detail="InSpec use case not configured")
+    result = await _inspec_uc.install_on_controller()
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result)
+    return result
+
+
+@router.post("/inspec/verify", response_model=InspecVerifyAllResponse, summary="Verify InSpec can reach every node")
+async def verify_inspec_all(principal: AuthPrincipal = Depends(require_operator)):
+    """Probe every node via `inspec detect` over SSH and mark nodes inspec_installed
+    when reachable. Used to confirm the platform can run InSpec controls remotely."""
+    if _inspec_uc is None:
+        raise HTTPException(status_code=503, detail="InSpec use case not configured")
+    return await _inspec_uc.verify_all_nodes()
+
+
+@router.post("/inspec/verify/{node_id}", response_model=InspecVerifyResult, summary="Verify InSpec can reach a single node")
+async def verify_inspec_node(node_id: str, principal: AuthPrincipal = Depends(require_operator)):
+    """Probe one node and update its inspec_installed flag."""
+    if _inspec_uc is None:
+        raise HTTPException(status_code=503, detail="InSpec use case not configured")
+    try:
+        return await _inspec_uc.verify_node(node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

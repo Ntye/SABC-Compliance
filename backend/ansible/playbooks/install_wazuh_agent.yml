@@ -15,13 +15,67 @@
 - name: Install Wazuh Agent
   hosts: target
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     wazuh_manager: "{{ wazuh_manager_host | default('wazuh') }}"
     wazuh_agent_group: "default"
     # packages_dir is injected by AnsibleAdapter
     agent_pkg_dir: "{{ packages_dir }}/wazuh-agent"
+
+  # ── Bootstrap: ensure a MODERN Python (>=3.8) before gathering facts ───────
+  # Fresh/minimal cloud images may ship without python3 at all, OR with a
+  # version too old for modern Ansible — e.g. Amazon Linux 2 / RHEL 7 default
+  # to python3.6, which fails on "from __future__ import annotations" (needs
+  # >=3.7) and on ansible-core modules (need >=3.8). The raw module runs over
+  # plain SSH with NO Python dependency: use it to install/locate a suitable
+  # interpreter, then pin ansible_python_interpreter to it before setup runs.
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        # Echo the first python on PATH whose version is >= 3.8, else nothing
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+          find_py >/dev/null 2>&1 || apt-get install -y python3.8 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          # Amazon Linux 2 / RHEL 7 / CentOS 7: default python3 is 3.6 — pull 3.8
+          yum install -y python38 \
+            || amazon-linux-extras install -y python3.8 \
+            || { amazon-linux-extras enable python3.8 && yum clean metadata && yum install -y python38; } \
+            || yum install -y python3 \
+            || true
+        elif command -v zypper >/dev/null 2>&1; then
+          zypper --non-interactive install python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: could not provide python >= 3.8 on target" >&2
+        exit 1
+      become: yes
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
 
   tasks:
 
@@ -90,13 +144,14 @@
           - "  The target node cannot reach packages.wazuh.com."
           - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
           - ""
-          - "  Download the matching package on any internet-connected machine:"
+          - "  Download the package matching your manager version on an internet-connected machine."
+          - "  Check manager version: /var/ossec/bin/wazuh-control info | grep version"
           - ""
           - "  ── Debian / Ubuntu ──────────────────────────────────────────"
-          - "    curl -LO https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.9.0-1_amd64.deb"
+          - "    curl -LO https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_<VERSION>-1_amd64.deb"
           - ""
           - "  ── RHEL / CentOS / Rocky / AlmaLinux ────────────────────────"
-          - "    curl -LO https://packages.wazuh.com/4.x/yum/wazuh-agent-4.9.0-1.x86_64.rpm"
+          - "    curl -LO https://packages.wazuh.com/4.x/yum/wazuh-agent-<VERSION>-1.x86_64.rpm"
           - ""
           - "  Then copy the file into the platform packages directory:"
           - ""
@@ -290,6 +345,14 @@
       failed_when: false
       when: wazuh_enroll_stuck | bool
 
+    - name: Fix stale agent_name in ossec.conf to match current hostname
+      replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '<agent_name>[^<]*</agent_name>'
+        replace: '<agent_name>{{ ansible_hostname }}</agent_name>'
+      failed_when: false
+      when: wazuh_enroll_stuck | bool
+
     - name: Start wazuh-agent to trigger fresh auto-enrollment
       service:
         name: wazuh-agent
@@ -318,12 +381,41 @@
           {{ (agent_connected_retry.rc == 0) if wazuh_enroll_stuck | bool
              else (agent_connected.rc == 0) }}
 
-    - name: Warn if the agent still has not connected
+    - name: Show ossec.log tail on connection failure (diagnostic)
+      shell: tail -30 /var/ossec/logs/ossec.log 2>/dev/null || echo "(log not found)"
+      register: ossec_log_tail
+      changed_when: false
+      failed_when: false
+      when: not (wazuh_connected_final | bool)
+
+    - name: Show agent ossec.conf manager section (diagnostic)
+      shell: grep -A3 '<server>' /var/ossec/etc/ossec.conf 2>/dev/null || echo "(not found)"
+      register: ossec_conf_server
+      changed_when: false
+      failed_when: false
+      when: not (wazuh_connected_final | bool)
+
+    - name: Print connection failure diagnostics
       debug:
+        msg:
+          - "── /var/ossec/logs/ossec.log (last 30 lines) ─────────────────"
+          - "{{ ossec_log_tail.stdout_lines | default([]) | join('\n') }}"
+          - ""
+          - "── ossec.conf <server> block ──────────────────────────────────"
+          - "{{ ossec_conf_server.stdout_lines | default([]) | join('\n') }}"
+          - ""
+          - "── Manual test from agent node ────────────────────────────────"
+          - "  sudo /var/ossec/bin/agent-auth -m {{ wazuh_manager }}"
+          - "  sudo /var/ossec/bin/wazuh-control status"
+          - "  nc -vz {{ wazuh_manager }} 1515 && nc -vz {{ wazuh_manager }} 1514"
+      when: not (wazuh_connected_final | bool)
+
+    - name: Fail if agent never connected to manager
+      fail:
         msg: >-
-          WARNING: wazuh-agent installed on {{ ansible_fqdn }} but it has not yet
-          reported "Connected to the server". Check /var/ossec/logs/ossec.log on
-          the node and confirm 1514/1515 are open to {{ wazuh_manager }}.
+          wazuh-agent installed on {{ ansible_fqdn }} but never connected to
+          {{ wazuh_manager }}. See diagnostics above (ossec.log tail + manual
+          test commands). Re-run once the issue is resolved.
       when: not (wazuh_connected_final | bool)
 
     - name: Wazuh Agent ready

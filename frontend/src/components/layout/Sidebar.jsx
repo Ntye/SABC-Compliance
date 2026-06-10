@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { getGatewayUrl, logout, setGatewayUrl } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
+import sabcLogo from '../../assets/sabc-logo.png'
 
 export default function Sidebar() {
   const t = useT()
@@ -38,9 +39,9 @@ export default function Sidebar() {
   return (
     <aside className="w-[220px] flex-shrink-0 bg-sidebar-bg flex flex-col h-full">
       {/* Logo */}
-      <div className="px-5 pt-5 pb-4 border-b border-white/5">
-        <div className="text-[14px] font-semibold text-brand leading-none">BdC</div>
-        <div className="text-[11px] text-gray-500 mt-0.5">{t('nav.platform')}</div>
+      <div className="px-4 pt-4 pb-3 border-b border-white/5">
+        <img src={sabcLogo} alt="SABC" className="h-9 w-9 rounded-full border border-gray-400/40 object-cover" />
+        <div className="text-[10px] text-gray-500 mt-1.5 pl-0.5">{t('nav.platform')}</div>
       </div>
 
       {/* Nav */}

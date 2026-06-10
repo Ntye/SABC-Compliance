@@ -22,16 +22,74 @@ The playbooks scan these directories at run time and pick the best available mod
 | `puppet*-release*.deb` / `*.rpm` only | **LOCAL-REPO** — installs release pkg locally, pulls agent from repo |
 | *(empty)* | **ONLINE** — downloads release pkg + agent from internet |
 
-### wazuh-manager/ and wazuh-agent/
+### wazuh-manager/
+
+The playbook uses the official `wazuh-install.sh` all-in-one installer and
+supports full offline (airgap) installation on both Debian and RPM targets.
 
 | What you put here | Mode |
 |---|---|
-| `wazuh-manager*.deb` / `*.rpm` or `wazuh-agent*.deb` / `*.rpm` | **PACKAGES** — offline install |
-| *(empty)* | **ONLINE** — downloads from packages.wazuh.com |
+| `wazuh-install.sh` + `wazuh-offline-deb.tar.gz` | **AIRGAP** on Debian/Ubuntu |
+| `wazuh-install.sh` + `wazuh-offline-rpm.tar.gz` | **AIRGAP** on RHEL/Rocky/CentOS |
+| `wazuh-install.sh` + `wazuh-offline.tar.gz` | **AIRGAP** fallback (single-OS, must match target) |
+| + `wazuh-install-files.tar` (optional) | skips certificate generation on target |
+| *(empty or script only)* | **ONLINE** — downloads packages from packages.wazuh.com |
 
----
+**Naming priority**: OS-specific names (`wazuh-offline-deb.tar.gz` /
+`wazuh-offline-rpm.tar.gz`) take precedence; `wazuh-offline.tar.gz` is
+the fallback so a single downloaded file works out of the box.
 
-## What to download
+**Build the offline archives** (run once on any internet-connected Linux machine):
+
+```bash
+# Download the installer (use version-specific URL for a fixed release):
+curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh
+# or for a pinned version:
+# curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
+
+# Build the Debian/Ubuntu offline archive:
+bash wazuh-install.sh --download-packages deb
+mv wazuh-offline.tar.gz packages/wazuh-manager/wazuh-offline-deb.tar.gz
+
+# Build the RHEL/Rocky/CentOS offline archive:
+bash wazuh-install.sh --download-packages rpm
+mv wazuh-offline.tar.gz packages/wazuh-manager/wazuh-offline-rpm.tar.gz
+
+# Copy the installer script:
+cp wazuh-install.sh packages/wazuh-manager/
+```
+
+**Optional — pre-generate certificates** (avoids running cert-gen on the target):
+
+```bash
+# 1. Create config.yml (substitute the actual IP of your Wazuh server node):
+cat > config.yml << 'EOF'
+nodes:
+  indexer:
+    - name: wazuh-indexer
+      ip: "192.0.2.10"
+  server:
+    - name: wazuh-server
+      ip: "192.0.2.10"
+  dashboard:
+    - name: wazuh-dashboard
+      ip: "192.0.2.10"
+EOF
+
+# 2. Generate certificates and config bundle:
+bash wazuh-install.sh --generate-config-files
+# Creates: wazuh-install-files.tar
+
+# 3. Copy to packages directory:
+cp wazuh-install-files.tar packages/wazuh-manager/
+```
+
+> **Note on IP addresses in certificates:**  The certificates embed the node
+> IP as a Subject Alternative Name.  On EC2 instances whose public IP changes
+> on stop/start, either use the private IP (stable) or regenerate
+> `wazuh-install-files.tar` after each IP change and re-run the install job.
+
+### wazuh-agent/
 
 ### Puppet Enterprise (tarball)
 
@@ -65,28 +123,33 @@ yum install --downloadonly --downloaddir=packages/puppet-master \
 yum install --downloadonly --downloaddir=packages/puppet-agent puppet-agent
 ```
 
-### Wazuh Manager + Agent (.deb, Ubuntu 22.04)
+### Wazuh Agent (.deb, Ubuntu)
 
 ```bash
-# Add Wazuh repo first on an internet-connected machine:
+# Add Wazuh repo on an internet-connected machine, then:
 curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | apt-key add -
 echo "deb https://packages.wazuh.com/4.x/apt/ stable main" \
      > /etc/apt/sources.list.d/wazuh.list
 apt-get update
-
-apt-get download wazuh-manager && mv wazuh-manager_*.deb packages/wazuh-manager/
-apt-get download wazuh-agent   && mv wazuh-agent_*.deb   packages/wazuh-agent/
+apt-get download wazuh-agent
+mv wazuh-agent_*.deb packages/wazuh-agent/
 ```
 
-### Wazuh Manager + Agent (.rpm, Rocky Linux 9)
+### Wazuh Agent (.rpm, Rocky Linux / RHEL)
 
 ```bash
 rpm --import https://packages.wazuh.com/key/GPG-KEY-WAZUH
-# create /etc/yum.repos.d/wazuh.repo with baseurl=https://packages.wazuh.com/4.x/yum/
-yum install --downloadonly --downloaddir=packages/wazuh-manager wazuh-manager
-yum install --downloadonly --downloaddir=packages/wazuh-agent  wazuh-agent
+cat > /etc/yum.repos.d/wazuh.repo << 'EOF'
+[wazuh]
+name=Wazuh repository
+baseurl=https://packages.wazuh.com/4.x/yum/
+gpgcheck=1
+gpgkey=https://packages.wazuh.com/key/GPG-KEY-WAZUH
+enabled=1
+EOF
+yum install --downloadonly --downloaddir=packages/wazuh-agent wazuh-agent
 ```
 
-> **Tip for full airgap:** use `apt-get download` + `apt-rdepends` (or
-> `yum install --downloadonly`) to pull the full dependency tree, not just the
-> top-level package.
+> **Note:** The wazuh-manager is now installed using `wazuh-install.sh`
+> (all-in-one with indexer + dashboard), not a single .deb/.rpm package.
+> The `.deb`/`.rpm` approach above is only for the **agent** packages.

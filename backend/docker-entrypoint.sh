@@ -21,7 +21,7 @@ fi
 # ── Generate Ansible SSH key pair on first start ──────────────────────────────
 if [ ! -f /app/keys/ansible_id_rsa ]; then
     echo "[entrypoint] Generating SSH key pair at /app/keys/ansible_id_rsa ..."
-    ssh-keygen -t rsa -b 4096 -f /app/keys/ansible_id_rsa -N "" -C "bdc-ansible"
+    ssh-keygen -t rsa -b 4096 -f /app/keys/ansible_id_rsa -N "" -C "sabc-ansible"
     echo "[entrypoint] Done. Copy the public key to your managed nodes:"
     echo ""
     cat /app/keys/ansible_id_rsa.pub

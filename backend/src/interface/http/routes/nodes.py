@@ -76,6 +76,29 @@ class DnsCheckResponse(BaseModel):
     all_ok: bool
 
 
+class DnsFixRequest(BaseModel):
+    checks: list[str]   # e.g. ["backend_to_node", "node_to_puppet"]
+
+
+class DnsFixResult(BaseModel):
+    results: dict[str, dict]   # check_key → {"ok": bool, "entry"?: str, "error"?: str}
+
+
+class ChangeIdentityRequest(BaseModel):
+    ip: str | None = None
+    hostname: str | None = None
+    apply_system_hostname: bool = False   # opt-in: also rename the server via hostnamectl
+
+
+class ChangeIdentityResponse(BaseModel):
+    node_id: str
+    changed: dict
+    steps: dict
+    dns_resolves: bool | None = None
+    warnings: list[str] = []
+    node: NodeResponse
+
+
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
 _register_uc = None
@@ -86,14 +109,16 @@ _ping_all_uc = None
 _update_uc = None
 _delete_uc = None
 _check_dns_uc = None
+_fix_dns_uc = None
+_change_identity_uc = None
 
 
 def set_use_cases(
     register_uc, get_uc, list_uc, ping_uc, ping_all_uc,
-    update_uc, delete_uc, check_dns_uc,
+    update_uc, delete_uc, check_dns_uc, fix_dns_uc, change_identity_uc,
 ) -> None:
     global _register_uc, _get_uc, _list_uc, _ping_uc, _ping_all_uc
-    global _update_uc, _delete_uc, _check_dns_uc
+    global _update_uc, _delete_uc, _check_dns_uc, _fix_dns_uc, _change_identity_uc
     _register_uc = register_uc
     _get_uc = get_uc
     _list_uc = list_uc
@@ -102,6 +127,8 @@ def set_use_cases(
     _update_uc = update_uc
     _delete_uc = delete_uc
     _check_dns_uc = check_dns_uc
+    _fix_dns_uc = fix_dns_uc
+    _change_identity_uc = change_identity_uc
 
 
 def _to_response(node) -> NodeResponse:
@@ -306,6 +333,51 @@ async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_ope
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.post("/{id}/fix-dns", response_model=DnsFixResult, summary="Auto-apply /etc/hosts fixes for failed DNS checks")
+async def fix_node_dns(id: str, body: DnsFixRequest, principal: AuthPrincipal = Depends(require_operator)):
+    """
+    Applies /etc/hosts entries automatically for each requested check key:
+    - backend_to_node:  writes node IP → hostname to the platform's /etc/hosts
+    - node_to_backend:  SSHes to node (ansible user) and writes platform IP → hostname
+    - node_to_puppet:   SSHes to node and writes puppet master IP → hostname
+    - node_to_wazuh:    SSHes to node and writes wazuh manager IP → hostname
+
+    Returns per-check result with ok, entry written, or error message.
+    """
+    try:
+        results = await _fix_dns_uc.execute(id, body.checks)
+        return DnsFixResult(results=results)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{id}/change-identity", response_model=ChangeIdentityResponse, summary="Change a node's IP and/or hostname (DNS name) safely")
+async def change_node_identity(id: str, body: ChangeIdentityRequest, principal: AuthPrincipal = Depends(require_operator)):
+    """
+    Change a node's IP address and/or hostname and replicate it everywhere.
+
+    Built for the EC2 case where a stop/start gives the instance a new public IP
+    and public DNS name. The new address is SSH-tested BEFORE anything is
+    committed — if it is unreachable the call aborts (422) and nothing changes.
+
+    Set `apply_system_hostname=true` to also rename the server itself via
+    hostnamectl (opt-in; off by default). Returns the updated node plus any
+    warnings (e.g. Puppet/Wazuh agents bound to the old hostname).
+    """
+    try:
+        result = await _change_identity_uc.execute(id, body.model_dump())
+        return ChangeIdentityResponse(
+            node_id=result["node_id"],
+            changed=result["changed"],
+            steps=result["steps"],
+            dns_resolves=result["dns_resolves"],
+            warnings=result["warnings"],
+            node=_to_response(result["node"]),
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 # ── Host info ─────────────────────────────────────────────────────────────────
 
 def _detect_host_ip() -> str | None:
@@ -361,7 +433,7 @@ def _detect_admin_user() -> str:
 # ── Setup script ──────────────────────────────────────────────────────────────
 
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
-# BdC Compliance Platform — Node Bootstrap Script
+# SABC Compliance Platform — Node Bootstrap Script
 #
 # Run this directly on the target server with root privileges:
 #   sudo bash setup-node.sh
@@ -383,7 +455,7 @@ PLATFORM_KEY="__PLATFORM_PUBLIC_KEY__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  BdC Compliance — Node Bootstrap"
+echo "  SABC Compliance — Node Bootstrap"
 echo "  Host: $(hostname -f 2>/dev/null || hostname)"
 echo "══════════════════════════════════════════════════════"
 echo ""

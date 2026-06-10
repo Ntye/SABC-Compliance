@@ -28,17 +28,24 @@ from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
 from infrastructure.ansible.adapter import AnsibleAdapter
 from modules.nodes.usecases import (
-    CheckNodeDnsUseCase, DeleteNodeUseCase, GetNodeUseCase, ListNodesUseCase,
+    ChangeNodeIdentityUseCase, CheckNodeDnsUseCase, DeleteNodeUseCase,
+    FixNodeDnsUseCase, GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
-    InstallServiceUseCase, ListJobsUseCase, SetMasterHostUseCase, StartJobUseCase,
+    InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    SetMasterHostUseCase, StartJobUseCase,
+)
+from modules.compliance.usecases import (
+    CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
+    GetNodeComplianceUseCase, TriggerRemediationUseCase,
 )
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
 from interface.http.routes import jobs as jobs_routes
+from interface.http.routes import compliance as compliance_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -47,8 +54,8 @@ logger = logging.getLogger(__name__)
 
 _BANNER = """
 ╔══════════════════════════════════════════════════════╗
-║          BdC Compliance Platform  v1.0.0             ║
-║          Boissons du Cameroun                        ║
+║          SABC Compliance Platform  v1.0.0            ║
+║          Société Anonyme des Brasseries du Cameroun  ║
 ╠══════════════════════════════════════════════════════╣
 ║  API:     http://0.0.0.0:{port:<5}                      ║
 ║  Docs:    http://localhost:{port:<5}/docs                ║
@@ -125,6 +132,13 @@ async def lifespan(app: FastAPI):
         puppet_master_host_env=settings.puppet_master_host,
         wazuh_manager_host_env=settings.wazuh_manager_host,
     )
+    fix_dns_uc = FixNodeDnsUseCase(
+        node_repo, ssh_client,
+        platform_config_repo,
+        puppet_master_host_env=settings.puppet_master_host,
+        wazuh_manager_host_env=settings.wazuh_manager_host,
+    )
+    change_identity_uc = ChangeNodeIdentityUseCase(node_repo, ssh_client)
 
     nodes_routes.set_use_cases(
         register_uc=register_node_uc,
@@ -135,6 +149,8 @@ async def lifespan(app: FastAPI):
         update_uc=update_node_uc,
         delete_uc=delete_node_uc,
         check_dns_uc=check_dns_uc,
+        fix_dns_uc=fix_dns_uc,
+        change_identity_uc=change_identity_uc,
     )
 
     # -- Provisioning / infrastructure use cases --
@@ -159,6 +175,7 @@ async def lifespan(app: FastAPI):
     install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
     install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
     install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+    inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
@@ -167,6 +184,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
+        inspec_uc=inspec_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,
     )
@@ -175,6 +193,14 @@ async def lifespan(app: FastAPI):
         get_uc=get_job_uc,
         cancel_uc=cancel_job_uc,
         ws_manager=ws_manager,
+    )
+
+    # -- Compliance use cases --
+    compliance_routes.set_use_cases(
+        summary_uc=GetComplianceSummaryUseCase(compliance_repo),
+        node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
+        collect_uc=CollectNodeComplianceUseCase(node_repo, compliance_repo, ssh_client),
+        remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
 
     # -- Attach audit repo to middleware --
@@ -216,10 +242,10 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="BdC Compliance Platform API",
+        title="SABC Compliance Platform API",
         version="1.0.0",
         description="""
-## BdC Integrated Linux Compliance Platform
+## SABC Integrated Linux Compliance Platform
 
 Manages a fleet of Linux servers (Rocky Linux 9 + Ubuntu 22.04) with automated
 compliance enforcement across **CIS Benchmarks**, **ISO/IEC 27001**, and **PCI-DSS**.
@@ -229,7 +255,7 @@ Wazuh detects a violation → webhook → Puppet remediation → recorded result
 
 ### Authentication
 Two methods accepted on all protected endpoints:
-- `X-API-Key: bdc_...` — machine-to-machine API key
+- `X-API-Key: sabc_...` — machine-to-machine API key
 - `Authorization: Bearer <jwt>` — user session token (from POST /auth/login)
         """,
         lifespan=lifespan,
@@ -275,6 +301,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(nodes_routes.router)
     app.include_router(infrastructure_routes.router)
     app.include_router(jobs_routes.router)
+    app.include_router(compliance_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])
