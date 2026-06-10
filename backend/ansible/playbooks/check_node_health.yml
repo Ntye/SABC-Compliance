@@ -36,7 +36,7 @@
           - "Memory    : {{ (ansible_memtotal_mb / 1024) | round(1) }} GB total, {{ (ansible_memfree_mb / 1024) | round(1) }} GB free"
 
     - name: Check disk usage on key mount points
-      shell: df -h --output=target,pcent,used,avail,fstype / /var /tmp 2>/dev/null | column -t
+      shell: df -h --output=target,pcent,used,avail,fstype 2>/dev/null | awk '!seen[$1]++ || NR==1' | column -t
       register: _disk
       changed_when: false
       failed_when: false
@@ -48,7 +48,8 @@
     # ── SSH ───────────────────────────────────────────────────────────────────
     - name: Gather SSH daemon and authorized-key info
       shell: |
-        sshd_svc=$(systemctl is-active sshd 2>/dev/null || systemctl is-active ssh 2>/dev/null || echo "unknown")
+        sshd_svc=$(systemctl is-active sshd 2>/dev/null)
+        [ "${sshd_svc}" != "active" ] && sshd_svc=$(systemctl is-active ssh 2>/dev/null || echo "unknown")
         echo "sshd service : ${sshd_svc}"
         echo "sshd port    : $(ss -tlnp 2>/dev/null | awk '/:22 /{print $4}' | head -1 || echo 'unknown')"
         echo "Authorized keys in ~/.ssh/authorized_keys: $(wc -l < ~/.ssh/authorized_keys 2>/dev/null || echo '0')"
