@@ -99,6 +99,34 @@ class RegisterNodeUseCase:
             updated_at=now,
         )
         await self._repo.save(node)
+
+        # Best-effort: detect existing agent installations and mark as enrolled.
+        # A failure here never blocks registration — the node is already saved.
+        try:
+            detect_cmd = (
+                # Puppet: binary present AND has a signed node cert (not just ca.pem)
+                "if test -f /opt/puppetlabs/puppet/bin/puppet && "
+                "find /etc/puppetlabs/puppet/ssl/certs -maxdepth 1 -name '*.pem' "
+                "! -name 'ca.pem' 2>/dev/null | grep -q .; "
+                "then echo PUPPET_OK; else echo PUPPET_MISSING; fi; "
+                # Wazuh: agentd binary present AND has successfully connected
+                "if test -f /var/ossec/bin/wazuh-agentd && "
+                "grep -aq 'Connected to the server' /var/ossec/logs/ossec.log 2>/dev/null; "
+                "then echo WAZUH_OK; else echo WAZUH_MISSING; fi"
+            )
+            stdout, _, _ = await self._ssh.run_command(
+                ip, ssh_port, ssh_user, ssh_key_path, detect_cmd
+            )
+            puppet_found = "PUPPET_OK" in stdout
+            wazuh_found  = "WAZUH_OK" in stdout
+            if puppet_found or wazuh_found:
+                node.puppet_enrolled = puppet_found
+                node.wazuh_enrolled  = wazuh_found
+                node.updated_at = datetime.utcnow()
+                await self._repo.update(node)
+        except Exception:
+            pass
+
         self._bus.publish(Events.NODE_REGISTERED, {"node_id": node.id, "hostname": node.hostname})
         return node
 

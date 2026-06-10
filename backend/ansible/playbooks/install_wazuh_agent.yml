@@ -85,6 +85,28 @@
         path: /var/ossec/bin/wazuh-agentd
       register: wazuh_agent_installed
 
+    - name: Check if already-installed agent is actively connected
+      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+      register: _agent_already_connected
+      changed_when: false
+      failed_when: false
+      when: wazuh_agent_installed.stat.exists
+
+    - name: Agent already installed and connected — nothing to do
+      debug:
+        msg: >-
+          wazuh-agent is already installed and connected to {{ wazuh_manager }}
+          on {{ ansible_fqdn }}. Skipping installation.
+      when:
+        - wazuh_agent_installed.stat.exists
+        - (_agent_already_connected.rc | default(1)) == 0
+
+    - name: End play — agent already enrolled and connected
+      meta: end_host
+      when:
+        - wazuh_agent_installed.stat.exists
+        - (_agent_already_connected.rc | default(1)) == 0
+
     # ── Airgap detection (shared by both platform scripts) ───────────────────
     - name: Find offline Wazuh agent packages on controller
       find:
@@ -328,6 +350,76 @@
           after VM cloning — a duplicate agent ID in client.keys). Resetting the
           key to force a fresh registration.
       when: wazuh_enroll_stuck | bool
+
+    # ── REST API cleanup — delete stale manager entry before key reset ────────
+    # The manager keeps the old agent record; clearing only client.keys causes
+    # a "Duplicate agent name" rejection on re-enrollment. Deleting via API
+    # first lets the agent register cleanly with a fresh ID.
+    # Gracefully skipped when wazuh_api_pass is not configured.
+    - name: Remove stale agent entry from Wazuh manager via REST API
+      when:
+        - wazuh_enroll_stuck | bool
+        - wazuh_api_pass is defined
+        - wazuh_api_pass | string | length > 0
+      block:
+        - name: Authenticate to Wazuh REST API (runs on controller)
+          uri:
+            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
+            method: POST
+            url_username: "{{ wazuh_api_user | default('wazuh') }}"
+            url_password: "{{ wazuh_api_pass }}"
+            force_basic_auth: yes
+            return_content: yes
+            validate_certs: no
+            timeout: 10
+          register: _wazuh_jwt
+          no_log: true
+          delegate_to: localhost
+          become: no
+
+        - name: Find agents named {{ ansible_hostname }} on the manager
+          uri:
+            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_hostname }}&status=all"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
+            validate_certs: no
+            return_content: yes
+            timeout: 10
+          register: _wazuh_stale_agents
+          delegate_to: localhost
+          become: no
+
+        - name: Build list of stale agent IDs to delete
+          set_fact:
+            _stale_ids: >-
+              {{ _wazuh_stale_agents.json.data.affected_items
+                 | map(attribute='id') | list }}
+          when: (_wazuh_stale_agents.json.data.affected_items | default([]) | length) > 0
+
+        - name: Delete stale agents from manager (IDs {{ _stale_ids | default([]) | join(', ') }})
+          uri:
+            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?agents_list={{ _stale_ids | join(',') }}&status=all&older_than=0s"
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
+            validate_certs: no
+            return_content: yes
+            timeout: 10
+          delegate_to: localhost
+          become: no
+          when:
+            - _stale_ids is defined
+            - (_stale_ids | length) > 0
+
+      rescue:
+        - name: REST API cleanup failed — continuing with client.keys reset only
+          debug:
+            msg: >-
+              WARNING: Could not delete stale Wazuh agent '{{ ansible_hostname }}'
+              via the manager REST API. The client.keys reset below will still
+              force a new enrollment ID; the manager may briefly show a duplicate
+              entry but will resolve once the agent reconnects.
 
     - name: Stop wazuh-agent before resetting key
       service:

@@ -8,7 +8,8 @@ from core.domain.entities import Job, Node
 from core.domain.interfaces import (
     IJobRepository, INodeRepository, IPlatformConfigRepository,
 )
-from core.errors import NotFoundError, ValidationError
+from config import get_settings
+from core.errors import ConflictError, NotFoundError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -255,8 +256,14 @@ class InstallServiceUseCase:
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
 
-        config_key = self._CONFIG_KEYS.get(self._service)
         enroll_attr = self._ENROLL_ATTRS.get(self._service)
+        if enroll_attr and getattr(node, enroll_attr, False):
+            raise ConflictError(
+                f"Node '{node.hostname}' is already enrolled for {self._service}. "
+                "Remove the node and re-register to force re-installation."
+            )
+
+        config_key = self._CONFIG_KEYS.get(self._service)
         node_ip = node.ip
         node_repo = self._node_repo
         config_repo = self._config
@@ -274,6 +281,11 @@ class InstallServiceUseCase:
             host = await self._config.get("wazuh_manager_host")
             if host:
                 extra_vars["wazuh_manager_host"] = host
+            settings = get_settings()
+            extra_vars["wazuh_api_user"] = settings.wazuh_api_user
+            if settings.wazuh_api_pass:
+                extra_vars["wazuh_api_pass"] = settings.wazuh_api_pass
+            extra_vars["wazuh_api_port"] = settings.wazuh_api_port
 
         pe_password_used = extra_vars.get("pe_console_password", "SABCPuppet1!")
 

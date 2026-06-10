@@ -435,6 +435,13 @@ function AgentsTab({ nodes, onRefresh, t }) {
     setSelectedNode(nodeId)
     setPlatformCheck(null)
     if (!nodeId) return
+    // Pre-deselect agents that are already enrolled on this node
+    const chosen = nodes.find((n) => n.id === nodeId)
+    if (chosen) {
+      const puppet = !chosen.puppet_enrolled
+      const wazuh  = !chosen.wazuh_enrolled
+      setAgentSel(puppet || wazuh ? { puppet, wazuh } : { puppet: true, wazuh: true })
+    }
     setCheckingPlatform(true)
     try {
       const result = await checkPuppetAgentPlatform(nodeId)
@@ -473,7 +480,11 @@ function AgentsTab({ nodes, onRefresh, t }) {
   }
 
   const node = nodes.find((n) => n.id === selectedNode)
-  const canLaunch = !!selectedNode && (agentSel.puppet || agentSel.wazuh)
+  // canLaunch: node selected AND at least one non-enrolled agent is checked
+  const canLaunch = !!selectedNode && (
+    (agentSel.puppet && !node?.puppet_enrolled) ||
+    (agentSel.wazuh  && !node?.wazuh_enrolled)
+  )
 
   // Per-node coverage
   const enrolled = nodes.filter((n) => n.puppet_enrolled || n.wazuh_enrolled).length
@@ -539,36 +550,46 @@ function AgentsTab({ nodes, onRefresh, t }) {
               </div>
               <div className="space-y-2">
                 {[
-                  { key: 'puppet', label: t('infra.puppetAgentLabel'), desc: t('infra.puppetAgentDesc') },
-                  { key: 'wazuh',  label: t('infra.wazuhAgentLabel'),  desc: t('infra.wazuhAgentDesc')  },
-                ].map(({ key, label, desc }) => (
-                  <button
-                    key={key}
-                    onClick={() => toggleAgent(key)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
-                      agentSel[key]
-                        ? 'border-brand bg-brand/5'
-                        : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                      agentSel[key] ? 'bg-brand/10' : 'bg-gray-100'
-                    }`}>
-                      <Cpu size={14} className={agentSel[key] ? 'text-brand' : 'text-gray-400'} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-[12px] font-semibold ${agentSel[key] ? 'text-brand' : 'text-gray-700'}`}>
-                        {label}
-                      </p>
-                      <p className="text-[11px] text-gray-400">{desc}</p>
-                    </div>
-                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
-                      agentSel[key] ? 'border-brand bg-brand' : 'border-gray-300'
-                    }`}>
-                      {agentSel[key] && <CheckCircle size={10} className="text-white" />}
-                    </div>
-                  </button>
-                ))}
+                  { key: 'puppet', enrolledFlag: 'puppet_enrolled', label: t('infra.puppetAgentLabel'), desc: t('infra.puppetAgentDesc') },
+                  { key: 'wazuh',  enrolledFlag: 'wazuh_enrolled',  label: t('infra.wazuhAgentLabel'),  desc: t('infra.wazuhAgentDesc')  },
+                ].map(({ key, enrolledFlag, label, desc }) => {
+                  const alreadyEnrolled = node ? !!node[enrolledFlag] : false
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => !alreadyEnrolled && toggleAgent(key)}
+                      disabled={alreadyEnrolled}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
+                        alreadyEnrolled
+                          ? 'border-green-200 bg-green-50 cursor-default'
+                          : agentSel[key]
+                            ? 'border-brand bg-brand/5'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                        alreadyEnrolled ? 'bg-green-100' : agentSel[key] ? 'bg-brand/10' : 'bg-gray-100'
+                      }`}>
+                        <Cpu size={14} className={alreadyEnrolled ? 'text-green-600' : agentSel[key] ? 'text-brand' : 'text-gray-400'} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-[12px] font-semibold ${alreadyEnrolled ? 'text-green-700' : agentSel[key] ? 'text-brand' : 'text-gray-700'}`}>
+                          {label}
+                        </p>
+                        <p className="text-[11px] text-gray-400">
+                          {alreadyEnrolled ? t('infra.enrolled') : desc}
+                        </p>
+                      </div>
+                      <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                        alreadyEnrolled
+                          ? 'border-green-500 bg-green-500'
+                          : agentSel[key] ? 'border-brand bg-brand' : 'border-gray-300'
+                      }`}>
+                        {(alreadyEnrolled || agentSel[key]) && <CheckCircle size={10} className="text-white" />}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
 
               <div className="flex gap-2 mt-2">
@@ -669,12 +690,18 @@ function AgentsTab({ nodes, onRefresh, t }) {
                     <Pip ok={n.wazuh_enrolled || false} label={n.wazuh_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => { setSelectedNode(n.id); handleNodeChange(n.id) }}
-                      className={btnSm(false)}
-                    >
-                      {t('infra.enroll')}
-                    </button>
+                    {n.puppet_enrolled && n.wazuh_enrolled ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-green-700 bg-green-50">
+                        <CheckCircle size={10} /> {t('infra.enrolled')}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => { setSelectedNode(n.id); handleNodeChange(n.id) }}
+                        className={btnSm(false)}
+                      >
+                        {t('infra.enroll')}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
