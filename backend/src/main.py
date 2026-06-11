@@ -118,6 +118,10 @@ async def lifespan(app: FastAPI):
     ssh_client = SshClientAdapter(settings.ssh_key_path)
     ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path, settings.packages_dir)
 
+    # -- Job infrastructure (needed by both node and provisioning use cases) --
+    start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
+    detect_agents_uc = DetectAgentsUseCase(start_job_uc, node_repo, job_repo)
+
     # -- Node use cases --
     register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)
     get_node_uc = GetNodeUseCase(node_repo)
@@ -167,8 +171,6 @@ async def lifespan(app: FastAPI):
         settings.puppet_master_port,
         settings.wazuh_api_port,
     )
-    start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
-    detect_agents_uc = DetectAgentsUseCase(start_job_uc, node_repo, job_repo)
     list_jobs_uc = ListJobsUseCase(job_repo)
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)
