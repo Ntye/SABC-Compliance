@@ -445,21 +445,78 @@
       failed_when: false
       when: wazuh_enroll_stuck | bool
 
+    # ── Force-enrollment — evict duplicate manager entry without API creds ────
+    # Wazuh 4.2+: adding <force><enabled>yes</enabled></force> inside the
+    # <enrollment> section causes the manager to remove any existing agent with
+    # the same name before issuing the new key. No API password required.
+    # Disconnected/registration time thresholds are set to 0s so the replace
+    # triggers even if the old agent was still active (common after cloning).
+    - name: Enable force-enrollment to evict duplicate agent name on manager
+      shell: |
+        python3 - << 'PYEOF'
+        import re, sys
+        path = '/var/ossec/etc/ossec.conf'
+        with open(path) as f:
+            conf = f.read()
+
+        # Remove any existing <force> block first to avoid duplicates
+        conf = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
+
+        force = (
+            '\n    <force>'
+            '\n      <enabled>yes</enabled>'
+            '\n      <disconnected_time enabled="yes">0s</disconnected_time>'
+            '\n      <after_registration_time>0s</after_registration_time>'
+            '\n    </force>'
+        )
+
+        if '<enrollment>' in conf:
+            conf = conf.replace('<enrollment>', '<enrollment>' + force, 1)
+            with open(path, 'w') as f:
+                f.write(conf)
+            print('force-enrollment injected into enrollment section')
+        else:
+            print('WARNING: no <enrollment> section found — force-enrollment not set')
+            sys.exit(0)
+        PYEOF
+      changed_when: true
+      failed_when: false
+      when: wazuh_enroll_stuck | bool
+
     - name: Start wazuh-agent to trigger fresh auto-enrollment
       service:
         name: wazuh-agent
         state: started
       when: wazuh_enroll_stuck | bool
 
-    - name: Wait for the agent to connect after re-enrollment (up to 60s)
+    - name: Wait for the agent to connect after re-enrollment (up to 90s)
       shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
       register: agent_connected_retry
-      retries: 12
+      retries: 18
       delay: 5
       until: agent_connected_retry.rc == 0
       changed_when: false
       failed_when: false
       when: wazuh_enroll_stuck | bool
+
+    - name: Remove force-enrollment block now that registration succeeded
+      shell: |
+        python3 - << 'PYEOF'
+        import re
+        path = '/var/ossec/etc/ossec.conf'
+        with open(path) as f:
+            conf = f.read()
+        cleaned = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
+        if cleaned != conf:
+            with open(path, 'w') as f:
+                f.write(cleaned)
+            print('force block removed')
+        PYEOF
+      changed_when: true
+      failed_when: false
+      when:
+        - wazuh_enroll_stuck | bool
+        - (agent_connected_retry.rc | default(1)) == 0
 
     - name: Get wazuh-agent version
       command: /var/ossec/bin/wazuh-control info
