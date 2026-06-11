@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 # System deps: SSH client (Ansible), curl (connectivity checks in playbooks)
