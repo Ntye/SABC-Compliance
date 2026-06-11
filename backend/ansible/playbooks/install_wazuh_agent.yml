@@ -399,7 +399,7 @@
       block:
         - name: Authenticate to Wazuh REST API (runs on controller)
           uri:
-            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
             method: POST
             url_username: "{{ wazuh_api_user | default('wazuh') }}"
             url_password: "{{ wazuh_api_pass | default('wazuh') }}"
@@ -414,7 +414,7 @@
 
         - name: Find agents named {{ ansible_hostname }} on the manager
           uri:
-            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_hostname }}&status=all"
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_hostname }}&status=all"
             method: GET
             headers:
               Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
@@ -434,7 +434,7 @@
 
         - name: Delete stale agents from manager (IDs {{ _stale_ids | default([]) | join(', ') }})
           uri:
-            url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?agents_list={{ _stale_ids | join(',') }}&status=all&older_than=0s"
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?agents_list={{ _stale_ids | join(',') }}&status=all&older_than=0s"
             method: DELETE
             headers:
               Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
