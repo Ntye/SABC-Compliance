@@ -321,3 +321,79 @@ async def change_password(
         return await _change_password_uc.execute(principal.id, body.old_password, body.new_password)
     except (UnauthorizedError, ValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/users/{id}", response_model=UserResponse)
+async def update_user(id: str, body: UpdateUserRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        user = await _update_user_uc.execute(id, body.model_dump(exclude_none=True))
+        return UserResponse(id=user.id, username=user.username, role=user.role, email=user.email, active=user.active, created_at=user.created_at, last_login=user.last_login)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/users/{id}")
+async def delete_user(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _delete_user_uc.execute(id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/groups", response_model=list[UserGroupResponse])
+async def list_groups(principal: AuthPrincipal = Depends(require_admin)):
+    groups = await _list_groups_uc.execute()
+    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
+
+
+@router.post("/groups", status_code=201, response_model=UserGroupResponse)
+async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _create_group_uc.execute(body.model_dump())
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except (ValidationError, ConflictError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/groups/{id}", response_model=UserGroupResponse)
+async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _get_group_uc.execute(id)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.patch("/groups/{id}", response_model=UserGroupResponse)
+async def update_group(id: str, body: UpdateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _update_group_uc.execute(id, body.model_dump(exclude_none=True))
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except (NotFoundError, ValidationError) as exc:
+        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 422, detail=str(exc))
+
+
+@router.delete("/groups/{id}")
+async def delete_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _delete_group_uc.execute(id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/groups/{id}/members")
+async def add_group_member(id: str, body: AddGroupMemberRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _add_member_uc.execute(id, body.user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/groups/{id}/members/{user_id}")
+async def remove_group_member(id: str, user_id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _remove_member_uc.execute(id, user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

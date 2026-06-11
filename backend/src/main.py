@@ -16,13 +16,16 @@ from core.errors import (
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceRepository,
     JobRepository, NodeRepository, PlatformConfigRepository,
-    RuleRepository, UserRepository, create_db,
+    RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
     CreateUserUseCase, DecodeJwtUseCase, InitAdminUserUseCase,
     InitApiKeyUseCase, ListApiKeysUseCase, ListUsersUseCase, LoginUseCase,
-    RevokeApiKeyUseCase,
+    RevokeApiKeyUseCase, UpdateUserUseCase, DeleteUserUseCase,
+    CreateUserGroupUseCase, ListUserGroupsUseCase, GetUserGroupUseCase,
+    UpdateUserGroupUseCase, DeleteUserGroupUseCase,
+    AddUserToGroupUseCase, RemoveUserFromGroupUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -98,6 +101,17 @@ async def lifespan(app: FastAPI):
     list_users_uc = ListUsersUseCase(user_repo)
     change_password_uc = ChangePasswordUseCase(user_repo)
 
+    group_repo = UserGroupRepository(session_factory)
+    update_user_uc = UpdateUserUseCase(user_repo)
+    delete_user_uc = DeleteUserUseCase(user_repo, api_key_repo)
+    create_group_uc = CreateUserGroupUseCase(group_repo)
+    list_groups_uc = ListUserGroupsUseCase(group_repo)
+    get_group_uc = GetUserGroupUseCase(group_repo)
+    update_group_uc = UpdateUserGroupUseCase(group_repo)
+    delete_group_uc = DeleteUserGroupUseCase(group_repo)
+    add_member_uc = AddUserToGroupUseCase(group_repo, user_repo)
+    remove_member_uc = RemoveUserFromGroupUseCase(group_repo, user_repo)
+
     auth_routes.set_use_cases(
         authenticate_uc=authenticate_uc,
         decode_jwt_uc=decode_jwt_uc,
@@ -109,6 +123,15 @@ async def lifespan(app: FastAPI):
         create_user_uc=create_user_uc,
         list_users_uc=list_users_uc,
         change_password_uc=change_password_uc,
+        update_user_uc=update_user_uc,
+        delete_user_uc=delete_user_uc,
+        create_group_uc=create_group_uc,
+        list_groups_uc=list_groups_uc,
+        get_group_uc=get_group_uc,
+        update_group_uc=update_group_uc,
+        delete_group_uc=delete_group_uc,
+        add_member_uc=add_member_uc,
+        remove_member_uc=remove_member_uc,
     )
 
     # -- WebSocket manager --

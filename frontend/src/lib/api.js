@@ -152,6 +152,42 @@ export async function changePassword(oldPassword, newPassword) {
   })
 }
 
+export async function updateUser(id, data) {
+  return request('PATCH', `/auth/users/${id}`, data)
+}
+
+export async function deleteUser(id) {
+  return request('DELETE', `/auth/users/${id}`)
+}
+
+export async function listUserGroups() {
+  return request('GET', '/auth/groups')
+}
+
+export async function createUserGroup(data) {
+  return request('POST', '/auth/groups', data)
+}
+
+export async function updateUserGroup(id, data) {
+  return request('PATCH', `/auth/groups/${id}`, data)
+}
+
+export async function deleteUserGroup(id) {
+  return request('DELETE', `/auth/groups/${id}`)
+}
+
+export async function getUserGroup(id) {
+  return request('GET', `/auth/groups/${id}`)
+}
+
+export async function addGroupMember(groupId, userId) {
+  return request('POST', `/auth/groups/${groupId}/members`, { user_id: userId })
+}
+
+export async function removeGroupMember(groupId, userId) {
+  return request('DELETE', `/auth/groups/${groupId}/members/${userId}`)
+}
+
 // ── Nodes ─────────────────────────────────────────────────────────────────────
 
 export async function listNodes(filters = {}) {

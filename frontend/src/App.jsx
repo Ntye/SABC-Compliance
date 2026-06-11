@@ -12,6 +12,9 @@ import PuppetRulesPage from './pages/PuppetRulesPage.jsx'
 import ApiKeysPage from './pages/ApiKeysPage.jsx'
 import AuditLogPage from './pages/AuditLogPage.jsx'
 import InfrastructurePage from './pages/InfrastructurePage.jsx'
+import UsersPage from './pages/UsersPage.jsx'
+import UserGroupsPage from './pages/UserGroupsPage.jsx'
+import PermissionsPage from './pages/PermissionsPage.jsx'
 
 export default function App() {
   return (
@@ -31,6 +34,11 @@ export default function App() {
             <Route path="/rules" element={<PuppetRulesPage />} />
             <Route path="/keys" element={<ApiKeysPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
+            {/* IAM routes */}
+            <Route path="/iam/users" element={<UsersPage />} />
+            <Route path="/iam/groups" element={<UserGroupsPage />} />
+            <Route path="/iam/keys" element={<ApiKeysPage />} />
+            <Route path="/iam/permissions" element={<PermissionsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Routes>
