@@ -185,6 +185,11 @@ node_groups_table = Table(
     Column("id", Text, primary_key=True),
     Column("name", Text, nullable=False, unique=True),
     Column("description", Text),
+    Column("parent", Text),
+    Column("environment", Text),
+    Column("is_environment_group", Integer, default=0),
+    Column("match_type", Text),
+    Column("rules", Text),
     Column("puppet_group_id", Text),
     Column("wazuh_synced", Integer, default=0),
     Column("puppet_synced", Integer, default=0),
@@ -236,6 +241,15 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
                          ("permissions", "TEXT"), ("is_default", "INTEGER")]:
             try:
                 await conn.execute(text(f"ALTER TABLE user_groups ADD COLUMN {col} {typ}"))
+            except Exception:
+                pass
+
+        # Node groups — migrations for Puppet-style classification columns
+        for col, typ in [("parent", "TEXT"), ("environment", "TEXT"),
+                         ("is_environment_group", "INTEGER"),
+                         ("match_type", "TEXT"), ("rules", "TEXT")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
             except Exception:
                 pass
 
@@ -944,6 +958,11 @@ class NodeGroupRepository(INodeGroupRepository):
             id=row.id,
             name=row.name,
             description=row.description,
+            parent=getattr(row, "parent", None) or "All Nodes",
+            environment=getattr(row, "environment", None) or "production",
+            is_environment_group=bool(getattr(row, "is_environment_group", 0)),
+            match_type=getattr(row, "match_type", None) or "all",
+            rules=json.loads(getattr(row, "rules", None) or "[]"),
             node_ids=node_ids or [],
             puppet_group_id=row.puppet_group_id,
             wazuh_synced=bool(row.wazuh_synced),
@@ -956,6 +975,9 @@ class NodeGroupRepository(INodeGroupRepository):
         async with self._session() as s:
             await s.execute(node_groups_table.insert().values(
                 id=g.id, name=g.name, description=g.description,
+                parent=g.parent, environment=g.environment,
+                is_environment_group=int(g.is_environment_group),
+                match_type=g.match_type, rules=json.dumps(g.rules),
                 puppet_group_id=g.puppet_group_id,
                 wazuh_synced=int(g.wazuh_synced),
                 puppet_synced=int(g.puppet_synced),
@@ -994,6 +1016,9 @@ class NodeGroupRepository(INodeGroupRepository):
             await s.execute(
                 update(node_groups_table).where(node_groups_table.c.id == g.id).values(
                     name=g.name, description=g.description,
+                    parent=g.parent, environment=g.environment,
+                    is_environment_group=int(g.is_environment_group),
+                    match_type=g.match_type, rules=json.dumps(g.rules),
                     puppet_group_id=g.puppet_group_id,
                     wazuh_synced=int(g.wazuh_synced),
                     puppet_synced=int(g.puppet_synced),

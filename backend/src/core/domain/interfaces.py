@@ -146,7 +146,12 @@ class IPuppetClient(ABC):
     @abstractmethod
     async def health(self) -> dict: ...
     @abstractmethod
-    async def create_node_group(self, name: str, description: "str | None") -> str: ...  # returns NC group UUID
+    async def create_node_group(self, name, description=None, environment="production",
+                                parent_id=None, match_type="all", rules=None,
+                                pinned_certnames=None) -> str: ...  # returns NC group UUID
+    @abstractmethod
+    async def update_node_group(self, group_id, name=None, description=None, environment=None,
+                                match_type="all", rules=None, pinned_certnames=None) -> None: ...
     @abstractmethod
     async def delete_node_group(self, puppet_group_id: str) -> None: ...
 
@@ -164,6 +169,8 @@ class IWazuhClient(ABC):
     async def create_agent_group(self, name: str) -> None: ...
     @abstractmethod
     async def delete_agent_group(self, name: str) -> None: ...
+    @abstractmethod
+    async def assign_agents_to_group(self, group_name: str, hostnames: list[str]) -> dict: ...
 
 
 class IPlatformConfigRepository(ABC):

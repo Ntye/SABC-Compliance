@@ -11,11 +11,22 @@ router = APIRouter(prefix="/node-groups", tags=["Node Groups"])
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+class RuleModel(BaseModel):
+    fact: str
+    operator: str = "="
+    value: str = ""
+
 class NodeGroupResponse(BaseModel):
     id: str
     name: str
     description: str | None = None
-    node_ids: list[str] = []
+    parent: str = "All Nodes"
+    environment: str = "production"
+    is_environment_group: bool = False
+    match_type: str = "all"
+    rules: list[RuleModel] = []
+    node_ids: list[str] = []           # pinned nodes
+    matching_node_ids: list[str] = []  # pinned ∪ rule-matched
     puppet_group_id: str | None = None
     wazuh_synced: bool = False
     puppet_synced: bool = False
@@ -25,34 +36,71 @@ class NodeGroupResponse(BaseModel):
 class CreateNodeGroupRequest(BaseModel):
     name: str
     description: str | None = None
+    parent: str = "All Nodes"
+    environment: str = "production"
+    is_environment_group: bool = False
+    match_type: str = "all"
+    rules: list[RuleModel] = []
+    node_ids: list[str] = []
+
+class UpdateNodeGroupRequest(BaseModel):
+    description: str | None = None
+    parent: str | None = None
+    environment: str | None = None
+    is_environment_group: bool | None = None
+    match_type: str | None = None
+    rules: list[RuleModel] | None = None
+    node_ids: list[str] | None = None
 
 class AddNodeRequest(BaseModel):
     node_id: str
+
+class FactResponse(BaseModel):
+    name: str
+    values: list[str] = []
+
+class PreviewRequest(BaseModel):
+    match_type: str = "all"
+    rules: list[RuleModel] = []
+    node_ids: list[str] = []
 
 # ── Module-level use case holders ────────────────────────────────────────────
 
 _list_uc = None
 _get_uc = None
 _create_uc = None
+_update_uc = None
 _delete_uc = None
 _add_node_uc = None
 _remove_node_uc = None
+_facts_uc = None
+_preview_uc = None
 
 
-def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_node_uc):
-    global _list_uc, _get_uc, _create_uc, _delete_uc, _add_node_uc, _remove_node_uc
+def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_node_uc,
+                  update_uc=None, facts_uc=None, preview_uc=None):
+    global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc
+    global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc
     _list_uc = list_uc
     _get_uc = get_uc
     _create_uc = create_uc
+    _update_uc = update_uc
     _delete_uc = delete_uc
     _add_node_uc = add_node_uc
     _remove_node_uc = remove_node_uc
+    _facts_uc = facts_uc
+    _preview_uc = preview_uc
 
 
-def _resp(g) -> NodeGroupResponse:
+def _resp(g, matching=None) -> NodeGroupResponse:
     return NodeGroupResponse(
         id=g.id, name=g.name, description=g.description,
-        node_ids=g.node_ids, puppet_group_id=g.puppet_group_id,
+        parent=g.parent, environment=g.environment,
+        is_environment_group=g.is_environment_group,
+        match_type=g.match_type,
+        rules=[RuleModel(**r) for r in (g.rules or [])],
+        node_ids=g.node_ids, matching_node_ids=matching or [],
+        puppet_group_id=g.puppet_group_id,
         wazuh_synced=g.wazuh_synced, puppet_synced=g.puppet_synced,
         created_at=g.created_at, updated_at=g.updated_at,
     )
@@ -61,7 +109,20 @@ def _resp(g) -> NodeGroupResponse:
 
 @router.get("", response_model=list[NodeGroupResponse])
 async def list_node_groups(principal=Depends(get_current_principal)):
-    return [_resp(g) for g in await _list_uc.execute()]
+    return [_resp(g, matching) for g, matching in await _list_uc.execute()]
+
+
+@router.get("/facts", response_model=list[FactResponse])
+async def list_facts(principal=Depends(get_current_principal)):
+    return [FactResponse(**f) for f in await _facts_uc.execute()]
+
+
+@router.post("/preview", response_model=list[str])
+async def preview_matching(body: PreviewRequest, principal=Depends(get_current_principal)):
+    try:
+        return await _preview_uc.execute(body.model_dump())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("", status_code=201, response_model=NodeGroupResponse)
@@ -78,9 +139,21 @@ async def create_node_group(body: CreateNodeGroupRequest, principal=Depends(requ
 @router.get("/{id}", response_model=NodeGroupResponse)
 async def get_node_group(id: str, principal=Depends(get_current_principal)):
     try:
-        return _resp(await _get_uc.execute(id))
+        g, matching = await _get_uc.execute(id)
+        return _resp(g, matching)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.patch("/{id}", response_model=NodeGroupResponse)
+async def update_node_group(id: str, body: UpdateNodeGroupRequest, principal=Depends(require_admin)):
+    try:
+        g = await _update_uc.execute(id, body.model_dump(exclude_unset=True))
+        return _resp(g)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.delete("/{id}")

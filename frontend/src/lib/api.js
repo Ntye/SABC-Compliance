@@ -390,12 +390,24 @@ export async function createNodeGroup(data) {
   return request('POST', '/node-groups', data)
 }
 
+export async function updateNodeGroup(id, data) {
+  return request('PATCH', `/node-groups/${id}`, data)
+}
+
 export async function deleteNodeGroup(id) {
   return request('DELETE', `/node-groups/${id}`)
 }
 
 export async function getNodeGroup(id) {
   return request('GET', `/node-groups/${id}`)
+}
+
+export async function listNodeGroupFacts() {
+  return request('GET', '/node-groups/facts')
+}
+
+export async function previewNodeGroupMatches(data) {
+  return request('POST', '/node-groups/preview', data)
 }
 
 export async function addNodeToGroup(groupId, nodeId) {

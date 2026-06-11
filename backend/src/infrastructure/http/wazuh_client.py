@@ -69,6 +69,44 @@ class WazuhRESTClient:
             except httpx.HTTPError as e:
                 raise ExternalServiceError(f"Wazuh delete group failed: {e}") from e
 
+    async def assign_agents_to_group(self, group_name: str, hostnames: list[str]) -> dict:
+        """Assign the given agents (matched by name/hostname) to an agent group.
+
+        Returns {"assigned": [...], "missing": [...]}. Best-effort: agents not
+        found in Wazuh are reported as missing rather than raising.
+        """
+        result = {"assigned": [], "missing": list(hostnames)}
+        if not self._host or not hostnames:
+            return result
+        agents = await self.list_agents()
+        # Map by both name and a normalised short hostname
+        by_name = {}
+        for a in agents:
+            nm = (a.get("name") or "").lower()
+            if nm:
+                by_name[nm] = a.get("id")
+                by_name[nm.split(".")[0]] = a.get("id")
+        token = await self._jwt()
+        async with httpx.AsyncClient(verify=False) as c:
+            for host in hostnames:
+                key = (host or "").lower()
+                agent_id = by_name.get(key) or by_name.get(key.split(".")[0])
+                if not agent_id:
+                    continue
+                try:
+                    r = await c.put(
+                        f"{self._base()}/agents/{agent_id}/group/{group_name}",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=10,
+                    )
+                    if r.status_code in (200, 201):
+                        result["assigned"].append(host)
+                        if host in result["missing"]:
+                            result["missing"].remove(host)
+                except httpx.HTTPError as e:
+                    raise ExternalServiceError(f"Wazuh assign agent failed: {e}") from e
+        return result
+
     async def list_agents(self) -> list[dict]:
         if not self._host:
             return []

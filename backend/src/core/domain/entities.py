@@ -233,7 +233,12 @@ class NodeGroup:
     id: str
     name: str
     description: str | None = None
-    node_ids: list[str] = field(default_factory=list)
+    parent: str = "All Nodes"            # parent group name (PE hierarchy)
+    environment: str = "production"      # PE environment / shared Wazuh env
+    is_environment_group: bool = False   # PE environment-group flag
+    match_type: str = "all"              # "all" (AND) | "any" (OR)
+    rules: list[dict] = field(default_factory=list)   # [{fact, operator, value}]
+    node_ids: list[str] = field(default_factory=list)  # explicitly pinned nodes
     puppet_group_id: str | None = None   # UUID from PE node classifier
     wazuh_synced: bool = False
     puppet_synced: bool = False

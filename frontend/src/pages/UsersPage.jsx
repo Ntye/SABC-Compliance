@@ -60,6 +60,17 @@ export default function UsersPage() {
   // Edit form state
   const [editEmail, setEditEmail] = useState('')
 
+  // Map each user id → the names of the groups they belong to
+  const groupNamesByUser = useMemo(() => {
+    const map = {}
+    for (const g of groups || []) {
+      for (const uid of g.member_ids || []) {
+        (map[uid] ||= []).push(g.name)
+      }
+    }
+    return map
+  }, [groups])
+
   const filtered = useMemo(() => {
     if (!users) return []
     const q = query.toLowerCase()
@@ -92,6 +103,10 @@ export default function UsersPage() {
       toast('Passwords do not match', 'error')
       return
     }
+    if (!newGroupId) {
+      toast(t('iam.userGroup') + ' required', 'error')
+      return
+    }
     setSaving(true)
     try {
       const created = await createUser({
@@ -99,12 +114,11 @@ export default function UsersPage() {
         password: newPassword,
         email: newEmail.trim() || undefined,
       })
-      if (newGroupId) {
-        try {
-          await addGroupMember(newGroupId, created.id)
-        } catch {
-          // non-fatal — user was created
-        }
+      try {
+        await addGroupMember(newGroupId, created.id)
+      } catch {
+        // non-fatal — user was created, but warn that group assignment failed
+        toast('User created but group assignment failed', 'warning')
       }
       toast(t('iam.usersTitle') + ' created', 'success')
       setShowCreate(false)
@@ -215,7 +229,7 @@ export default function UsersPage() {
               <thead>
                 <tr className="border-b border-gray-100">
                   <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('iam.username')}</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('iam.role')}</th>
+                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('iam.userGroup')}</th>
                   <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('iam.email')}</th>
                   <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('iam.status')}</th>
                   <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
@@ -228,7 +242,15 @@ export default function UsersPage() {
                   <tr key={u.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium text-gray-800">{u.username}</td>
                     <td className="px-4 py-3">
-                      <span className={badge(u.role)}>{u.role}</span>
+                      {(groupNamesByUser[u.id] || []).length === 0 ? (
+                        <span className={badge('gray')}>—</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {groupNamesByUser[u.id].map((name) => (
+                            <span key={name} className={badge(name)}>{name}</span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-500">{u.email || '—'}</td>
                     <td className="px-4 py-3">
@@ -293,17 +315,19 @@ export default function UsersPage() {
               />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.iamGroups')} <span className="text-gray-400 font-normal">(optional)</span></label>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.userGroup')} *</label>
               <select
                 value={newGroupId}
                 onChange={(e) => setNewGroupId(e.target.value)}
+                required
                 className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
               >
-                <option value="">— No group —</option>
+                <option value="" disabled>{t('iam.selectGroup')}</option>
                 {(groups || []).map((g) => (
                   <option key={g.id} value={g.id}>{g.name}</option>
                 ))}
               </select>
+              <p className="text-[10px] text-gray-400 mt-1">{t('iam.groupRequiredHint')}</p>
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.password')} *</label>

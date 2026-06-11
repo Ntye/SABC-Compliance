@@ -31,8 +31,9 @@ from modules.auth.usecases import (
     SeedDefaultGroupsUseCase,
 )
 from modules.node_groups.usecases import (
-    CreateNodeGroupUseCase, DeleteNodeGroupUseCase, ListNodeGroupsUseCase,
-    GetNodeGroupUseCase, AddNodeToGroupUseCase, RemoveNodeFromGroupUseCase,
+    CreateNodeGroupUseCase, UpdateNodeGroupUseCase, DeleteNodeGroupUseCase,
+    ListNodeGroupsUseCase, GetNodeGroupUseCase, AddNodeToGroupUseCase,
+    RemoveNodeFromGroupUseCase, ListFactsUseCase, PreviewMatchingUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -163,20 +164,26 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Node group use cases --
-    list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo)
-    get_node_group_uc = GetNodeGroupUseCase(node_group_repo)
+    list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo, node_repo)
+    get_node_group_uc = GetNodeGroupUseCase(node_group_repo, node_repo)
     create_node_group_uc = CreateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
+    update_node_group_uc = UpdateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
     delete_node_group_uc = DeleteNodeGroupUseCase(node_group_repo, wazuh_client, puppet_nc_client)
-    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo)
+    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo, wazuh_client)
     remove_node_from_group_uc = RemoveNodeFromGroupUseCase(node_group_repo, node_repo)
+    list_facts_uc = ListFactsUseCase(node_repo)
+    preview_matching_uc = PreviewMatchingUseCase(node_repo)
 
     node_groups_routes.set_use_cases(
         list_uc=list_node_groups_uc,
         get_uc=get_node_group_uc,
         create_uc=create_node_group_uc,
+        update_uc=update_node_group_uc,
         delete_uc=delete_node_group_uc,
         add_node_uc=add_node_to_group_uc,
         remove_node_uc=remove_node_from_group_uc,
+        facts_uc=list_facts_uc,
+        preview_uc=preview_matching_uc,
     )
 
     # -- WebSocket manager --

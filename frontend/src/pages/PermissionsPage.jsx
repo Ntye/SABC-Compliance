@@ -1,5 +1,5 @@
 import { CheckCircle, XCircle, Search } from 'lucide-react'
-import { listUsers } from '../lib/api.js'
+import { listUsers, listUserGroups } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
@@ -32,7 +32,18 @@ function Tick({ ok }) {
 export default function PermissionsPage() {
   const t = useT()
   const { data: users, loading } = useApi(listUsers)
+  const { data: groups } = useApi(listUserGroups)
   const [query, setQuery] = useState('')
+
+  const groupNamesByUser = useMemo(() => {
+    const map = {}
+    for (const g of groups || []) {
+      for (const uid of g.member_ids || []) {
+        (map[uid] ||= []).push(g.name)
+      }
+    }
+    return map
+  }, [groups])
 
   const filteredUsers = useMemo(() => {
     if (!users) return []
@@ -112,7 +123,7 @@ export default function PermissionsPage() {
                   <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('iam.username')}</th>
                   <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('iam.email')}</th>
                   <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('iam.status')}</th>
-                  <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('iam.role')}</th>
+                  <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('iam.userGroup')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -126,7 +137,15 @@ export default function PermissionsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <span className={badge(u.role)}>{u.role}</span>
+                      {(groupNamesByUser[u.id] || []).length === 0 ? (
+                        <span className={badge('gray')}>—</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {groupNamesByUser[u.id].map((name) => (
+                            <span key={name} className={badge(name)}>{name}</span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
