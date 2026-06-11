@@ -5,7 +5,7 @@ from typing import Callable, TYPE_CHECKING
 if TYPE_CHECKING:
     from .entities import (
         Node, Job, ComplianceReport, ApiKey, User,
-        RemediationEvent, Rule,
+        RemediationEvent, Rule, UserGroup,
     )
 
 
@@ -172,3 +172,20 @@ class IEventBus(ABC):
     def subscribe(self, event_name: str, handler: Callable) -> None: ...
     @abstractmethod
     def publish(self, event_name: str, payload: dict) -> None: ...
+
+
+class IUserGroupRepository(ABC):
+    @abstractmethod
+    async def save(self, group: "UserGroup") -> None: ...
+    @abstractmethod
+    async def find_by_id(self, id: str) -> "UserGroup | None": ...
+    @abstractmethod
+    async def find_all(self) -> list["UserGroup"]: ...
+    @abstractmethod
+    async def update(self, group: "UserGroup") -> None: ...
+    @abstractmethod
+    async def delete(self, id: str) -> None: ...
+    @abstractmethod
+    async def add_member(self, group_id: str, user_id: str) -> None: ...
+    @abstractmethod
+    async def remove_member(self, group_id: str, user_id: str) -> None: ...

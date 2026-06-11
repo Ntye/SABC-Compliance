@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal
 from core.errors import (
-    ConflictError, ForbiddenError, UnauthorizedError, ValidationError,
+    ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -55,6 +55,33 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+class UpdateUserRequest(BaseModel):
+    role: str | None = None
+    email: str | None = None
+    active: bool | None = None
+
+class UserGroupResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    role: str
+    member_ids: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+
+class CreateUserGroupRequest(BaseModel):
+    name: str
+    description: str | None = None
+    role: str = "readonly"
+
+class UpdateUserGroupRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    role: str | None = None
+
+class AddGroupMemberRequest(BaseModel):
+    user_id: str
+
 # ── Dependency factories (set by main.py via module-level vars) ───────────────
 
 _authenticate_uc = None
@@ -67,6 +94,15 @@ _login_uc = None
 _create_user_uc = None
 _list_users_uc = None
 _change_password_uc = None
+_update_user_uc = None
+_delete_user_uc = None
+_create_group_uc = None
+_list_groups_uc = None
+_get_group_uc = None
+_update_group_uc = None
+_delete_group_uc = None
+_add_member_uc = None
+_remove_member_uc = None
 
 
 def set_use_cases(
@@ -80,10 +116,22 @@ def set_use_cases(
     create_user_uc,
     list_users_uc,
     change_password_uc,
+    update_user_uc=None,
+    delete_user_uc=None,
+    create_group_uc=None,
+    list_groups_uc=None,
+    get_group_uc=None,
+    update_group_uc=None,
+    delete_group_uc=None,
+    add_member_uc=None,
+    remove_member_uc=None,
 ) -> None:
     global _authenticate_uc, _decode_jwt_uc, _init_api_key_uc
     global _create_api_key_uc, _list_api_keys_uc, _revoke_api_key_uc
     global _login_uc, _create_user_uc, _list_users_uc, _change_password_uc
+    global _update_user_uc, _delete_user_uc
+    global _create_group_uc, _list_groups_uc, _get_group_uc, _update_group_uc
+    global _delete_group_uc, _add_member_uc, _remove_member_uc
     _authenticate_uc = authenticate_uc
     _decode_jwt_uc = decode_jwt_uc
     _init_api_key_uc = init_api_key_uc
@@ -94,6 +142,15 @@ def set_use_cases(
     _create_user_uc = create_user_uc
     _list_users_uc = list_users_uc
     _change_password_uc = change_password_uc
+    _update_user_uc = update_user_uc
+    _delete_user_uc = delete_user_uc
+    _create_group_uc = create_group_uc
+    _list_groups_uc = list_groups_uc
+    _get_group_uc = get_group_uc
+    _update_group_uc = update_group_uc
+    _delete_group_uc = delete_group_uc
+    _add_member_uc = add_member_uc
+    _remove_member_uc = remove_member_uc
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────

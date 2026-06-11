@@ -10,12 +10,12 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, Job, Node, RemediationEvent, Rule, User,
+    ApiKey, ComplianceReport, Job, Node, RemediationEvent, Rule, User, UserGroup,
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceRepository,
     IJobRepository, INodeRepository, IPlatformConfigRepository,
-    IRuleRepository, IUserRepository,
+    IRuleRepository, IUserRepository, IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,6 +161,24 @@ rules_table = Table(
 )
 
 
+user_groups_table = Table(
+    "user_groups", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    Column("role", Text, default="readonly"),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+user_group_members_table = Table(
+    "user_group_members", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("user_id", Text, nullable=False),
+)
+
+
 def _dt(val: str | None) -> datetime | None:
     if val is None:
         return None
@@ -191,6 +209,13 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
         # the job_logs table.  Drop the old column if it exists (SQLite workaround:
         # we just leave it — SQLite ignored unused columns and doesn't support
         # DROP COLUMN before 3.35, so we simply stop writing/reading it).
+
+        # User groups — added in IAM feature
+        for tbl_col in [("user_groups", "description"), ("user_groups", "role")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE {tbl_col[0]} ADD COLUMN {tbl_col[1]} TEXT"))
+            except Exception:
+                pass
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory
@@ -778,3 +803,87 @@ class PlatformConfigRepository(IPlatformConfigRepository):
         async with self._session() as s:
             rows = (await s.execute(select(platform_config_table))).all()
             return {r.key: r.value for r in rows}
+
+
+# ── UserGroup Repository ──────────────────────────────────────────────────────
+
+class UserGroupRepository(IUserGroupRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _members(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(user_group_members_table.c.user_id)
+            .where(user_group_members_table.c.group_id == group_id)
+        )).all()
+        return [r.user_id for r in rows]
+
+    def _to_entity(self, row, member_ids: list[str] | None = None) -> UserGroup:
+        return UserGroup(
+            id=row.id, name=row.name, description=row.description,
+            role=row.role or "readonly",
+            member_ids=member_ids or [],
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    async def save(self, group: UserGroup) -> None:
+        async with self._session() as s:
+            await s.execute(user_groups_table.insert().values(
+                id=group.id, name=group.name, description=group.description,
+                role=group.role, created_at=_ts(group.created_at), updated_at=_ts(group.updated_at),
+            ))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> UserGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(select(user_groups_table).where(user_groups_table.c.id == id))).first()
+            if not row:
+                return None
+            members = await self._members(s, id)
+            return self._to_entity(row, members)
+
+    async def find_all(self) -> list[UserGroup]:
+        async with self._session() as s:
+            rows = (await s.execute(select(user_groups_table).order_by(user_groups_table.c.created_at))).all()
+            result = []
+            for row in rows:
+                members = await self._members(s, row.id)
+                result.append(self._to_entity(row, members))
+            return result
+
+    async def update(self, group: UserGroup) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(user_groups_table).where(user_groups_table.c.id == group.id).values(
+                    name=group.name, description=group.description,
+                    role=group.role, updated_at=_ts(group.updated_at),
+                )
+            )
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(user_group_members_table).where(user_group_members_table.c.group_id == id))
+            await s.execute(delete(user_groups_table).where(user_groups_table.c.id == id))
+            await s.commit()
+
+    async def add_member(self, group_id: str, user_id: str) -> None:
+        async with self._session() as s:
+            existing = (await s.execute(
+                select(user_group_members_table)
+                .where(user_group_members_table.c.group_id == group_id)
+                .where(user_group_members_table.c.user_id == user_id)
+            )).first()
+            if not existing:
+                await s.execute(user_group_members_table.insert().values(group_id=group_id, user_id=user_id))
+                await s.commit()
+
+    async def remove_member(self, group_id: str, user_id: str) -> None:
+        async with self._session() as s:
+            await s.execute(
+                delete(user_group_members_table)
+                .where(user_group_members_table.c.group_id == group_id)
+                .where(user_group_members_table.c.user_id == user_id)
+            )
+            await s.commit()

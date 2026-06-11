@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from jose import jwt, JWTError
 
-from core.domain.entities import ApiKey, User, AuthPrincipal
-from core.domain.interfaces import IApiKeyRepository, IUserRepository
+from core.domain.entities import ApiKey, User, AuthPrincipal, UserGroup
+from core.domain.interfaces import IApiKeyRepository, IUserRepository, IUserGroupRepository
 from core.errors import (
     ConflictError, UnauthorizedError, ForbiddenError,
     ValidationError, NotFoundError,
@@ -259,3 +259,140 @@ class ChangePasswordUseCase:
 async def require_role(principal: AuthPrincipal, *roles: str) -> None:
     if principal.role not in roles:
         raise ForbiddenError(f"Role '{principal.role}' is not allowed. Required: {roles}")
+
+
+class UpdateUserUseCase:
+    def __init__(self, repo: IUserRepository) -> None:
+        self._repo = repo
+
+    async def execute(self, user_id: str, data: dict) -> User:
+        user = await self._repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        if "role" in data:
+            if data["role"] not in User.ROLES:
+                raise ValidationError(f"role must be one of {User.ROLES}")
+            user.role = data["role"]
+        if "email" in data:
+            user.email = data.get("email")
+        if "active" in data:
+            user.active = bool(data["active"])
+        await self._repo.update(user)
+        return user
+
+
+class DeleteUserUseCase:
+    def __init__(self, repo: IUserRepository, api_key_repo: IApiKeyRepository) -> None:
+        self._repo = repo
+        self._key_repo = api_key_repo
+
+    async def execute(self, user_id: str) -> dict:
+        user = await self._repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        user.active = False
+        await self._repo.update(user)
+        await self._key_repo.revoke_by_user_id(user_id)
+        return {"message": f"User '{user.username}' deactivated"}
+
+
+class CreateUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, data: dict):
+        name = data.get("name", "").strip()
+        if not name:
+            raise ValidationError("name is required")
+        role = data.get("role", "readonly")
+        if role not in User.ROLES:
+            raise ValidationError(f"role must be one of {User.ROLES}")
+        group = UserGroup(
+            id=str(uuid.uuid4()), name=name,
+            description=data.get("description"),
+            role=role,
+            created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+        )
+        await self._repo.save(group)
+        return group
+
+
+class ListUserGroupsUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self):
+        return await self._repo.find_all()
+
+
+class GetUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str):
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        return group
+
+
+class UpdateUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str, data: dict):
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        if "name" in data and data["name"].strip():
+            group.name = data["name"].strip()
+        if "description" in data:
+            group.description = data.get("description")
+        if "role" in data:
+            if data["role"] not in User.ROLES:
+                raise ValidationError(f"role must be one of {User.ROLES}")
+            group.role = data["role"]
+        group.updated_at = datetime.utcnow()
+        await self._repo.update(group)
+        return group
+
+
+class DeleteUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str) -> dict:
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        await self._repo.delete(group_id)
+        return {"message": f"Group '{group.name}' deleted"}
+
+
+class AddUserToGroupUseCase:
+    def __init__(self, group_repo, user_repo: IUserRepository) -> None:
+        self._group_repo = group_repo
+        self._user_repo = user_repo
+
+    async def execute(self, group_id: str, user_id: str) -> dict:
+        group = await self._group_repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        user = await self._user_repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        await self._group_repo.add_member(group_id, user_id)
+        return {"message": f"User '{user.username}' added to group '{group.name}'"}
+
+
+class RemoveUserFromGroupUseCase:
+    def __init__(self, group_repo, user_repo: IUserRepository) -> None:
+        self._group_repo = group_repo
+        self._user_repo = user_repo
+
+    async def execute(self, group_id: str, user_id: str) -> dict:
+        group = await self._group_repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        await self._group_repo.remove_member(group_id, user_id)
+        return {"message": f"User removed from group '{group.name}'"}

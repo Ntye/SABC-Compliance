@@ -158,6 +158,17 @@ class User:
 
 
 @dataclass
+class UserGroup:
+    id: str
+    name: str
+    description: str | None = None
+    role: str = "readonly"
+    member_ids: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
 class AuthPrincipal:
     """Unified auth result from either API key or JWT login."""
     id: str
