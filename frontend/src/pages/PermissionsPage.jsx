@@ -1,11 +1,11 @@
-import { CheckCircle, XCircle } from 'lucide-react'
+import { CheckCircle, XCircle, Search } from 'lucide-react'
 import { listUsers, updateUser } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 
 const MATRIX = [
   { action: 'View nodes & jobs',          readonly: true,  operator: true,  admin: true  },
@@ -36,6 +36,16 @@ export default function PermissionsPage() {
   const toast = useToast()
   const { data: users, loading, refetch } = useApi(listUsers)
   const [saving, setSaving] = useState(null)
+  const [query, setQuery] = useState('')
+
+  const filteredUsers = useMemo(() => {
+    if (!users) return []
+    const q = query.toLowerCase()
+    if (!q) return users
+    return users.filter((u) =>
+      u.username.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
+    )
+  }, [users, query])
 
   async function handleRoleChange(user, newRole) {
     setSaving(user.id)
@@ -84,9 +94,21 @@ export default function PermissionsPage() {
 
       {/* Role assignments */}
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-100">
-          <h3 className="text-[13px] font-semibold text-gray-800">{t('iam.roleAssignments')}</h3>
-          <p className="text-[11px] text-gray-400 mt-0.5">Change a user's role directly here.</p>
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-[13px] font-semibold text-gray-800">{t('iam.roleAssignments')}</h3>
+            <p className="text-[11px] text-gray-400 mt-0.5">Change a user's role directly here.</p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
+            <Search size={12} className="text-gray-400 flex-shrink-0" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search users…"
+              className="text-[12px] outline-none bg-transparent text-gray-700 placeholder-gray-400 w-36"
+            />
+          </div>
         </div>
         {loading && (
           <div className="p-6 space-y-2">
@@ -98,6 +120,8 @@ export default function PermissionsPage() {
         {!loading && users && (
           users.length === 0 ? (
             <div className="p-6 text-center text-[13px] text-gray-400">{t('iam.noUsers')}</div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="p-6 text-center text-[13px] text-gray-400">No users match the search.</div>
           ) : (
             <table className="w-full text-[12px]">
               <thead>
@@ -109,7 +133,7 @@ export default function PermissionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {users.map((u) => (
+                {filteredUsers.map((u) => (
                   <tr key={u.id} className="hover:bg-gray-50/50">
                     <td className="px-5 py-3 font-medium text-gray-800">{u.username}</td>
                     <td className="px-5 py-3 text-gray-400">{u.email || '—'}</td>

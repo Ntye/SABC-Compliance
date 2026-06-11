@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronRight,
   Cpu, Download, FileCode, Key, LayoutDashboard, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
-  User, Users, UsersRound,
+  User, UsersRound,
 } from 'lucide-react'
 import { getGatewayUrl, logout, setGatewayUrl } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
@@ -61,7 +61,6 @@ export default function Sidebar() {
   const [manageOpen, setManageOpen] = useState(true)
   const [nodesOpen, setNodesOpen] = useState(true)
   const [adminOpen, setAdminOpen] = useState(true)
-  const [iamOpen, setIamOpen] = useState(true)
 
   function handleUrlSave() {
     setGatewayUrl(urlInput.trim() || getGatewayUrl())
@@ -101,9 +100,8 @@ export default function Sidebar() {
         />
         {reportingOpen && (
           <>
-            <NavItem path="/nodes"      label={t('nav.nodeResults')}   icon={Server}     />
-            <NavItem path="/compliance" label={t('nav.scanReports')}   icon={ShieldCheck} />
-            <NavItem path="/audit"      label={t('nav.exportedData')}  icon={Download}   />
+            <NavItem path="/compliance" label={t('nav.scanReports')}  icon={ShieldCheck} />
+            <NavItem path="/audit"      label={t('nav.exportedData')} icon={Download}    />
           </>
         )}
 
@@ -145,27 +143,10 @@ export default function Sidebar() {
         />
         {adminOpen && (
           <>
-            {/* IAM sub-collapsible */}
-            <div>
-              <button
-                onClick={() => setIamOpen((v) => !v)}
-                className="w-full flex items-center gap-2.5 px-4 py-[8px] text-[12px] font-medium text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-all border-l-[3px] border-transparent"
-              >
-                <Users size={13} />
-                <span className="flex-1 text-left">{t('nav.iam')}</span>
-                {iamOpen
-                  ? <ChevronDown size={11} className="text-gray-500" />
-                  : <ChevronRight size={11} className="text-gray-500" />}
-              </button>
-              {iamOpen && (
-                <>
-                  <NavItem path="/iam/users"       label={t('nav.iamUsers')}       icon={User}       indent />
-                  <NavItem path="/iam/groups"      label={t('nav.iamGroups')}      icon={UsersRound} indent />
-                  <NavItem path="/iam/keys"        label={t('nav.iamKeys')}        icon={Key}        indent />
-                  <NavItem path="/iam/permissions" label={t('nav.iamPermissions')} icon={Lock}       indent />
-                </>
-              )}
-            </div>
+            <NavItem path="/iam/users"       label={t('nav.iamUsers')}       icon={User}       />
+            <NavItem path="/iam/groups"      label={t('nav.iamGroups')}      icon={UsersRound} />
+            <NavItem path="/iam/keys"        label={t('nav.iamKeys')}        icon={Key}        />
+            <NavItem path="/iam/permissions" label={t('nav.iamPermissions')} icon={Lock}       />
           </>
         )}
       </nav>

@@ -26,6 +26,7 @@ from modules.auth.usecases import (
     CreateUserGroupUseCase, ListUserGroupsUseCase, GetUserGroupUseCase,
     UpdateUserGroupUseCase, DeleteUserGroupUseCase,
     AddUserToGroupUseCase, RemoveUserFromGroupUseCase,
+    SeedDefaultGroupsUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -258,6 +259,12 @@ async def lifespan(app: FastAPI):
             print("=" * 60 + "\n", flush=True)
     except ConflictError:
         pass
+
+    # Seed the three immutable default groups (readonly / operator / admin)
+    try:
+        await SeedDefaultGroupsUseCase(group_repo).execute()
+    except Exception as exc:
+        logger.debug("Default group seeding: %s", exc)
 
     print(_BANNER.format(port=settings.port), flush=True)
 

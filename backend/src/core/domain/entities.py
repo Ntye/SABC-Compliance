@@ -163,9 +163,48 @@ class UserGroup:
     name: str
     description: str | None = None
     role: str = "readonly"
+    permissions: list[str] = field(default_factory=list)
+    is_default: bool = False
     member_ids: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    ALL_PERMISSIONS: ClassVar[list[str]] = [
+        "view_nodes", "ping_nodes", "register_nodes", "delete_nodes",
+        "run_playbooks", "install_agents",
+        "view_compliance", "collect_compliance", "trigger_remediation",
+        "cancel_jobs", "view_audit",
+        "manage_api_keys", "manage_users", "manage_groups", "change_password",
+    ]
+
+    DEFAULT_GROUPS: ClassVar[dict] = {
+        "readonly": {
+            "description": "Read-only access to all resources",
+            "role": "readonly",
+            "permissions": ["view_nodes", "view_compliance", "view_audit", "change_password"],
+        },
+        "operator": {
+            "description": "Can execute actions on resources",
+            "role": "operator",
+            "permissions": [
+                "view_nodes", "ping_nodes", "register_nodes",
+                "run_playbooks", "install_agents",
+                "view_compliance", "collect_compliance", "trigger_remediation",
+                "cancel_jobs", "view_audit", "change_password",
+            ],
+        },
+        "admin": {
+            "description": "Full administrative access",
+            "role": "admin",
+            "permissions": [
+                "view_nodes", "ping_nodes", "register_nodes", "delete_nodes",
+                "run_playbooks", "install_agents",
+                "view_compliance", "collect_compliance", "trigger_remediation",
+                "cancel_jobs", "view_audit",
+                "manage_api_keys", "manage_users", "manage_groups", "change_password",
+            ],
+        },
+    }
 
 
 @dataclass

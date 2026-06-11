@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from jose import jwt, JWTError
 
-from core.domain.entities import ApiKey, User, AuthPrincipal, UserGroup
+from core.domain.entities import ApiKey, User, UserGroup, AuthPrincipal, UserGroup
 from core.domain.interfaces import IApiKeyRepository, IUserRepository, IUserGroupRepository
 from core.errors import (
     ConflictError, UnauthorizedError, ForbiddenError,
@@ -296,6 +296,29 @@ class DeleteUserUseCase:
         return {"message": f"User '{user.username}' deactivated"}
 
 
+class SeedDefaultGroupsUseCase:
+    """Ensures the three immutable default groups exist on startup."""
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self) -> None:
+        for name, cfg in UserGroup.DEFAULT_GROUPS.items():
+            existing = await self._repo.find_by_name(name)
+            if existing:
+                continue
+            group = UserGroup(
+                id=str(uuid.uuid4()),
+                name=name,
+                description=cfg["description"],
+                role=cfg["role"],
+                permissions=cfg["permissions"],
+                is_default=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            await self._repo.save(group)
+
+
 class CreateUserGroupUseCase:
     def __init__(self, repo) -> None:
         self._repo = repo
@@ -304,13 +327,18 @@ class CreateUserGroupUseCase:
         name = data.get("name", "").strip()
         if not name:
             raise ValidationError("name is required")
-        role = data.get("role", "readonly")
-        if role not in User.ROLES:
-            raise ValidationError(f"role must be one of {User.ROLES}")
+        if name in UserGroup.DEFAULT_GROUPS:
+            raise ConflictError(f"'{name}' is a reserved group name")
+        perms = data.get("permissions", [])
+        invalid = [p for p in perms if p not in UserGroup.ALL_PERMISSIONS]
+        if invalid:
+            raise ValidationError(f"Unknown permissions: {invalid}")
         group = UserGroup(
             id=str(uuid.uuid4()), name=name,
             description=data.get("description"),
-            role=role,
+            role=data.get("role", "readonly"),
+            permissions=perms,
+            is_default=False,
             created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
         )
         await self._repo.save(group)
@@ -344,14 +372,25 @@ class UpdateUserGroupUseCase:
         group = await self._repo.find_by_id(group_id)
         if not group:
             raise NotFoundError(f"Group '{group_id}' not found")
+        if group.is_default:
+            raise ForbiddenError("Default groups cannot be modified")
         if "name" in data and data["name"].strip():
-            group.name = data["name"].strip()
+            new_name = data["name"].strip()
+            if new_name in UserGroup.DEFAULT_GROUPS:
+                raise ValidationError(f"'{new_name}' is a reserved group name")
+            group.name = new_name
         if "description" in data:
             group.description = data.get("description")
         if "role" in data:
             if data["role"] not in User.ROLES:
                 raise ValidationError(f"role must be one of {User.ROLES}")
             group.role = data["role"]
+        if "permissions" in data:
+            perms = data["permissions"] or []
+            invalid = [p for p in perms if p not in UserGroup.ALL_PERMISSIONS]
+            if invalid:
+                raise ValidationError(f"Unknown permissions: {invalid}")
+            group.permissions = perms
         group.updated_at = datetime.utcnow()
         await self._repo.update(group)
         return group
@@ -365,6 +404,8 @@ class DeleteUserGroupUseCase:
         group = await self._repo.find_by_id(group_id)
         if not group:
             raise NotFoundError(f"Group '{group_id}' not found")
+        if group.is_default:
+            raise ForbiddenError("Default groups cannot be deleted")
         await self._repo.delete(group_id)
         return {"message": f"Group '{group.name}' deleted"}
 

@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Plus, Pencil, UserX, UserCheck, X } from 'lucide-react'
-import { listUsers, createUser, updateUser, deleteUser } from '../lib/api.js'
+import { useState, useMemo } from 'react'
+import { Plus, Pencil, UserX, UserCheck, X, Search } from 'lucide-react'
+import { listUsers, createUser, updateUser, deleteUser, listUserGroups, addGroupMember } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -40,10 +40,16 @@ export default function UsersPage() {
   const t = useT()
   const toast = useToast()
   const { data: users, loading, error, refetch } = useApi(listUsers)
+  const { data: groups } = useApi(listUserGroups)
 
   const [showCreate, setShowCreate] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [saving, setSaving] = useState(false)
+
+  // Filter state
+  const [query, setQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
 
   // Create form state
   const [newUsername, setNewUsername] = useState('')
@@ -51,14 +57,27 @@ export default function UsersPage() {
   const [newConfirm, setNewConfirm] = useState('')
   const [newRole, setNewRole] = useState('readonly')
   const [newEmail, setNewEmail] = useState('')
+  const [newGroupId, setNewGroupId] = useState('')
 
   // Edit form state
   const [editRole, setEditRole] = useState('readonly')
   const [editEmail, setEditEmail] = useState('')
 
+  const filtered = useMemo(() => {
+    if (!users) return []
+    const q = query.toLowerCase()
+    return users.filter((u) => {
+      if (roleFilter !== 'all' && u.role !== roleFilter) return false
+      if (statusFilter === 'active' && !u.active) return false
+      if (statusFilter === 'inactive' && u.active) return false
+      if (q && !u.username.toLowerCase().includes(q) && !(u.email || '').toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [users, query, roleFilter, statusFilter])
+
   function openCreate() {
     setNewUsername(''); setNewPassword(''); setNewConfirm('')
-    setNewRole('readonly'); setNewEmail('')
+    setNewRole('readonly'); setNewEmail(''); setNewGroupId('')
     setShowCreate(true)
   }
 
@@ -80,12 +99,19 @@ export default function UsersPage() {
     }
     setSaving(true)
     try {
-      await createUser({
+      const created = await createUser({
         username: newUsername.trim(),
         password: newPassword,
         role: newRole,
         email: newEmail.trim() || undefined,
       })
+      if (newGroupId) {
+        try {
+          await addGroupMember(newGroupId, created.id)
+        } catch {
+          // non-fatal — user was created
+        }
+      }
       toast(t('iam.usersTitle') + ' created', 'success')
       setShowCreate(false)
       refetch()
@@ -130,7 +156,7 @@ export default function UsersPage() {
   return (
     <div className="p-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-5">
         <h2 className="text-[18px] font-semibold text-gray-900">{t('iam.usersTitle')}</h2>
         <button
           onClick={openCreate}
@@ -139,6 +165,47 @@ export default function UsersPage() {
           <Plus size={13} />
           {t('iam.createUser')}
         </button>
+      </div>
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg flex-1 min-w-[160px] max-w-[280px]">
+          <Search size={13} className="text-gray-400 flex-shrink-0" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search users…"
+            className="flex-1 text-[12px] outline-none bg-transparent text-gray-700 placeholder-gray-400"
+          />
+        </div>
+        <select
+          value={roleFilter}
+          onChange={(e) => setRoleFilter(e.target.value)}
+          className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
+        >
+          <option value="all">All roles</option>
+          <option value="readonly">{t('iam.readonly')}</option>
+          <option value="operator">{t('iam.operator')}</option>
+          <option value="admin">{t('iam.admin')}</option>
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
+        >
+          <option value="all">All statuses</option>
+          <option value="active">{t('iam.active')}</option>
+          <option value="inactive">{t('iam.inactive')}</option>
+        </select>
+        {(query || roleFilter !== 'all' || statusFilter !== 'all') && (
+          <button
+            onClick={() => { setQuery(''); setRoleFilter('all'); setStatusFilter('all') }}
+            className="text-[11px] text-gray-400 hover:text-gray-600 px-2 py-1.5"
+          >
+            Clear
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -156,8 +223,10 @@ export default function UsersPage() {
           </div>
         )}
         {!loading && !error && users && (
-          users.length === 0 ? (
-            <div className="p-8 text-center text-[13px] text-gray-400">{t('iam.noUsers')}</div>
+          filtered.length === 0 ? (
+            <div className="p-8 text-center text-[13px] text-gray-400">
+              {users.length === 0 ? t('iam.noUsers') : 'No users match the filters.'}
+            </div>
           ) : (
             <table className="w-full text-[12px]">
               <thead>
@@ -172,7 +241,7 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {users.map((u) => (
+                {filtered.map((u) => (
                   <tr key={u.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium text-gray-800">{u.username}</td>
                     <td className="px-4 py-3">
@@ -250,6 +319,19 @@ export default function UsersPage() {
                 <option value="readonly">{t('iam.readonly')}</option>
                 <option value="operator">{t('iam.operator')}</option>
                 <option value="admin">{t('iam.admin')}</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.iamGroups')} <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select
+                value={newGroupId}
+                onChange={(e) => setNewGroupId(e.target.value)}
+                className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
+              >
+                <option value="">— No group —</option>
+                {(groups || []).map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
               </select>
             </div>
             <div>

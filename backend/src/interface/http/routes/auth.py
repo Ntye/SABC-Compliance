@@ -65,6 +65,8 @@ class UserGroupResponse(BaseModel):
     name: str
     description: str | None = None
     role: str
+    permissions: list[str] = []
+    is_default: bool = False
     member_ids: list[str] = []
     created_at: datetime
     updated_at: datetime
@@ -73,11 +75,13 @@ class CreateUserGroupRequest(BaseModel):
     name: str
     description: str | None = None
     role: str = "readonly"
+    permissions: list[str] = []
 
 class UpdateUserGroupRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     role: str | None = None
+    permissions: list[str] | None = None
 
 class AddGroupMemberRequest(BaseModel):
     user_id: str
@@ -345,14 +349,14 @@ async def delete_user(id: str, principal: AuthPrincipal = Depends(require_admin)
 @router.get("/groups", response_model=list[UserGroupResponse])
 async def list_groups(principal: AuthPrincipal = Depends(require_admin)):
     groups = await _list_groups_uc.execute()
-    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
+    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
 
 
 @router.post("/groups", status_code=201, response_model=UserGroupResponse)
 async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _create_group_uc.execute(body.model_dump())
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
     except (ValidationError, ConflictError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -361,7 +365,7 @@ async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = 
 async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _get_group_uc.execute(id)
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -370,15 +374,21 @@ async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
 async def update_group(id: str, body: UpdateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _update_group_uc.execute(id, body.model_dump(exclude_none=True))
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
-    except (NotFoundError, ValidationError) as exc:
-        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 422, detail=str(exc))
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.delete("/groups/{id}")
 async def delete_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
     try:
         return await _delete_group_uc.execute(id)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

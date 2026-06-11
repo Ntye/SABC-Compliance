@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Key, Plus, Trash2 } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Key, Plus, Trash2, Search } from 'lucide-react'
 import {
   createApiKey,
   listApiKeys,
@@ -37,6 +37,23 @@ export default function ApiKeysPage() {
 
   const [revokeTarget, setRevokeTarget] = useState(null)
   const [revoking, setRevoking] = useState(false)
+
+  // Filter state
+  const [query, setQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+
+  const filtered = useMemo(() => {
+    if (!keys) return []
+    const q = query.toLowerCase()
+    return keys.filter((k) => {
+      if (roleFilter !== 'all' && k.role !== roleFilter) return false
+      if (statusFilter === 'active' && !k.active) return false
+      if (statusFilter === 'revoked' && k.active) return false
+      if (q && !k.name.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [keys, query, roleFilter, statusFilter])
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -120,6 +137,47 @@ export default function ApiKeysPage() {
         )}
       </div>
 
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg flex-1 min-w-[160px] max-w-[280px]">
+          <Search size={13} className="text-gray-400 flex-shrink-0" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search keys…"
+            className="flex-1 text-[12px] outline-none bg-transparent text-gray-700 placeholder-gray-400"
+          />
+        </div>
+        <select
+          value={roleFilter}
+          onChange={(e) => setRoleFilter(e.target.value)}
+          className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
+        >
+          <option value="all">All roles</option>
+          <option value="readonly">readonly</option>
+          <option value="operator">operator</option>
+          <option value="admin">admin</option>
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
+        >
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="revoked">Revoked</option>
+        </select>
+        {(query || roleFilter !== 'all' || statusFilter !== 'all') && (
+          <button
+            onClick={() => { setQuery(''); setRoleFilter('all'); setStatusFilter('all') }}
+            className="text-[11px] text-gray-400 hover:text-gray-600 px-2 py-1.5"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         {loading && (
@@ -135,6 +193,8 @@ export default function ApiKeysPage() {
         {!loading && !error && keys && (
           keys.length === 0 ? (
             <EmptyState icon={Key} title={t('keys.noKeys')} description={t('keys.noKeysDesc')} />
+          ) : filtered.length === 0 ? (
+            <div className="p-8 text-center text-[13px] text-gray-400">No keys match the filters.</div>
           ) : (
             <table className="w-full text-[13px]">
               <thead>
@@ -148,7 +208,7 @@ export default function ApiKeysPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {keys.map((k) => (
+                {filtered.map((k) => (
                   <tr key={k.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium">{k.name}</td>
                     <td className="px-4 py-3"><span className={badge(k.role)}>{k.role}</span></td>

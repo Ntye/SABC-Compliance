@@ -167,6 +167,8 @@ user_groups_table = Table(
     Column("name", Text, nullable=False, unique=True),
     Column("description", Text),
     Column("role", Text, default="readonly"),
+    Column("permissions", Text, default="[]"),
+    Column("is_default", Integer, default=0),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -210,10 +212,11 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
         # we just leave it — SQLite ignored unused columns and doesn't support
         # DROP COLUMN before 3.35, so we simply stop writing/reading it).
 
-        # User groups — added in IAM feature
-        for tbl_col in [("user_groups", "description"), ("user_groups", "role")]:
+        # User groups — migrations for new columns
+        for col, typ in [("description", "TEXT"), ("role", "TEXT"),
+                         ("permissions", "TEXT"), ("is_default", "INTEGER")]:
             try:
-                await conn.execute(text(f"ALTER TABLE {tbl_col[0]} ADD COLUMN {tbl_col[1]} TEXT"))
+                await conn.execute(text(f"ALTER TABLE user_groups ADD COLUMN {col} {typ}"))
             except Exception:
                 pass
 
@@ -822,6 +825,8 @@ class UserGroupRepository(IUserGroupRepository):
         return UserGroup(
             id=row.id, name=row.name, description=row.description,
             role=row.role or "readonly",
+            permissions=json.loads(getattr(row, 'permissions', None) or "[]"),
+            is_default=bool(getattr(row, 'is_default', 0)),
             member_ids=member_ids or [],
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -831,7 +836,9 @@ class UserGroupRepository(IUserGroupRepository):
         async with self._session() as s:
             await s.execute(user_groups_table.insert().values(
                 id=group.id, name=group.name, description=group.description,
-                role=group.role, created_at=_ts(group.created_at), updated_at=_ts(group.updated_at),
+                role=group.role, permissions=json.dumps(group.permissions),
+                is_default=int(group.is_default),
+                created_at=_ts(group.created_at), updated_at=_ts(group.updated_at),
             ))
             await s.commit()
 
@@ -843,9 +850,20 @@ class UserGroupRepository(IUserGroupRepository):
             members = await self._members(s, id)
             return self._to_entity(row, members)
 
+    async def find_by_name(self, name: str) -> UserGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(select(user_groups_table).where(user_groups_table.c.name == name))).first()
+            if not row:
+                return None
+            members = await self._members(s, row.id)
+            return self._to_entity(row, members)
+
     async def find_all(self) -> list[UserGroup]:
         async with self._session() as s:
-            rows = (await s.execute(select(user_groups_table).order_by(user_groups_table.c.created_at))).all()
+            rows = (await s.execute(select(user_groups_table).order_by(
+                user_groups_table.c.is_default.desc(),
+                user_groups_table.c.created_at
+            ))).all()
             result = []
             for row in rows:
                 members = await self._members(s, row.id)
@@ -857,7 +875,8 @@ class UserGroupRepository(IUserGroupRepository):
             await s.execute(
                 update(user_groups_table).where(user_groups_table.c.id == group.id).values(
                     name=group.name, description=group.description,
-                    role=group.role, updated_at=_ts(group.updated_at),
+                    role=group.role, permissions=json.dumps(group.permissions),
+                    updated_at=_ts(group.updated_at),
                 )
             )
             await s.commit()
