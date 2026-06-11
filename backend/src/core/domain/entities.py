@@ -139,22 +139,11 @@ class User:
     id: str
     username: str
     password_hash: str
-    role: str
+    role: str = ""  # kept for DB backward compat only, not exposed in API
     email: str | None = None
     active: bool = True
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_login: datetime | None = None
-
-    ROLES: ClassVar[list[str]] = ["readonly", "operator", "admin"]
-
-    def can_read(self) -> bool:
-        return self.active
-
-    def can_operate(self) -> bool:
-        return self.active and self.role in ("operator", "admin")
-
-    def can_admin(self) -> bool:
-        return self.active and self.role == "admin"
 
 
 @dataclass
@@ -162,7 +151,6 @@ class UserGroup:
     id: str
     name: str
     description: str | None = None
-    role: str = "readonly"
     permissions: list[str] = field(default_factory=list)
     is_default: bool = False
     member_ids: list[str] = field(default_factory=list)
@@ -174,18 +162,16 @@ class UserGroup:
         "run_playbooks", "install_agents",
         "view_compliance", "collect_compliance", "trigger_remediation",
         "cancel_jobs", "view_audit",
-        "manage_api_keys", "manage_users", "manage_groups", "change_password",
+        "manage_api_keys", "manage_users", "manage_groups", "manage_node_groups", "change_password",
     ]
 
     DEFAULT_GROUPS: ClassVar[dict] = {
         "readonly": {
             "description": "Read-only access to all resources",
-            "role": "readonly",
             "permissions": ["view_nodes", "view_compliance", "view_audit", "change_password"],
         },
         "operator": {
             "description": "Can execute actions on resources",
-            "role": "operator",
             "permissions": [
                 "view_nodes", "ping_nodes", "register_nodes",
                 "run_playbooks", "install_agents",
@@ -195,13 +181,12 @@ class UserGroup:
         },
         "admin": {
             "description": "Full administrative access",
-            "role": "admin",
             "permissions": [
                 "view_nodes", "ping_nodes", "register_nodes", "delete_nodes",
                 "run_playbooks", "install_agents",
                 "view_compliance", "collect_compliance", "trigger_remediation",
                 "cancel_jobs", "view_audit",
-                "manage_api_keys", "manage_users", "manage_groups", "change_password",
+                "manage_api_keys", "manage_users", "manage_groups", "manage_node_groups", "change_password",
             ],
         },
     }
@@ -215,15 +200,45 @@ class AuthPrincipal:
     role: str
     active: bool = True
     source: str = "api_key"  # "api_key" or "jwt"
+    permissions: list[str] = field(default_factory=list)
 
     def can_read(self) -> bool:
         return self.active
 
     def can_operate(self) -> bool:
-        return self.active and self.role in ("operator", "admin")
+        if not self.active:
+            return False
+        if self.source == "api_key":
+            return self.role in ("operator", "admin")
+        # JWT: check permission set
+        operator_perms = {
+            "ping_nodes", "register_nodes", "run_playbooks", "install_agents",
+            "collect_compliance", "trigger_remediation", "cancel_jobs",
+            "manage_api_keys", "manage_users", "manage_groups", "manage_node_groups",
+        }
+        return bool(operator_perms & set(self.permissions))
 
     def can_admin(self) -> bool:
-        return self.active and self.role == "admin"
+        if not self.active:
+            return False
+        if self.source == "api_key":
+            return self.role == "admin"
+        # JWT: check admin permission set
+        admin_perms = {"manage_users", "manage_groups", "manage_node_groups"}
+        return bool(admin_perms & set(self.permissions))
+
+
+@dataclass
+class NodeGroup:
+    id: str
+    name: str
+    description: str | None = None
+    node_ids: list[str] = field(default_factory=list)
+    puppet_group_id: str | None = None   # UUID from PE node classifier
+    wazuh_synced: bool = False
+    puppet_synced: bool = False
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass

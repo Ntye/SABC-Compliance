@@ -1,10 +1,8 @@
 import { CheckCircle, XCircle, Search } from 'lucide-react'
-import { listUsers, updateUser } from '../lib/api.js'
+import { listUsers } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
-import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
-import Spinner from '../components/common/Spinner.jsx'
 import { useState, useMemo } from 'react'
 
 const MATRIX = [
@@ -33,9 +31,7 @@ function Tick({ ok }) {
 
 export default function PermissionsPage() {
   const t = useT()
-  const toast = useToast()
-  const { data: users, loading, refetch } = useApi(listUsers)
-  const [saving, setSaving] = useState(null)
+  const { data: users, loading } = useApi(listUsers)
   const [query, setQuery] = useState('')
 
   const filteredUsers = useMemo(() => {
@@ -46,19 +42,6 @@ export default function PermissionsPage() {
       u.username.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
     )
   }, [users, query])
-
-  async function handleRoleChange(user, newRole) {
-    setSaving(user.id)
-    try {
-      await updateUser(user.id, { role: newRole })
-      toast('Role updated', 'success')
-      refetch()
-    } catch (err) {
-      toast(err.message, 'error')
-    } finally {
-      setSaving(null)
-    }
-  }
 
   return (
     <div className="p-6 max-w-4xl space-y-6">
@@ -97,7 +80,7 @@ export default function PermissionsPage() {
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-4">
           <div>
             <h3 className="text-[13px] font-semibold text-gray-800">{t('iam.roleAssignments')}</h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Change a user's role directly here.</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Roles are assigned via user groups.</p>
           </div>
           <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
             <Search size={12} className="text-gray-400 flex-shrink-0" />
@@ -143,22 +126,7 @@ export default function PermissionsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <div className="flex items-center gap-2">
-                        {saving === u.id ? (
-                          <Spinner size={12} />
-                        ) : (
-                          <select
-                            value={u.role}
-                            onChange={(e) => handleRoleChange(u, e.target.value)}
-                            disabled={!u.active}
-                            className="px-2 py-1 text-[11px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <option value="readonly">{t('iam.readonly')}</option>
-                            <option value="operator">{t('iam.operator')}</option>
-                            <option value="admin">{t('iam.admin')}</option>
-                          </select>
-                        )}
-                      </div>
+                      <span className={badge(u.role)}>{u.role}</span>
                     </td>
                   </tr>
                 ))}

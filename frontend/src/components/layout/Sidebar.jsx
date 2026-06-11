@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Cpu, Download, FileCode, Key, LayoutDashboard, Lock,
+  Cpu, Download, FileCode, Key, LayoutDashboard, Layers, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
@@ -129,8 +129,9 @@ export default function Sidebar() {
         />
         {nodesOpen && (
           <>
-            <NavItem path="/nodes"   label={t('nav.nodes')}  icon={Server}     />
-            <NavItem path="/add-vm"  label={t('nav.addVm')}  icon={PlusCircle} />
+            <NavItem path="/nodes"        label={t('nav.nodes')}       icon={Server}     />
+            <NavItem path="/add-vm"       label={t('nav.addVm')}       icon={PlusCircle} />
+            <NavItem path="/node-groups"  label={t('nav.nodeGroups')}  icon={Layers}     />
           </>
         )}
 

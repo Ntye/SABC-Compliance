@@ -28,6 +28,7 @@ export const translations = {
       iamGroups: 'User Groups',
       iamKeys: 'API Keys',
       iamPermissions: 'Permissions',
+      nodeGroups: 'Node Groups',
     },
     login: {
       title: 'Sign in', username: 'Username', password: 'Password',
@@ -310,6 +311,18 @@ export const translations = {
       memberCount: '{{n}} member{{plural}}',
       deleteGroupConfirm: 'Delete group "{{name}}"?',
     },
+    nodeGroups: {
+      title: 'Node Groups',
+      createGroup: 'Create Node Group',
+      name: 'Group name',
+      description: 'Description',
+      nodes: 'Nodes',
+      wazuhSync: 'Wazuh',
+      puppetSync: 'Puppet',
+      noGroups: 'No node groups yet',
+      deleteConfirm: 'This will remove the group from the platform, Wazuh, and Puppet Enterprise.',
+      selectNodes: 'Select nodes to add (optional)',
+    },
   },
 
   fr: {
@@ -341,6 +354,7 @@ export const translations = {
       iamGroups: 'Groupes',
       iamKeys: 'Clés API',
       iamPermissions: 'Permissions',
+      nodeGroups: 'Groupes de nœuds',
     },
     login: {
       title: 'Connexion', username: 'Nom d\'utilisateur', password: 'Mot de passe',
@@ -621,6 +635,18 @@ export const translations = {
       readonly: 'Lecture seule', operator: 'Opérateur', admin: 'Administrateur',
       memberCount: '{{n}} membre{{plural}}',
       deleteGroupConfirm: 'Supprimer le groupe « {{name}} » ?',
+    },
+    nodeGroups: {
+      title: 'Groupes de nœuds',
+      createGroup: 'Créer un groupe de nœuds',
+      name: 'Nom du groupe',
+      description: 'Description',
+      nodes: 'Nœuds',
+      wazuhSync: 'Wazuh',
+      puppetSync: 'Puppet',
+      noGroups: 'Aucun groupe de nœuds',
+      deleteConfirm: 'Cela supprimera le groupe de la plateforme, de Wazuh et de Puppet Enterprise.',
+      selectNodes: 'Sélectionner des nœuds (optionnel)',
     },
   },
 }

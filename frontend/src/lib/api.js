@@ -379,3 +379,29 @@ export async function getAuditLog(limit = 100) {
 export async function getHealth() {
   return request('GET', '/health')
 }
+
+// ── Node Groups ───────────────────────────────────────────────────────────────
+
+export async function listNodeGroups() {
+  return request('GET', '/node-groups')
+}
+
+export async function createNodeGroup(data) {
+  return request('POST', '/node-groups', data)
+}
+
+export async function deleteNodeGroup(id) {
+  return request('DELETE', `/node-groups/${id}`)
+}
+
+export async function getNodeGroup(id) {
+  return request('GET', `/node-groups/${id}`)
+}
+
+export async function addNodeToGroup(groupId, nodeId) {
+  return request('POST', `/node-groups/${groupId}/nodes`, { node_id: nodeId })
+}
+
+export async function removeNodeFromGroup(groupId, nodeId) {
+  return request('DELETE', `/node-groups/${groupId}/nodes/${nodeId}`)
+}

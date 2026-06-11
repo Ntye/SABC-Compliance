@@ -23,6 +23,7 @@ class LoginResponse(BaseModel):
     role: str
     username: str
     api_key: str
+    permissions: list[str] = []
 
 class ApiKeyResponse(BaseModel):
     id: str
@@ -39,13 +40,11 @@ class CreateApiKeyRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "readonly"
     email: str | None = None
 
 class UserResponse(BaseModel):
     id: str
     username: str
-    role: str
     email: str | None = None
     active: bool
     created_at: datetime
@@ -56,7 +55,6 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 class UpdateUserRequest(BaseModel):
-    role: str | None = None
     email: str | None = None
     active: bool | None = None
 
@@ -64,7 +62,6 @@ class UserGroupResponse(BaseModel):
     id: str
     name: str
     description: str | None = None
-    role: str
     permissions: list[str] = []
     is_default: bool = False
     member_ids: list[str] = []
@@ -74,13 +71,11 @@ class UserGroupResponse(BaseModel):
 class CreateUserGroupRequest(BaseModel):
     name: str
     description: str | None = None
-    role: str = "readonly"
     permissions: list[str] = []
 
 class UpdateUserGroupRequest(BaseModel):
     name: str | None = None
     description: str | None = None
-    role: str | None = None
     permissions: list[str] | None = None
 
 class AddGroupMemberRequest(BaseModel):
@@ -275,7 +270,7 @@ async def list_users(principal: AuthPrincipal = Depends(require_admin)):
     users = await _list_users_uc.execute()
     return [
         UserResponse(
-            id=u.id, username=u.username, role=u.role,
+            id=u.id, username=u.username,
             email=u.email, active=u.active, created_at=u.created_at,
             last_login=u.last_login,
         )
@@ -298,11 +293,10 @@ async def create_user(
         user = await _create_user_uc.execute({
             "username": body.username,
             "password": body.password,
-            "role": body.role,
             "email": body.email,
         })
         return UserResponse(
-            id=user.id, username=user.username, role=user.role,
+            id=user.id, username=user.username,
             email=user.email, active=user.active, created_at=user.created_at,
             last_login=user.last_login,
         )
@@ -331,7 +325,7 @@ async def change_password(
 async def update_user(id: str, body: UpdateUserRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         user = await _update_user_uc.execute(id, body.model_dump(exclude_none=True))
-        return UserResponse(id=user.id, username=user.username, role=user.role, email=user.email, active=user.active, created_at=user.created_at, last_login=user.last_login)
+        return UserResponse(id=user.id, username=user.username, email=user.email, active=user.active, created_at=user.created_at, last_login=user.last_login)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:
@@ -349,14 +343,14 @@ async def delete_user(id: str, principal: AuthPrincipal = Depends(require_admin)
 @router.get("/groups", response_model=list[UserGroupResponse])
 async def list_groups(principal: AuthPrincipal = Depends(require_admin)):
     groups = await _list_groups_uc.execute()
-    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
+    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
 
 
 @router.post("/groups", status_code=201, response_model=UserGroupResponse)
 async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _create_group_uc.execute(body.model_dump())
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
     except (ValidationError, ConflictError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -365,7 +359,7 @@ async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = 
 async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _get_group_uc.execute(id)
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -374,7 +368,7 @@ async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
 async def update_group(id: str, body: UpdateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         g = await _update_group_uc.execute(id, body.model_dump(exclude_none=True))
-        return UserGroupResponse(id=g.id, name=g.name, description=g.description, role=g.role, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
     except ForbiddenError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except NotFoundError as exc:

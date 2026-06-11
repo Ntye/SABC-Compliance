@@ -10,11 +10,11 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, Job, Node, RemediationEvent, Rule, User, UserGroup,
+    ApiKey, ComplianceReport, Job, Node, NodeGroup, RemediationEvent, Rule, User, UserGroup,
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceRepository,
-    IJobRepository, INodeRepository, IPlatformConfigRepository,
+    IJobRepository, INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
     IRuleRepository, IUserRepository, IUserGroupRepository,
 )
 
@@ -178,6 +178,25 @@ user_group_members_table = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("group_id", Text, nullable=False),
     Column("user_id", Text, nullable=False),
+)
+
+node_groups_table = Table(
+    "node_groups", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    Column("puppet_group_id", Text),
+    Column("wazuh_synced", Integer, default=0),
+    Column("puppet_synced", Integer, default=0),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+node_group_nodes_table = Table(
+    "node_group_nodes", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("node_id", Text, nullable=False),
 )
 
 
@@ -824,7 +843,6 @@ class UserGroupRepository(IUserGroupRepository):
     def _to_entity(self, row, member_ids: list[str] | None = None) -> UserGroup:
         return UserGroup(
             id=row.id, name=row.name, description=row.description,
-            role=row.role or "readonly",
             permissions=json.loads(getattr(row, 'permissions', None) or "[]"),
             is_default=bool(getattr(row, 'is_default', 0)),
             member_ids=member_ids or [],
@@ -836,7 +854,7 @@ class UserGroupRepository(IUserGroupRepository):
         async with self._session() as s:
             await s.execute(user_groups_table.insert().values(
                 id=group.id, name=group.name, description=group.description,
-                role=group.role, permissions=json.dumps(group.permissions),
+                permissions=json.dumps(group.permissions),
                 is_default=int(group.is_default),
                 created_at=_ts(group.created_at), updated_at=_ts(group.updated_at),
             ))
@@ -875,7 +893,7 @@ class UserGroupRepository(IUserGroupRepository):
             await s.execute(
                 update(user_groups_table).where(user_groups_table.c.id == group.id).values(
                     name=group.name, description=group.description,
-                    role=group.role, permissions=json.dumps(group.permissions),
+                    permissions=json.dumps(group.permissions),
                     updated_at=_ts(group.updated_at),
                 )
             )
@@ -904,5 +922,108 @@ class UserGroupRepository(IUserGroupRepository):
                 delete(user_group_members_table)
                 .where(user_group_members_table.c.group_id == group_id)
                 .where(user_group_members_table.c.user_id == user_id)
+            )
+            await s.commit()
+
+
+# ── NodeGroup Repository ──────────────────────────────────────────────────────
+
+class NodeGroupRepository(INodeGroupRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _node_ids(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(node_group_nodes_table.c.node_id)
+            .where(node_group_nodes_table.c.group_id == group_id)
+        )).all()
+        return [r.node_id for r in rows]
+
+    def _to_entity(self, row, node_ids: list[str] | None = None) -> NodeGroup:
+        return NodeGroup(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            node_ids=node_ids or [],
+            puppet_group_id=row.puppet_group_id,
+            wazuh_synced=bool(row.wazuh_synced),
+            puppet_synced=bool(row.puppet_synced),
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    async def save(self, g: NodeGroup) -> None:
+        async with self._session() as s:
+            await s.execute(node_groups_table.insert().values(
+                id=g.id, name=g.name, description=g.description,
+                puppet_group_id=g.puppet_group_id,
+                wazuh_synced=int(g.wazuh_synced),
+                puppet_synced=int(g.puppet_synced),
+                created_at=_ts(g.created_at),
+                updated_at=_ts(g.updated_at),
+            ))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> NodeGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(select(node_groups_table).where(node_groups_table.c.id == id))).first()
+            if not row:
+                return None
+            node_ids = await self._node_ids(s, id)
+            return self._to_entity(row, node_ids)
+
+    async def find_by_name(self, name: str) -> NodeGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(select(node_groups_table).where(node_groups_table.c.name == name))).first()
+            if not row:
+                return None
+            node_ids = await self._node_ids(s, row.id)
+            return self._to_entity(row, node_ids)
+
+    async def find_all(self) -> list[NodeGroup]:
+        async with self._session() as s:
+            rows = (await s.execute(select(node_groups_table).order_by(node_groups_table.c.created_at))).all()
+            result = []
+            for row in rows:
+                node_ids = await self._node_ids(s, row.id)
+                result.append(self._to_entity(row, node_ids))
+            return result
+
+    async def update(self, g: NodeGroup) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(node_groups_table).where(node_groups_table.c.id == g.id).values(
+                    name=g.name, description=g.description,
+                    puppet_group_id=g.puppet_group_id,
+                    wazuh_synced=int(g.wazuh_synced),
+                    puppet_synced=int(g.puppet_synced),
+                    updated_at=_ts(g.updated_at),
+                )
+            )
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(node_group_nodes_table).where(node_group_nodes_table.c.group_id == id))
+            await s.execute(delete(node_groups_table).where(node_groups_table.c.id == id))
+            await s.commit()
+
+    async def add_node(self, group_id: str, node_id: str) -> None:
+        async with self._session() as s:
+            existing = (await s.execute(
+                select(node_group_nodes_table)
+                .where(node_group_nodes_table.c.group_id == group_id)
+                .where(node_group_nodes_table.c.node_id == node_id)
+            )).first()
+            if not existing:
+                await s.execute(node_group_nodes_table.insert().values(group_id=group_id, node_id=node_id))
+                await s.commit()
+
+    async def remove_node(self, group_id: str, node_id: str) -> None:
+        async with self._session() as s:
+            await s.execute(
+                delete(node_group_nodes_table)
+                .where(node_group_nodes_table.c.group_id == group_id)
+                .where(node_group_nodes_table.c.node_id == node_id)
             )
             await s.commit()

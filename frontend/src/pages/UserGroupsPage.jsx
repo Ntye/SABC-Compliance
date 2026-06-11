@@ -123,39 +123,24 @@ function PermissionsEditor({ selected, onChange, disabled }) {
 function GroupForm({ initial, onSave, onCancel, saving, t }) {
   const [name, setName] = useState(initial?.name || '')
   const [description, setDescription] = useState(initial?.description || '')
-  const [role, setRole] = useState(initial?.role || 'readonly')
   const [permissions, setPermissions] = useState(initial?.permissions || [])
 
   function handleSubmit(e) {
     e.preventDefault()
-    onSave({ name: name.trim(), description: description.trim() || undefined, role, permissions })
+    onSave({ name: name.trim(), description: description.trim() || undefined, permissions })
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.groupName')} *</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoFocus
-            required
-            className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.role')}</label>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
-          >
-            <option value="readonly">{t('iam.readonly')}</option>
-            <option value="operator">{t('iam.operator')}</option>
-            <option value="admin">{t('iam.admin')}</option>
-          </select>
-        </div>
+      <div>
+        <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.groupName')} *</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          required
+          className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+        />
       </div>
       <div>
         <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.description')}</label>
@@ -265,8 +250,7 @@ export default function UserGroupsPage() {
     if (!q) return groups
     return groups.filter((g) =>
       g.name.toLowerCase().includes(q) ||
-      (g.description || '').toLowerCase().includes(q) ||
-      g.role.toLowerCase().includes(q)
+      (g.description || '').toLowerCase().includes(q)
     )
   }, [groups, filter])
 

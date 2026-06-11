@@ -48,41 +48,36 @@ export default function UsersPage() {
 
   // Filter state
   const [query, setQuery] = useState('')
-  const [roleFilter, setRoleFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
 
   // Create form state
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newConfirm, setNewConfirm] = useState('')
-  const [newRole, setNewRole] = useState('readonly')
   const [newEmail, setNewEmail] = useState('')
   const [newGroupId, setNewGroupId] = useState('')
 
   // Edit form state
-  const [editRole, setEditRole] = useState('readonly')
   const [editEmail, setEditEmail] = useState('')
 
   const filtered = useMemo(() => {
     if (!users) return []
     const q = query.toLowerCase()
     return users.filter((u) => {
-      if (roleFilter !== 'all' && u.role !== roleFilter) return false
       if (statusFilter === 'active' && !u.active) return false
       if (statusFilter === 'inactive' && u.active) return false
       if (q && !u.username.toLowerCase().includes(q) && !(u.email || '').toLowerCase().includes(q)) return false
       return true
     })
-  }, [users, query, roleFilter, statusFilter])
+  }, [users, query, statusFilter])
 
   function openCreate() {
     setNewUsername(''); setNewPassword(''); setNewConfirm('')
-    setNewRole('readonly'); setNewEmail(''); setNewGroupId('')
+    setNewEmail(''); setNewGroupId('')
     setShowCreate(true)
   }
 
   function openEdit(user) {
-    setEditRole(user.role)
     setEditEmail(user.email || '')
     setEditTarget(user)
   }
@@ -102,7 +97,6 @@ export default function UsersPage() {
       const created = await createUser({
         username: newUsername.trim(),
         password: newPassword,
-        role: newRole,
         email: newEmail.trim() || undefined,
       })
       if (newGroupId) {
@@ -127,7 +121,6 @@ export default function UsersPage() {
     setSaving(true)
     try {
       await updateUser(editTarget.id, {
-        role: editRole,
         email: editEmail.trim() || null,
       })
       toast('User updated', 'success')
@@ -180,16 +173,6 @@ export default function UsersPage() {
           />
         </div>
         <select
-          value={roleFilter}
-          onChange={(e) => setRoleFilter(e.target.value)}
-          className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
-        >
-          <option value="all">All roles</option>
-          <option value="readonly">{t('iam.readonly')}</option>
-          <option value="operator">{t('iam.operator')}</option>
-          <option value="admin">{t('iam.admin')}</option>
-        </select>
-        <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="px-3 py-1.5 text-[12px] bg-white border border-gray-200 rounded-lg outline-none focus:border-brand text-gray-700"
@@ -198,9 +181,9 @@ export default function UsersPage() {
           <option value="active">{t('iam.active')}</option>
           <option value="inactive">{t('iam.inactive')}</option>
         </select>
-        {(query || roleFilter !== 'all' || statusFilter !== 'all') && (
+        {(query || statusFilter !== 'all') && (
           <button
-            onClick={() => { setQuery(''); setRoleFilter('all'); setStatusFilter('all') }}
+            onClick={() => { setQuery(''); setStatusFilter('all') }}
             className="text-[11px] text-gray-400 hover:text-gray-600 px-2 py-1.5"
           >
             Clear
@@ -310,18 +293,6 @@ export default function UsersPage() {
               />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.role')}</label>
-              <select
-                value={newRole}
-                onChange={(e) => setNewRole(e.target.value)}
-                className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
-              >
-                <option value="readonly">{t('iam.readonly')}</option>
-                <option value="operator">{t('iam.operator')}</option>
-                <option value="admin">{t('iam.admin')}</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.iamGroups')} <span className="text-gray-400 font-normal">(optional)</span></label>
               <select
                 value={newGroupId}
@@ -379,18 +350,6 @@ export default function UsersPage() {
       {editTarget && (
         <Modal title={`${t('iam.editRole')} — ${editTarget.username}`} onClose={() => setEditTarget(null)}>
           <form onSubmit={handleEdit} className="space-y-4">
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.role')}</label>
-              <select
-                value={editRole}
-                onChange={(e) => setEditRole(e.target.value)}
-                className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
-              >
-                <option value="readonly">{t('iam.readonly')}</option>
-                <option value="operator">{t('iam.operator')}</option>
-                <option value="admin">{t('iam.admin')}</option>
-              </select>
-            </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.email')}</label>
               <input

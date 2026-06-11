@@ -15,6 +15,7 @@ import InfrastructurePage from './pages/InfrastructurePage.jsx'
 import UsersPage from './pages/UsersPage.jsx'
 import UserGroupsPage from './pages/UserGroupsPage.jsx'
 import PermissionsPage from './pages/PermissionsPage.jsx'
+import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
 
 export default function App() {
   return (
@@ -39,6 +40,8 @@ export default function App() {
             <Route path="/iam/groups" element={<UserGroupsPage />} />
             <Route path="/iam/keys" element={<ApiKeysPage />} />
             <Route path="/iam/permissions" element={<PermissionsPage />} />
+            {/* Node Groups */}
+            <Route path="/node-groups" element={<NodeGroupsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Routes>

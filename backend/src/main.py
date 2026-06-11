@@ -15,9 +15,11 @@ from core.errors import (
 )
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceRepository,
-    JobRepository, NodeRepository, PlatformConfigRepository,
+    JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
     RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
+from infrastructure.http.wazuh_client import WazuhRESTClient
+from infrastructure.http.puppet_nc_client import PuppetNCClient
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
     CreateUserUseCase, DecodeJwtUseCase, InitAdminUserUseCase,
@@ -27,6 +29,10 @@ from modules.auth.usecases import (
     UpdateUserGroupUseCase, DeleteUserGroupUseCase,
     AddUserToGroupUseCase, RemoveUserFromGroupUseCase,
     SeedDefaultGroupsUseCase,
+)
+from modules.node_groups.usecases import (
+    CreateNodeGroupUseCase, DeleteNodeGroupUseCase, ListNodeGroupsUseCase,
+    GetNodeGroupUseCase, AddNodeToGroupUseCase, RemoveNodeFromGroupUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -50,6 +56,7 @@ from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
 from interface.http.routes import jobs as jobs_routes
 from interface.http.routes import compliance as compliance_routes
+from interface.http.routes import node_groups as node_groups_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -85,6 +92,24 @@ async def lifespan(app: FastAPI):
     audit_repo = AuditRepository(session_factory)
     rule_repo = RuleRepository(session_factory)
     platform_config_repo = PlatformConfigRepository(session_factory)
+    group_repo = UserGroupRepository(session_factory)
+    node_group_repo = NodeGroupRepository(session_factory)
+
+    # -- External service clients --
+    wazuh_client = WazuhRESTClient(
+        host=settings.wazuh_manager_host,
+        port=settings.wazuh_api_port,
+        user=settings.wazuh_api_user,
+        password=settings.wazuh_api_pass,
+        token_refresh_seconds=settings.wazuh_token_refresh_seconds,
+    )
+    puppet_nc_client = PuppetNCClient(
+        host=settings.puppet_master_host,
+        rbac_port=settings.puppet_rbac_port,
+        admin_user=settings.puppet_admin_user,
+        admin_pass=settings.puppet_admin_pass,
+        token_rotate_seconds=settings.puppet_token_rotate_seconds,
+    )
 
     # -- Event bus --
     event_bus = EventBus()
@@ -96,13 +121,15 @@ async def lifespan(app: FastAPI):
     create_api_key_uc = CreateApiKeyUseCase(api_key_repo)
     list_api_keys_uc = ListApiKeysUseCase(api_key_repo)
     revoke_api_key_uc = RevokeApiKeyUseCase(api_key_repo)
-    login_uc = LoginUseCase(user_repo, api_key_repo, settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours)
-    init_admin_user_uc = InitAdminUserUseCase(user_repo)
+    login_uc = LoginUseCase(
+        user_repo, api_key_repo, group_repo,
+        settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours,
+    )
+    init_admin_user_uc = InitAdminUserUseCase(user_repo, group_repo)
     create_user_uc = CreateUserUseCase(user_repo)
     list_users_uc = ListUsersUseCase(user_repo)
     change_password_uc = ChangePasswordUseCase(user_repo)
 
-    group_repo = UserGroupRepository(session_factory)
     update_user_uc = UpdateUserUseCase(user_repo)
     delete_user_uc = DeleteUserUseCase(user_repo, api_key_repo)
     create_group_uc = CreateUserGroupUseCase(group_repo)
@@ -133,6 +160,23 @@ async def lifespan(app: FastAPI):
         delete_group_uc=delete_group_uc,
         add_member_uc=add_member_uc,
         remove_member_uc=remove_member_uc,
+    )
+
+    # -- Node group use cases --
+    list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo)
+    get_node_group_uc = GetNodeGroupUseCase(node_group_repo)
+    create_node_group_uc = CreateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
+    delete_node_group_uc = DeleteNodeGroupUseCase(node_group_repo, wazuh_client, puppet_nc_client)
+    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo)
+    remove_node_from_group_uc = RemoveNodeFromGroupUseCase(node_group_repo, node_repo)
+
+    node_groups_routes.set_use_cases(
+        list_uc=list_node_groups_uc,
+        get_uc=get_node_group_uc,
+        create_uc=create_node_group_uc,
+        delete_uc=delete_node_group_uc,
+        add_node_uc=add_node_to_group_uc,
+        remove_node_uc=remove_node_from_group_uc,
     )
 
     # -- WebSocket manager --
@@ -236,7 +280,12 @@ async def lifespan(app: FastAPI):
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
-    # -- Bootstrap --
+    # -- Bootstrap: seed default groups BEFORE init admin user --
+    try:
+        await SeedDefaultGroupsUseCase(group_repo).execute()
+    except Exception as exc:
+        logger.debug("Default group seeding: %s", exc)
+
     try:
         user_creds = await init_admin_user_uc.execute()
         if user_creds:
@@ -259,12 +308,6 @@ async def lifespan(app: FastAPI):
             print("=" * 60 + "\n", flush=True)
     except ConflictError:
         pass
-
-    # Seed the three immutable default groups (readonly / operator / admin)
-    try:
-        await SeedDefaultGroupsUseCase(group_repo).execute()
-    except Exception as exc:
-        logger.debug("Default group seeding: %s", exc)
 
     print(_BANNER.format(port=settings.port), flush=True)
 
@@ -299,6 +342,7 @@ Two methods accepted on all protected endpoints:
             {"name": "Health", "description": "Platform health checks"},
             {"name": "Auth", "description": "Authentication — API keys and user login"},
             {"name": "Nodes", "description": "Linux server node registry"},
+            {"name": "Node Groups", "description": "Node group management with Wazuh and Puppet NC sync"},
             {"name": "Infrastructure", "description": "Puppet and Wazuh infrastructure setup"},
             {"name": "Jobs", "description": "Ansible provisioning jobs and log streaming"},
             {"name": "Compliance", "description": "Compliance reports and remediation"},
@@ -335,6 +379,7 @@ Two methods accepted on all protected endpoints:
 
     app.include_router(auth_routes.router)
     app.include_router(nodes_routes.router)
+    app.include_router(node_groups_routes.router)
     app.include_router(infrastructure_routes.router)
     app.include_router(jobs_routes.router)
     app.include_router(compliance_routes.router)
