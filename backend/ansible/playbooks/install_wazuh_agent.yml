@@ -85,8 +85,45 @@
         path: /var/ossec/bin/wazuh-agentd
       register: wazuh_agent_installed
 
-    - name: Check if already-installed agent is actively connected
-      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+    # ── Cleanup: remove any invalid <force> block left by a prior failed run ───
+    - name: Clean up any residual force-enrollment block in ossec.conf
+      shell: |
+        python3 -c "
+        import re
+        path = '/var/ossec/etc/ossec.conf'
+        try:
+            conf = open(path).read()
+            cleaned = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
+            if cleaned != conf:
+                open(path, 'w').write(cleaned)
+                print('cleaned')
+            else:
+                print('ok')
+        except Exception as e:
+            print('error: ' + str(e))
+        "
+      changed_when: false
+      failed_when: false
+      when: wazuh_agent_installed.stat.exists
+
+    # ── Idempotency: check CURRENT connection state (not just log history) ────
+    # grep alone is unreliable — the log retains old "Connected" entries even
+    # when the agent is broken/stopped. We require ALL three conditions:
+    #   1. wazuh-agentd is currently running
+    #   2. client.keys is non-empty (agent has a valid registration key)
+    #   3. The LAST relevant log entry is "Connected to the server"
+    #      (not an error like "Duplicate agent name" or "Invalid element")
+    - name: Check if already-installed agent is currently connected
+      shell: |
+        RUNNING=$(/var/ossec/bin/wazuh-control status 2>/dev/null | grep -c 'wazuh-agentd is running' || echo 0)
+        KEYS=$(test -s /var/ossec/etc/client.keys && echo "1" || echo "0")
+        LAST=$(grep -E 'Connected to the server|ERROR.*Unable to add|ERROR.*Duplicate|ERROR.*Invalid element|ERROR.*Exiting' \
+               /var/ossec/logs/ossec.log 2>/dev/null | tail -1)
+        if [ "$RUNNING" = "1" ] && [ "$KEYS" = "1" ] && echo "$LAST" | grep -q 'Connected to the server'; then
+          exit 0
+        else
+          exit 1
+        fi
       register: _agent_already_connected
       changed_when: false
       failed_when: false
@@ -355,19 +392,17 @@
     # The manager keeps the old agent record; clearing only client.keys causes
     # a "Duplicate agent name" rejection on re-enrollment. Deleting via API
     # first lets the agent register cleanly with a fresh ID.
-    # Gracefully skipped when wazuh_api_pass is not configured.
+    # Tries WAZUH_API_PASS if set, falls back to the Wazuh default 'wazuh'.
+    # If both fail the rescue block warns and the key-reset continues anyway.
     - name: Remove stale agent entry from Wazuh manager via REST API
-      when:
-        - wazuh_enroll_stuck | bool
-        - wazuh_api_pass is defined
-        - wazuh_api_pass | string | length > 0
+      when: wazuh_enroll_stuck | bool
       block:
         - name: Authenticate to Wazuh REST API (runs on controller)
           uri:
             url: "http://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
             method: POST
             url_username: "{{ wazuh_api_user | default('wazuh') }}"
-            url_password: "{{ wazuh_api_pass }}"
+            url_password: "{{ wazuh_api_pass | default('wazuh') }}"
             force_basic_auth: yes
             return_content: yes
             validate_certs: no
@@ -445,44 +480,6 @@
       failed_when: false
       when: wazuh_enroll_stuck | bool
 
-    # ── Force-enrollment — evict duplicate manager entry without API creds ────
-    # Wazuh 4.2+: adding <force><enabled>yes</enabled></force> inside the
-    # <enrollment> section causes the manager to remove any existing agent with
-    # the same name before issuing the new key. No API password required.
-    # Disconnected/registration time thresholds are set to 0s so the replace
-    # triggers even if the old agent was still active (common after cloning).
-    - name: Enable force-enrollment to evict duplicate agent name on manager
-      shell: |
-        python3 - << 'PYEOF'
-        import re, sys
-        path = '/var/ossec/etc/ossec.conf'
-        with open(path) as f:
-            conf = f.read()
-
-        # Remove any existing <force> block first to avoid duplicates
-        conf = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
-
-        force = (
-            '\n    <force>'
-            '\n      <enabled>yes</enabled>'
-            '\n      <disconnected_time enabled="yes">0s</disconnected_time>'
-            '\n      <after_registration_time>0s</after_registration_time>'
-            '\n    </force>'
-        )
-
-        if '<enrollment>' in conf:
-            conf = conf.replace('<enrollment>', '<enrollment>' + force, 1)
-            with open(path, 'w') as f:
-                f.write(conf)
-            print('force-enrollment injected into enrollment section')
-        else:
-            print('WARNING: no <enrollment> section found — force-enrollment not set')
-            sys.exit(0)
-        PYEOF
-      changed_when: true
-      failed_when: false
-      when: wazuh_enroll_stuck | bool
-
     - name: Start wazuh-agent to trigger fresh auto-enrollment
       service:
         name: wazuh-agent
@@ -490,7 +487,10 @@
       when: wazuh_enroll_stuck | bool
 
     - name: Wait for the agent to connect after re-enrollment (up to 90s)
-      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+      shell: |
+        /var/ossec/bin/wazuh-control status 2>/dev/null | grep -q 'wazuh-agentd is running' && \
+        test -s /var/ossec/etc/client.keys && \
+        grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
       register: agent_connected_retry
       retries: 18
       delay: 5
@@ -498,25 +498,6 @@
       changed_when: false
       failed_when: false
       when: wazuh_enroll_stuck | bool
-
-    - name: Remove force-enrollment block now that registration succeeded
-      shell: |
-        python3 - << 'PYEOF'
-        import re
-        path = '/var/ossec/etc/ossec.conf'
-        with open(path) as f:
-            conf = f.read()
-        cleaned = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
-        if cleaned != conf:
-            with open(path, 'w') as f:
-                f.write(cleaned)
-            print('force block removed')
-        PYEOF
-      changed_when: true
-      failed_when: false
-      when:
-        - wazuh_enroll_stuck | bool
-        - (agent_connected_retry.rc | default(1)) == 0
 
     - name: Get wazuh-agent version
       command: /var/ossec/bin/wazuh-control info
