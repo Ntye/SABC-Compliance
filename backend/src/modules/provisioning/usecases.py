@@ -448,14 +448,10 @@ class InspecControllerUseCase:
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
 
-        status = await self.get_status()
-        if not status["installed"]:
-            return {
-                "node_id": node_id,
-                "hostname": node.hostname,
-                "reachable": False,
-                "error": "InSpec is not installed on the platform",
-            }
+        # Check InSpec installation status separately from SSH reachability.
+        # The SSH test below doesn't need InSpec — it just verifies the channel
+        # that InSpec would use. We always run it so the badge reflects reality.
+        inspec_status = await self.get_status()
 
         key = node.ssh_key_path or self._default_key
         args = [
@@ -493,12 +489,18 @@ class InspecControllerUseCase:
         node.updated_at = datetime.utcnow()
         await self._node_repo.update(node)
 
-        return {
+        result: dict = {
             "node_id": node_id,
             "hostname": node.hostname,
             "reachable": ok,
             "output": output[-1500:] if output else None,
         }
+        if not inspec_status["installed"]:
+            result["error"] = (
+                "InSpec n'est pas installé sur la plateforme — "
+                "cliquez « Installer sur la plateforme » pour activer les scans de conformité."
+            )
+        return result
 
     async def verify_all_nodes(self) -> dict:
         """Probe every registered node in parallel; persist per-node results."""

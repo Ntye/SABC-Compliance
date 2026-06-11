@@ -777,8 +777,12 @@ function VerifyTab({ nodes, onRefresh, t }) {
     setProbeErrors((p) => ({ ...p, [nodeId]: null }))
     try {
       const result = await verifyInspecNode(nodeId)
-      if (!result.reachable && result.output) {
-        setProbeErrors((p) => ({ ...p, [nodeId]: result.output }))
+      const errMsg = result.output || result.error || null
+      if (!result.reachable && errMsg) {
+        setProbeErrors((p) => ({ ...p, [nodeId]: errMsg }))
+      }
+      if (result.error) {
+        toast(result.error, 'warning')
       }
       onRefresh?.()
     } catch (err) {
@@ -878,9 +882,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
                     <XCircle size={11} className="text-red-500 mt-0.5 flex-shrink-0" />
                   )}
                   <span className="font-mono text-gray-700">{r.hostname || r.node_id?.slice(0, 8)}</span>
-                  {!r.reachable && r.output && (
-                    <span className="text-red-600 truncate" title={r.output}>
-                      — {r.output.split('\n').slice(-1).join(' ').slice(0, 60)}
+                  {!r.reachable && (r.output || r.error) && (
+                    <span className="text-red-600 truncate" title={r.output || r.error}>
+                      — {(r.output || r.error).split('\n').slice(-1).join(' ').slice(0, 60)}
                     </span>
                   )}
                 </div>
@@ -935,7 +939,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
                     <div className="flex items-center justify-end gap-2">
                       <button
                         onClick={() => handleProbeNode(n.id)}
-                        disabled={!status?.installed || probing[n.id]}
+                        disabled={probing[n.id]}
                         className={btnSm(false)}
                       >
                         {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
