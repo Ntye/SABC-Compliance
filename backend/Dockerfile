@@ -41,7 +41,12 @@ RUN mkdir -p data keys \
     packages/wazuh-manager packages/wazuh-agent
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# Strip any CR characters before making the script executable. When the repo is
+# checked out on a Windows build host, git's autocrlf can rewrite the script
+# with CRLF line endings; the kernel would then read the shebang as
+# "#!/bin/bash\r" and fail with "exec /docker-entrypoint.sh: no such file or
+# directory". Normalising to LF here makes the build host irrelevant.
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 VOLUME ["/app/data", "/app/keys", "/app/packages"]
 
