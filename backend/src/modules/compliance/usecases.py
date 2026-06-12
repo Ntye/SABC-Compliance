@@ -43,44 +43,6 @@ async def _resolve_node(repo: INodeRepository, id_or_hostname: str) -> Node:
     return node
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CIS spot-checks
-#
-# A small, OS-agnostic set of CIS-aligned checks executed over SSH in a single
-# shell invocation. Each check prints a line:  <control_id>|<PASS|FAIL>|<title>
-# This gives real, immediately-useful compliance data without requiring the
-# Puppet or Wazuh APIs. The catalogue is intentionally short — it is the
-# "start displaying things" baseline and will be expanded later.
-# ──────────────────────────────────────────────────────────────────────────────
-
-_CIS_SCRIPT = r"""
-emit() { echo "$1|$2|$3"; }
-chk() { if eval "$2" >/dev/null 2>&1; then emit "$1" PASS "$3"; else emit "$1" FAIL "$3"; fi; }
-
-# 5.2.x — SSH hardening
-chk "5.2.8"  "grep -Eqi '^[[:space:]]*PermitRootLogin[[:space:]]+no' /etc/ssh/sshd_config" "Disable SSH root login"
-chk "5.2.10" "grep -Eqi '^[[:space:]]*PermitEmptyPasswords[[:space:]]+no' /etc/ssh/sshd_config" "Disallow SSH empty passwords"
-chk "5.2.4"  "grep -Eqi '^[[:space:]]*X11Forwarding[[:space:]]+no' /etc/ssh/sshd_config" "Disable SSH X11 forwarding"
-
-# 1.x — filesystem / kernel
-chk "1.5.1"  "test \"$(sysctl -n kernel.randomize_va_space 2>/dev/null)\" = 2" "Enable ASLR (kernel.randomize_va_space=2)"
-chk "6.1.2"  "test \"$(stat -c %a /etc/passwd 2>/dev/null)\" = 644" "/etc/passwd permissions are 644"
-chk "6.1.3"  "stat -c %a /etc/shadow 2>/dev/null | grep -Eq '^(0|400|600|640)$'" "/etc/shadow permissions are restrictive"
-
-# 3.5 / 3.4 — host firewall present and active
-chk "3.5.1"  "{ command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; } || { systemctl is-active firewalld >/dev/null 2>&1; } || { command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q .; }" "Host firewall is active"
-
-# 4.1 — auditing
-chk "4.1.1"  "systemctl is-active auditd >/dev/null 2>&1 || command -v auditctl >/dev/null 2>&1" "auditd is installed and running"
-
-# 5.4 — password policy (login.defs)
-chk "5.4.1"  "grep -Eq '^PASS_MAX_DAYS[[:space:]]+([0-9]|[0-8][0-9]|9[0-9]|[1-9][0-9][0-9])$' /etc/login.defs" "Password expiration is configured"
-
-# 2.x — unwanted services
-chk "2.2.1"  "! systemctl is-enabled telnet.socket >/dev/null 2>&1 && ! command -v telnetd >/dev/null 2>&1" "Telnet server is not installed"
-"""
-
-
 class GetComplianceSummaryUseCase:
     """Fleet-wide compliance overview — one row per node with latest reports."""
 
@@ -138,14 +100,18 @@ class GetNodeComplianceUseCase:
 
 class CollectNodeComplianceUseCase:
     """
-    Collect real compliance data from an enrolled node:
-      - InSpec scan: runs the bundled CIS-aligned profile against the node from
-        the controller over SSH (InSpec's agentless ssh:// transport). This is
-        the primary, structured source — every control carries an impact score,
-        a severity, and framework references (CIS / ISO 27001 / PCI-DSS).
-      - CIS shell spot-checks: a lightweight fallback used only when InSpec is
-        not installed on the controller or the scan can't run.
-      - Puppet last-run summary (when the Puppet agent is enrolled).
+    Run a structured InSpec compliance scan against an enrolled node.
+
+    The bundled CIS Benchmark profile is executed from the controller over
+    InSpec's agentless ssh:// transport — every control carries an impact score,
+    a severity, a CIS section and framework references (CIS / ISO 27001 /
+    PCI-DSS). There is no shell fallback: this is a complete InSpec scan or a
+    clear, actionable error. When ``auto_install`` is set and InSpec is missing
+    from the controller, it is installed on demand so the operator can scan
+    directly from the compliance page.
+
+    The Puppet last-run summary is collected as a supplementary report when the
+    Puppet agent is enrolled.
 
     Gated on the node being Puppet/Wazuh enrolled so the UI only starts showing
     data once the node is part of the managed infrastructure.
@@ -161,6 +127,7 @@ class CollectNodeComplianceUseCase:
         default_ssh_key_path: str = "",
         profile_path: str = "",
         inspec_bin: str | None = None,
+        inspec_ctrl=None,
     ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
@@ -168,8 +135,15 @@ class CollectNodeComplianceUseCase:
         self._default_key = default_ssh_key_path
         self._profile_path = profile_path
         self._inspec_bin = inspec_bin or self.INSPEC_BIN
+        # InspecControllerUseCase — used to install InSpec on demand.
+        self._inspec_ctrl = inspec_ctrl
 
-    async def execute(self, id_or_hostname: str) -> dict:
+    def _inspec_available(self) -> bool:
+        return bool(
+            os.path.isfile(self._inspec_bin) or shutil.which("inspec")
+        )
+
+    async def execute(self, id_or_hostname: str, auto_install: bool = True) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
         if not (node.puppet_enrolled or node.wazuh_enrolled):
@@ -178,41 +152,47 @@ class CollectNodeComplianceUseCase:
                 "Infrastructure page before collecting compliance data."
             )
 
+        # Ensure InSpec is present on the controller; install on demand so the
+        # operator can scan directly from the compliance page.
+        if not self._inspec_available():
+            if auto_install and self._inspec_ctrl is not None:
+                install = await self._inspec_ctrl.install_on_controller()
+                if not (install.get("installed") or install.get("success")):
+                    raise ValidationError(
+                        "InSpec is not installed on the platform and automatic "
+                        "installation failed: " + (install.get("error") or "unknown error")
+                    )
+            else:
+                raise ValidationError(
+                    "InSpec is not installed on the platform. Install it from the "
+                    "compliance page (Install InSpec) to run compliance scans."
+                )
+
         collected: list[dict] = []
 
-        # Primary: structured InSpec scan. Falls back to the shell spot-check
-        # so the feature never regresses on controllers without InSpec — but we
-        # capture *why* it fell back so the UI can tell the user.
+        # Complete, structured InSpec scan — no shell fallback.
         inspec_report, inspec_reason = await self._collect_inspec(node)
-        if inspec_report:
-            await self._repo.save_report(inspec_report)
-            collected.append(self._summarise(inspec_report))
-            if not node.inspec_installed:
-                node.inspec_installed = True
-                node.updated_at = datetime.utcnow()
-                try:
-                    await self._nodes.update(node)
-                except Exception:
-                    pass
-        else:
-            cis_report = await self._collect_cis(node)
-            if cis_report:
-                await self._repo.save_report(cis_report)
-                collected.append(self._summarise(cis_report))
+        if not inspec_report:
+            raise ValidationError(inspec_reason or "The InSpec scan did not produce any results.")
 
+        await self._repo.save_report(inspec_report)
+        collected.append(self._summarise(inspec_report))
+        if not node.inspec_installed:
+            node.inspec_installed = True
+            node.updated_at = datetime.utcnow()
+            try:
+                await self._nodes.update(node)
+            except Exception:
+                pass
+
+        # Supplementary Puppet enforcement summary.
         if node.puppet_enrolled:
             puppet_report = await self._collect_puppet(node)
             if puppet_report:
                 await self._repo.save_report(puppet_report)
                 collected.append(self._summarise(puppet_report))
 
-        if not collected:
-            raise ValidationError("No compliance data could be collected from the node over SSH.")
-
-        result = {"node_id": node.id, "collected": collected}
-        if inspec_reason:
-            result["inspec_skipped"] = inspec_reason
-        return result
+        return {"node_id": node.id, "collected": collected}
 
     def _summarise(self, r: ComplianceReport) -> dict:
         return {
@@ -393,50 +373,6 @@ class CollectNodeComplianceUseCase:
             details=details,
             profile=profile_name or "sabc-linux-baseline",
             duration=float(duration) if isinstance(duration, (int, float)) else None,
-            collected_at=datetime.utcnow(),
-        )
-
-    async def _collect_cis(self, node: Node) -> ComplianceReport | None:
-        try:
-            stdout, _, _ = await self._ssh.run_command(
-                node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path, _CIS_SCRIPT
-            )
-        except Exception:
-            return None
-
-        details: list[dict] = []
-        passed = failed = 0
-        for line in stdout.splitlines():
-            parts = line.strip().split("|", 2)
-            if len(parts) != 3:
-                continue
-            control_id, status, title = parts
-            ok = status.upper() == "PASS"
-            if ok:
-                passed += 1
-            elif status.upper() == "FAIL":
-                failed += 1
-            else:
-                continue
-            details.append({
-                "control_id": control_id, "title": title,
-                "status": "pass" if ok else "fail",
-                "frameworks": {"cis": control_id},
-                "section": _cis_section(control_id),
-            })
-
-        if not details:
-            return None
-
-        return ComplianceReport(
-            id=str(uuid.uuid4()),
-            node_id=node.id,
-            source="cis-ssh",
-            framework="cis",
-            passed_checks=passed,
-            failed_checks=failed,
-            total_checks=passed + failed,
-            details=details,
             collected_at=datetime.utcnow(),
         )
 

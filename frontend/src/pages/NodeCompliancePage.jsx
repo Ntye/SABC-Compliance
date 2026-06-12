@@ -6,9 +6,13 @@ import {
   LineChart, Line,
 } from 'recharts'
 import {
-  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown, Info,
+  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
+  Download, ShieldAlert,
 } from 'lucide-react'
-import { getNodeCompliance, collectNodeCompliance, triggerRemediation } from '../lib/api.js'
+import {
+  getNodeCompliance, collectNodeCompliance, triggerRemediation,
+  getInspecStatus, installInspecOnController,
+} from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
@@ -134,12 +138,14 @@ export default function NodeCompliancePage() {
   const t = useT()
   const toast = useToast()
   const { data, loading, refetch } = useApi(() => getNodeCompliance(id), { deps: [id] })
+  const { data: inspecStatus, refetch: refetchInspec } = useApi(getInspecStatus)
   const [scanning, setScanning] = useState(false)
+  const [installing, setInstalling] = useState(false)
   const [remediating, setRemediating] = useState(false)
   const [filter, setFilter] = useState('all')
   const [fwFilter, setFwFilter] = useState('all')
-  const [scanNote, setScanNote] = useState(null)
 
+  const inspecInstalled = inspecStatus?.installed
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
 
   const history = useMemo(() => {
@@ -202,13 +208,29 @@ export default function NodeCompliancePage() {
     setScanning(true)
     try {
       const res = await collectNodeCompliance(id)
-      setScanNote(res.inspec_skipped || null)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
-      await refetch()
+      await Promise.all([refetch(), refetchInspec()])
     } catch (err) {
       toast(err.message, 'error')
     } finally {
       setScanning(false)
+    }
+  }
+
+  async function installInspec() {
+    setInstalling(true)
+    try {
+      const res = await installInspecOnController()
+      if (res.installed || res.success) {
+        toast(t('compliance.inspecInstalled'), 'success')
+        await refetchInspec()
+      } else {
+        toast(res.error || 'InSpec installation failed', 'error')
+      }
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setInstalling(false)
     }
   }
 
@@ -263,14 +285,22 @@ export default function NodeCompliancePage() {
         </div>
       )}
 
-      {/* Explain why a non-InSpec source is being shown */}
-      {(scanNote || (report && report.source !== 'inspec')) && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
-          <Info size={15} className="text-blue-500 flex-shrink-0 mt-0.5" />
-          <div className="text-[12px] text-blue-800">
-            <span className="font-medium">{t('compliance.fallbackTitle')}</span>{' '}
-            {scanNote || t('compliance.fallbackDesc')}
+      {/* InSpec not installed on the platform — offer to install it right here */}
+      {inspecStatus && !inspecInstalled && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
+          <ShieldAlert size={17} className="text-blue-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-[12px] font-medium text-blue-900">{t('compliance.inspecMissingTitle')}</p>
+            <p className="text-[11px] text-blue-700 mt-0.5">{t('compliance.inspecMissingDesc')}</p>
           </div>
+          <button
+            onClick={installInspec}
+            disabled={installing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[12px] font-medium hover:bg-blue-700 disabled:opacity-50 flex-shrink-0"
+          >
+            <Download size={13} className={installing ? 'animate-pulse' : ''} />
+            {installing ? t('compliance.installing') : t('compliance.installInspec')}
+          </button>
         </div>
       )}
 

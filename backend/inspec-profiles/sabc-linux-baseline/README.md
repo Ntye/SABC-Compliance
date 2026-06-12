@@ -1,7 +1,8 @@
-# SABC Linux Security Baseline (InSpec profile)
+# SABC CIS Linux Benchmark (InSpec profile)
 
 This is the InSpec profile the SABC compliance platform runs against every
-managed node to produce structured compliance reports.
+managed node to produce structured compliance reports. It implements a
+comprehensive CIS-Benchmark-aligned baseline across all six CIS sections.
 
 ## How it runs
 
@@ -15,20 +16,34 @@ inspec exec sabc-linux-baseline \
   --reporter json --chef-license accept-silent
 ```
 
+There is **no shell fallback**: a scan is a complete InSpec run or a clear,
+actionable error. If InSpec is not installed on the controller, the platform
+installs it on demand so the operator can scan directly from the compliance
+page.
+
 The JSON output is parsed into `ComplianceReport` rows: every control becomes a
 detail entry with its status (`pass`/`fail`/`skip`), an `impact` score, a derived
-`severity` (high ≥ 0.7, medium ≥ 0.4, low > 0, info = 0) and the framework
-references declared via `tag`.
+`severity` (high ≥ 0.7, medium ≥ 0.4, low > 0, info = 0), the CIS section and the
+framework references declared via `tag`.
 
 ## Control catalogue
 
-| Group       | Controls                          | Theme                              |
-|-------------|-----------------------------------|------------------------------------|
-| `sshd-*`    | SSH daemon hardening              | CIS 5.2.x                          |
-| `file-*`    | Critical file permissions         | CIS 5.2.1 / 6.1.x                  |
-| `sysctl-*`  | Kernel network/memory hardening   | CIS 1.5.x / 3.x                    |
-| `svc-*`     | Auditing, firewall, services      | CIS 2.x / 3.5 / 4.1                |
-| `auth-*`    | Password policy                   | CIS 5.4.1.x                        |
+| File                      | CIS section | Coverage                                                    |
+|---------------------------|-------------|-------------------------------------------------------------|
+| `1_initial_setup.rb`      | 1           | Filesystem modules & partitions, AIDE, boot, ASLR, banners  |
+| `2_services.rb`           | 2           | Time sync, removal of special-purpose services & clients    |
+| `3_network.rb`            | 3           | Network sysctls, uncommon protocols, host firewall          |
+| `4_logging_audit.rb`      | 4           | auditd, audit rules, rsyslog/journald, log permissions      |
+| `5_access_auth.rb`        | 5           | cron/at, SSH hardening, PAM, password policy, su            |
+| `6_maintenance.rb`        | 6           | System file permissions, user/group account hygiene         |
 
 Every control is tagged with `cis`, and where applicable `iso27001` and
 `pci_dss`, so reports can be filtered by framework.
+
+## Extending / matching a specific CIS release
+
+The controls follow the CIS Linux Benchmark structure but are intentionally
+distribution-agnostic. To pin to a specific benchmark release (e.g. CIS Ubuntu
+22.04 LTS v2.0.0 or CIS RHEL 9 v2.0.0), add or adjust controls in the matching
+section file — the control `id`/`tag cis:` should carry the exact recommendation
+number from that benchmark.
