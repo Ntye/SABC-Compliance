@@ -384,7 +384,7 @@ class InspecControllerUseCase:
          can run controls against it).
     """
 
-    INSPEC_BIN = "/usr/bin/inspec"
+    INSPEC_BIN = "/usr/bin/cinc-auditor"
 
     def __init__(self, node_repo: INodeRepository, default_ssh_key_path: str) -> None:
         self._node_repo = node_repo
@@ -407,12 +407,12 @@ class InspecControllerUseCase:
         return {"installed": False, "version": None, "executable_path": self.INSPEC_BIN}
 
     async def install_on_controller(self) -> dict:
-        """Install InSpec on the platform server via the official omnitruck script.
+        """Install CINC Auditor on the platform server via the CINC omnitruck script.
 
         Requires root (typical inside the backend container). On bare-metal
         deploys without root, returns an error with the manual install command.
         """
-        cmd = "curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec -v 5"
+        cmd = "curl -sL https://omnitruck.cinc.sh/install.sh | bash -s -- -P cinc-auditor"
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
@@ -497,7 +497,7 @@ class InspecControllerUseCase:
         }
         if not inspec_status["installed"]:
             result["error"] = (
-                "InSpec n'est pas installé sur la plateforme — "
+                "CINC Auditor n'est pas installé sur la plateforme — "
                 "cliquez « Installer sur la plateforme » pour activer les scans de conformité."
             )
         return result

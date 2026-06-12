@@ -117,7 +117,7 @@ class CollectNodeComplianceUseCase:
     data once the node is part of the managed infrastructure.
     """
 
-    INSPEC_BIN = "/usr/bin/inspec"
+    INSPEC_BIN = "/usr/bin/cinc-auditor"
 
     def __init__(
         self,
@@ -140,7 +140,7 @@ class CollectNodeComplianceUseCase:
 
     def _inspec_available(self) -> bool:
         return bool(
-            os.path.isfile(self._inspec_bin) or shutil.which("inspec")
+            os.path.isfile(self._inspec_bin) or shutil.which("cinc-auditor")
         )
 
     async def execute(self, id_or_hostname: str, auto_install: bool = True) -> dict:
@@ -159,13 +159,13 @@ class CollectNodeComplianceUseCase:
                 install = await self._inspec_ctrl.install_on_controller()
                 if not (install.get("installed") or install.get("success")):
                     raise ValidationError(
-                        "InSpec is not installed on the platform and automatic "
+                        "CINC Auditor is not installed on the platform and automatic "
                         "installation failed: " + (install.get("error") or "unknown error")
                     )
             else:
                 raise ValidationError(
-                    "InSpec is not installed on the platform. Install it from the "
-                    "compliance page (Install InSpec) to run compliance scans."
+                    "CINC Auditor is not installed on the platform. Install it from the "
+                    "compliance page to run compliance scans."
                 )
 
         collected: list[dict] = []
@@ -222,10 +222,10 @@ class CollectNodeComplianceUseCase:
         # Resolve the InSpec binary; the configured path may differ per install.
         inspec_bin = self._inspec_bin
         if not os.path.isfile(inspec_bin):
-            inspec_bin = shutil.which("inspec") or inspec_bin
-        if not (os.path.isfile(inspec_bin) or shutil.which("inspec")):
+            inspec_bin = shutil.which("cinc-auditor") or inspec_bin
+        if not (os.path.isfile(inspec_bin) or shutil.which("cinc-auditor")):
             return None, (
-                "InSpec is not installed on the platform — install it from the "
+                "CINC Auditor is not installed on the platform — install it from the "
                 "Infrastructure page to enable structured compliance scans."
             )
 
@@ -237,24 +237,21 @@ class CollectNodeComplianceUseCase:
             "-i", key,
             "--port", str(node.ssh_port),
             "--reporter", "json",
-            "--chef-license", "accept-silent",
             "--no-color", "--no-distinct-exit",
         ]
         # Most controls need root to read /etc/shadow, auditd state, etc.
         if (node.ssh_user or "").strip() != "root":
             args.append("--sudo")
 
-        env = {**os.environ, "CHEF_LICENSE": "accept-silent"}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=240)
         except FileNotFoundError:
-            return None, "InSpec binary could not be executed on the platform."
+            return None, "CINC Auditor binary could not be executed on the platform."
         except asyncio.TimeoutError:
             return None, "InSpec scan timed out after 240s (node slow or unreachable)."
         except Exception as exc:

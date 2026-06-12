@@ -6,18 +6,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Chef InSpec — runs locally on the platform and connects to managed nodes
-# over SSH (agentless). Used by the compliance engine to evaluate the InSpec
-# controls defined on each rule. The omnitruck installer drops the binary at
-# /usr/bin/inspec. If unavailable at build time (e.g. air-gapped build), the
-# runtime status endpoint will report "not installed" and the operator can
-# click "Install on platform" in the UI.
+# CINC Auditor — free, open-source InSpec distribution (no license required).
+# Runs locally on the platform and connects to managed nodes over SSH (agentless).
+# The CINC omnitruck installer drops the binary at /usr/bin/cinc-auditor.
+# If unavailable at build time (e.g. air-gapped build), the runtime status
+# endpoint will report "not installed" and the operator can click "Install" in the UI.
 RUN set -e; \
-    echo "── Installing Chef InSpec via omnitruck ──"; \
-    if curl -fsSL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec -v 5; then \
-        /usr/bin/inspec version && echo "✓ InSpec installed at build time"; \
+    echo "── Installing CINC Auditor via omnitruck ──"; \
+    if curl -fsSL https://omnitruck.cinc.sh/install.sh | bash -s -- -P cinc-auditor; then \
+        /usr/bin/cinc-auditor version && echo "✓ CINC Auditor installed at build time"; \
     else \
-        echo "WARN: InSpec install failed at build time — install via UI at runtime"; \
+        echo "WARN: CINC Auditor install failed at build time — install via UI at runtime"; \
     fi
 
 WORKDIR /app
