@@ -107,6 +107,15 @@ if ($Target -and $UsePlink -and (-not $SshKey)) {
                        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePass))
 }
 
+# -- Collect sudo password (if the remote user needs one for sudo) -------------
+# Leave blank and press Enter if the account has passwordless sudo (NOPASSWD).
+$SudoPassword = ""
+if ($Target) {
+    $SecureSudo  = Read-Host "sudo password for $Target (Enter to skip if NOPASSWD)" -AsSecureString
+    $SudoPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureSudo))
+}
+
 # -- SSH helpers --------------------------------------------------------------
 function Invoke-Remote {
     param([string]$Cmd)
@@ -124,6 +133,31 @@ function Invoke-Remote {
         }
     }
     if ($LASTEXITCODE -ne 0) { Fail "Remote command failed: $Cmd" }
+}
+
+# Invoke-Sudo pipes the sudo password via stdin so no TTY is required.
+# If SudoPassword is empty (NOPASSWD account) it falls back to plain sudo.
+function Invoke-Sudo {
+    param([string]$Cmd)
+    if ($SudoPassword -ne "") {
+        $sudoCmd = "echo '$SudoPassword' | sudo -S $Cmd"
+    } else {
+        $sudoCmd = "sudo $Cmd"
+    }
+    if ($UsePlink) {
+        if ($SshKey) {
+            & $PlinkExe -ssh -i $SshKey -batch -no-antispoof $Target $sudoCmd
+        } else {
+            & $PlinkExe -ssh -pw $SshPassword -batch -no-antispoof $Target $sudoCmd
+        }
+    } else {
+        if ($SshKey) {
+            & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoCmd
+        } else {
+            & ssh -o StrictHostKeyChecking=no $Target $sudoCmd
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { Fail "Remote sudo command failed: $Cmd" }
 }
 
 function Send-File {
@@ -224,17 +258,23 @@ function Setup-Server {
     )
     $lines | Set-Content -Path $tmpScript -Encoding UTF8
 
+    # Prepend the sudo password line so bash -s feeds it to sudo -S
+    if ($SudoPassword -ne "") {
+        $sudoSetup = "echo '$SudoPassword' | sudo -S bash -s"
+    } else {
+        $sudoSetup = "sudo bash -s"
+    }
     if ($UsePlink) {
         if ($SshKey) {
-            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target "sudo bash -s"
+            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoSetup
         } else {
-            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target "sudo bash -s"
+            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoSetup
         }
     } else {
         if ($SshKey) {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "sudo bash -s"
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoSetup
         } else {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target "sudo bash -s"
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoSetup
         }
     }
     Remove-Item $tmpScript -ErrorAction SilentlyContinue
@@ -245,8 +285,8 @@ function Setup-Server {
 # -- Step 4: Transfer files ---------------------------------------------------
 function Transfer-Files {
     Info "Creating remote directory $RemoteDir ..."
-    Invoke-Remote "sudo mkdir -p $RemoteDir"
-    Invoke-Remote "sudo chown `$(whoami):`$(whoami) $RemoteDir"
+    Invoke-Sudo "mkdir -p $RemoteDir"
+    Invoke-Sudo "chown `$(whoami):`$(whoami) $RemoteDir"
 
     Send-File $Archive "$RemoteDir/sabc-images.tar"
     Send-File (Join-Path $ProjectDir "docker-compose.yml") "$RemoteDir/docker-compose.yml"
@@ -268,18 +308,18 @@ function Transfer-Files {
         Remove-Item $tmpEnv -ErrorAction SilentlyContinue
     }
 
-    Invoke-Remote "sudo mkdir -p $RemoteDir/backend/packages"
-    Invoke-Remote "sudo chown -R `$(whoami):`$(whoami) $RemoteDir"
+    Invoke-Sudo "mkdir -p $RemoteDir/backend/packages"
+    Invoke-Sudo "chown -R `$(whoami):`$(whoami) $RemoteDir"
     Ok "Files transferred"
 }
 
 # -- Step 5: Load images and start --------------------------------------------
 function Deploy-Platform {
     Info "Loading Docker images on $Target ..."
-    Invoke-Remote "sudo docker load -i $RemoteDir/sabc-images.tar"
+    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar"
 
     Info "Starting platform ..."
-    Invoke-Remote "sudo docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
+    Invoke-Sudo "docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
 
     # Resolve display host from SSH target (strip user@)
     if ($Target -match "@") {
