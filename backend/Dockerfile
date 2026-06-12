@@ -31,9 +31,10 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install --timeout=300 --retries=10 -r requirements.txt
 
-# Application source and Ansible playbooks
-COPY src/     src/
-COPY ansible/ ansible/
+# Application source, Ansible playbooks, and bundled InSpec profile
+COPY src/              src/
+COPY ansible/          ansible/
+COPY inspec-profiles/  inspec-profiles/
 
 # Persistent directories (overridden by volumes at runtime)
 RUN mkdir -p data keys \
