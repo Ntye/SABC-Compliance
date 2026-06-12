@@ -57,6 +57,7 @@ class ChangePasswordRequest(BaseModel):
 class UpdateUserRequest(BaseModel):
     email: str | None = None
     active: bool | None = None
+    password: str | None = None
 
 class UserGroupResponse(BaseModel):
     id: str

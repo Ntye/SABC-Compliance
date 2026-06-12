@@ -313,6 +313,8 @@ class UpdateUserUseCase:
             user.email = data.get("email")
         if "active" in data:
             user.active = bool(data["active"])
+        if "password" in data and data["password"]:
+            user.password_hash = _hash_password(data["password"])
         await self._repo.update(user)
         return user
 

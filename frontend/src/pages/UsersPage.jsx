@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Plus, Pencil, UserX, UserCheck, X, Search } from 'lucide-react'
-import { listUsers, createUser, updateUser, deleteUser, listUserGroups, addGroupMember } from '../lib/api.js'
+import { listUsers, createUser, updateUser, deleteUser, listUserGroups, addGroupMember, removeGroupMember } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -59,6 +59,10 @@ export default function UsersPage() {
 
   // Edit form state
   const [editEmail, setEditEmail] = useState('')
+  const [editPassword, setEditPassword] = useState('')
+  const [editConfirm, setEditConfirm] = useState('')
+  const [editGroupId, setEditGroupId] = useState('')
+  const [editActive, setEditActive] = useState(true)
 
   // Map each user id → the names of the groups they belong to
   const groupNamesByUser = useMemo(() => {
@@ -90,6 +94,12 @@ export default function UsersPage() {
 
   function openEdit(user) {
     setEditEmail(user.email || '')
+    setEditPassword('')
+    setEditConfirm('')
+    setEditActive(user.active !== false)
+    // pre-select the first group the user currently belongs to
+    const currentGroupId = (groups || []).find((g) => (g.member_ids || []).includes(user.id))?.id || ''
+    setEditGroupId(currentGroupId)
     setEditTarget(user)
   }
 
@@ -132,11 +142,29 @@ export default function UsersPage() {
 
   async function handleEdit(e) {
     e.preventDefault()
+    if (editPassword && editPassword !== editConfirm) {
+      toast('Passwords do not match', 'error')
+      return
+    }
+    if (!editGroupId) {
+      toast(t('iam.userGroup') + ' required', 'error')
+      return
+    }
     setSaving(true)
     try {
-      await updateUser(editTarget.id, {
-        email: editEmail.trim() || null,
-      })
+      const patch = { email: editEmail.trim() || null, active: editActive }
+      if (editPassword) patch.password = editPassword
+      await updateUser(editTarget.id, patch)
+
+      // Reassign group only if it changed
+      const prevGroupId = (groups || []).find((g) => (g.member_ids || []).includes(editTarget.id))?.id
+      if (editGroupId !== prevGroupId) {
+        if (prevGroupId) {
+          try { await removeGroupMember(prevGroupId, editTarget.id) } catch { /* ignore */ }
+        }
+        await addGroupMember(editGroupId, editTarget.id)
+      }
+
       toast('User updated', 'success')
       setEditTarget(null)
       refetch()
@@ -372,21 +400,81 @@ export default function UsersPage() {
 
       {/* Edit User Modal */}
       {editTarget && (
-        <Modal title={`${t('iam.editRole')} — ${editTarget.username}`} onClose={() => setEditTarget(null)}>
+        <Modal title={`Edit — ${editTarget.username}`} onClose={() => setEditTarget(null)}>
           <form onSubmit={handleEdit} className="space-y-4">
+            {/* Email */}
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.email')}</label>
               <input
                 type="email"
                 value={editEmail}
                 onChange={(e) => setEditEmail(e.target.value)}
+                placeholder="user@example.com"
                 className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
               />
+            </div>
+            {/* User group */}
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.userGroup')} *</label>
+              <select
+                value={editGroupId}
+                onChange={(e) => setEditGroupId(e.target.value)}
+                required
+                className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
+              >
+                <option value="" disabled>{t('iam.selectGroup')}</option>
+                {(groups || []).map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+            {/* New password (optional) */}
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">
+                {t('iam.password')} <span className="font-normal text-gray-400">(leave blank to keep current)</span>
+              </label>
+              <input
+                type="password"
+                value={editPassword}
+                onChange={(e) => setEditPassword(e.target.value)}
+                autoComplete="new-password"
+                className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+              />
+            </div>
+            {editPassword && (
+              <div>
+                <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('iam.confirmPassword')} *</label>
+                <input
+                  type="password"
+                  value={editConfirm}
+                  onChange={(e) => setEditConfirm(e.target.value)}
+                  required
+                  className={`w-full px-3 py-2 text-[12px] border rounded-lg outline-none focus:ring-2 focus:ring-brand/15 ${
+                    editConfirm && editConfirm !== editPassword ? 'border-red-400 focus:border-red-400' : 'border-gray-200 focus:border-brand'
+                  }`}
+                />
+                {editConfirm && editConfirm !== editPassword && (
+                  <p className="text-[10px] text-red-500 mt-1">Passwords do not match</p>
+                )}
+              </div>
+            )}
+            {/* Active toggle */}
+            <div className="flex items-center gap-2">
+              <input
+                id="edit-active"
+                type="checkbox"
+                checked={editActive}
+                onChange={(e) => setEditActive(e.target.checked)}
+                className="w-3.5 h-3.5 accent-brand"
+              />
+              <label htmlFor="edit-active" className="text-[12px] text-gray-700 select-none cursor-pointer">
+                {t('iam.active')}
+              </label>
             </div>
             <div className="flex items-center gap-2 pt-1">
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || (editPassword !== '' && editPassword !== editConfirm)}
                 className="inline-flex items-center gap-1.5 bg-brand text-white px-3 py-1.5 rounded-lg text-[12px] font-medium hover:bg-brand/90 disabled:opacity-50"
               >
                 {saving ? <Spinner size={12} /> : null}
