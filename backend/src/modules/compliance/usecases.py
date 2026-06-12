@@ -1,4 +1,7 @@
 from __future__ import annotations
+import asyncio
+import json
+import os
 import re
 import uuid
 from datetime import datetime
@@ -93,6 +96,8 @@ class GetNodeComplianceUseCase:
                     "id": r.id, "source": r.source, "framework": r.framework,
                     "score": r.score, "passed_checks": r.passed_checks,
                     "failed_checks": r.failed_checks, "total_checks": r.total_checks,
+                    "skipped_checks": r.skipped_checks, "profile": r.profile,
+                    "duration": r.duration, "severity_counts": r.severity_counts,
                     "details": r.details,
                     "collected_at": r.collected_at.isoformat(),
                 }
@@ -112,18 +117,36 @@ class GetNodeComplianceUseCase:
 
 class CollectNodeComplianceUseCase:
     """
-    Collect real compliance data from an enrolled node over SSH:
-      - CIS spot-checks (always available once the node is reachable)
-      - Puppet last-run summary (when the Puppet agent is enrolled)
+    Collect real compliance data from an enrolled node:
+      - InSpec scan: runs the bundled CIS-aligned profile against the node from
+        the controller over SSH (InSpec's agentless ssh:// transport). This is
+        the primary, structured source — every control carries an impact score,
+        a severity, and framework references (CIS / ISO 27001 / PCI-DSS).
+      - CIS shell spot-checks: a lightweight fallback used only when InSpec is
+        not installed on the controller or the scan can't run.
+      - Puppet last-run summary (when the Puppet agent is enrolled).
 
     Gated on the node being Puppet/Wazuh enrolled so the UI only starts showing
     data once the node is part of the managed infrastructure.
     """
 
-    def __init__(self, node_repo: INodeRepository, compliance_repo: IComplianceRepository, ssh: ISSHClient) -> None:
+    INSPEC_BIN = "/usr/bin/inspec"
+
+    def __init__(
+        self,
+        node_repo: INodeRepository,
+        compliance_repo: IComplianceRepository,
+        ssh: ISSHClient,
+        default_ssh_key_path: str = "",
+        profile_path: str = "",
+        inspec_bin: str | None = None,
+    ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
         self._ssh = ssh
+        self._default_key = default_ssh_key_path
+        self._profile_path = profile_path
+        self._inspec_bin = inspec_bin or self.INSPEC_BIN
 
     async def execute(self, id_or_hostname: str) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
@@ -136,10 +159,24 @@ class CollectNodeComplianceUseCase:
 
         collected: list[dict] = []
 
-        cis_report = await self._collect_cis(node)
-        if cis_report:
-            await self._repo.save_report(cis_report)
-            collected.append(self._summarise(cis_report))
+        # Primary: structured InSpec scan. Falls back to the shell spot-check
+        # so the feature never regresses on controllers without InSpec.
+        inspec_report = await self._collect_inspec(node)
+        if inspec_report:
+            await self._repo.save_report(inspec_report)
+            collected.append(self._summarise(inspec_report))
+            if not node.inspec_installed:
+                node.inspec_installed = True
+                node.updated_at = datetime.utcnow()
+                try:
+                    await self._nodes.update(node)
+                except Exception:
+                    pass
+        else:
+            cis_report = await self._collect_cis(node)
+            if cis_report:
+                await self._repo.save_report(cis_report)
+                collected.append(self._summarise(cis_report))
 
         if node.puppet_enrolled:
             puppet_report = await self._collect_puppet(node)
@@ -156,8 +193,154 @@ class CollectNodeComplianceUseCase:
         return {
             "id": r.id, "source": r.source, "framework": r.framework, "score": r.score,
             "passed_checks": r.passed_checks, "failed_checks": r.failed_checks,
-            "total_checks": r.total_checks, "collected_at": r.collected_at.isoformat(),
+            "total_checks": r.total_checks, "skipped_checks": r.skipped_checks,
+            "profile": r.profile, "duration": r.duration,
+            "severity_counts": r.severity_counts,
+            "collected_at": r.collected_at.isoformat(),
         }
+
+    # ── InSpec scan ───────────────────────────────────────────────────────────
+
+    async def _collect_inspec(self, node: Node) -> ComplianceReport | None:
+        """Run the bundled InSpec profile against the node and parse JSON output."""
+        if not self._profile_path or not os.path.isdir(self._profile_path):
+            return None
+
+        key = node.ssh_key_path or self._default_key
+        target = f"ssh://{node.ssh_user}@{node.ip}"
+        args = [
+            self._inspec_bin, "exec", self._profile_path,
+            "-t", target,
+            "-i", key,
+            "--port", str(node.ssh_port),
+            "--reporter", "json",
+            "--chef-license", "accept-silent",
+            "--no-color", "--no-distinct-exit",
+        ]
+        # Most controls need root to read /etc/shadow, auditd state, etc.
+        if (node.ssh_user or "").strip() != "root":
+            args.append("--sudo")
+
+        env = {**os.environ, "CHEF_LICENSE": "accept-silent"}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except (FileNotFoundError, asyncio.TimeoutError, Exception):
+            return None
+
+        raw = (stdout or b"").decode(errors="replace").strip()
+        data = self._extract_json(raw)
+        if not data:
+            return None
+        return self._inspec_to_report(node, data)
+
+    @staticmethod
+    def _extract_json(raw: str) -> dict | None:
+        """InSpec may emit a license/info banner before the JSON document."""
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            return json.loads(raw[start:end + 1])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _severity(impact: float) -> str:
+        if impact >= 0.7:
+            return "high"
+        if impact >= 0.4:
+            return "medium"
+        if impact > 0:
+            return "low"
+        return "info"
+
+    def _inspec_to_report(self, node: Node, data: dict) -> ComplianceReport | None:
+        framework_keys = ("cis", "iso27001", "iso_27001", "pci_dss", "pci-dss", "nist")
+        details: list[dict] = []
+        passed = failed = skipped = 0
+
+        profile_name: str | None = None
+        for prof in data.get("profiles") or []:
+            profile_name = profile_name or prof.get("name")
+            for ctrl in prof.get("controls") or []:
+                results = ctrl.get("results") or []
+                statuses = [r.get("status") for r in results]
+                if not statuses or all(s == "skipped" for s in statuses):
+                    status = "skip"
+                elif "failed" in statuses:
+                    status = "fail"
+                else:
+                    status = "pass"
+
+                impact = float(ctrl.get("impact") or 0)
+                severity = self._severity(impact)
+
+                message = ""
+                for r in results:
+                    if r.get("status") == "failed":
+                        message = (r.get("message") or r.get("code_desc") or "").strip()
+                        break
+                if not message and status == "skip" and results:
+                    message = (results[0].get("skip_message") or results[0].get("message") or "").strip()
+
+                tags = ctrl.get("tags") or {}
+                frameworks = {
+                    ("pci_dss" if k == "pci-dss" else k): v
+                    for k, v in tags.items()
+                    if k in framework_keys and v
+                }
+
+                if status == "pass":
+                    passed += 1
+                elif status == "fail":
+                    failed += 1
+                else:
+                    skipped += 1
+
+                details.append({
+                    "control_id": ctrl.get("id"),
+                    "title": (ctrl.get("title") or ctrl.get("id") or "").strip(),
+                    "status": status,
+                    "severity": severity,
+                    "impact": impact,
+                    "frameworks": frameworks,
+                    "desc": (ctrl.get("desc") or "").strip()[:600],
+                    "message": message[:600],
+                })
+
+        if not details:
+            return None
+
+        stats = data.get("statistics") or {}
+        duration = stats.get("duration") if isinstance(stats, dict) else None
+
+        return ComplianceReport(
+            id=str(uuid.uuid4()),
+            node_id=node.id,
+            source="inspec",
+            framework="cis",
+            passed_checks=passed,
+            failed_checks=failed,
+            total_checks=passed + failed,
+            skipped_checks=skipped,
+            details=details,
+            profile=profile_name or "sabc-linux-baseline",
+            duration=float(duration) if isinstance(duration, (int, float)) else None,
+            collected_at=datetime.utcnow(),
+        )
 
     async def _collect_cis(self, node: Node) -> ComplianceReport | None:
         try:

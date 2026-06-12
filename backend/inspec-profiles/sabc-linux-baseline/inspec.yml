@@ -1,0 +1,13 @@
+name: sabc-linux-baseline
+title: SABC Linux Security Baseline
+maintainer: SABC Compliance Platform
+copyright: SABC
+copyright_email: compliance@sabc.local
+license: Apache-2.0
+summary: >-
+  CIS-aligned Linux security baseline executed by the SABC compliance platform.
+  Each control is mapped to CIS Benchmark, ISO/IEC 27001 and PCI-DSS references
+  and carries an impact score used to derive a severity for reporting.
+version: 1.0.0
+supports:
+  - platform: linux

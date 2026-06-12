@@ -86,6 +86,9 @@ compliance_reports_table = Table(
     Column("total_checks", Integer, default=0),
     Column("score", Integer, default=0),
     Column("details", Text, default="[]"),
+    Column("profile", Text),
+    Column("duration", Text),
+    Column("skipped_checks", Integer, default=0),
     Column("collected_at", Text),
 )
 
@@ -250,6 +253,14 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
                          ("match_type", "TEXT"), ("rules", "TEXT")]:
             try:
                 await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
+            except Exception:
+                pass
+
+        # Compliance reports — migrations for structured InSpec scan output
+        for col, typ in [("profile", "TEXT"), ("duration", "TEXT"),
+                         ("skipped_checks", "INTEGER")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
             except Exception:
                 pass
 
@@ -450,6 +461,9 @@ class ComplianceRepository(IComplianceRepository):
             failed_checks=row.failed_checks or 0,
             total_checks=row.total_checks or 0,
             details=json.loads(row.details or "[]"),
+            profile=getattr(row, "profile", None),
+            duration=(float(row.duration) if getattr(row, "duration", None) else None),
+            skipped_checks=getattr(row, "skipped_checks", None) or 0,
             collected_at=_dt(row.collected_at) or datetime.utcnow(),
         )
 
@@ -472,6 +486,9 @@ class ComplianceRepository(IComplianceRepository):
                 framework=report.framework, passed_checks=report.passed_checks,
                 failed_checks=report.failed_checks, total_checks=report.total_checks,
                 score=report.score, details=json.dumps(report.details),
+                profile=report.profile,
+                duration=(str(report.duration) if report.duration is not None else None),
+                skipped_checks=report.skipped_checks,
                 collected_at=_ts(report.collected_at),
             ))
             await s.commit()
@@ -522,6 +539,8 @@ class ComplianceRepository(IComplianceRepository):
                             "id": r.id, "source": r.source, "framework": r.framework,
                             "score": r.score, "passed_checks": r.passed_checks,
                             "failed_checks": r.failed_checks, "total_checks": r.total_checks,
+                            "skipped_checks": r.skipped_checks, "profile": r.profile,
+                            "duration": r.duration, "severity_counts": r.severity_counts,
                             "collected_at": r.collected_at.isoformat(),
                         }
                         for r in reports

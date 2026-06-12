@@ -102,6 +102,9 @@ class ComplianceReport:
     failed_checks: int
     total_checks: int
     details: list[dict] = field(default_factory=list)
+    profile: str | None = None
+    duration: float | None = None
+    skipped_checks: int = 0
     collected_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
@@ -109,6 +112,16 @@ class ComplianceReport:
         if self.total_checks == 0:
             return 0
         return round(self.passed_checks / self.total_checks * 100)
+
+    @property
+    def severity_counts(self) -> dict:
+        """Failed-control counts bucketed by severity, for charting."""
+        out = {"high": 0, "medium": 0, "low": 0, "info": 0}
+        for d in self.details:
+            if d.get("status") == "fail":
+                sev = d.get("severity") or "info"
+                out[sev] = out.get(sev, 0) + 1
+        return out
 
 
 @dataclass

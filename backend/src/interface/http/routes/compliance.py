@@ -47,11 +47,13 @@ async def node_compliance(id: str, principal: AuthPrincipal = Depends(get_curren
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.post("/nodes/{id}/collect", summary="Collect compliance data from an enrolled node")
+@router.post("/nodes/{id}/collect", summary="Run a compliance scan on an enrolled node")
 async def collect_node_compliance(id: str, principal: AuthPrincipal = Depends(require_operator)):
     """
-    Run CIS spot-checks over SSH (and read the Puppet last-run summary when the
-    Puppet agent is enrolled), then store the results as compliance reports.
+    Run a structured InSpec scan (bundled CIS-aligned profile) against the node
+    over SSH from the controller, falling back to lightweight CIS shell checks
+    when InSpec is unavailable, and read the Puppet last-run summary when the
+    Puppet agent is enrolled. Results are stored as compliance reports.
     Requires the node to be Puppet- or Wazuh-enrolled.
     """
     try:

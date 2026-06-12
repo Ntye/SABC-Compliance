@@ -277,10 +277,19 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Compliance use cases --
+    # Bundled InSpec profile lives at backend/inspec-profiles/sabc-linux-baseline.
+    inspec_profile_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "inspec-profiles", "sabc-linux-baseline",
+    )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
-        collect_uc=CollectNodeComplianceUseCase(node_repo, compliance_repo, ssh_client),
+        collect_uc=CollectNodeComplianceUseCase(
+            node_repo, compliance_repo, ssh_client,
+            default_ssh_key_path=settings.ssh_key_path,
+            profile_path=inspec_profile_path,
+        ),
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
 
