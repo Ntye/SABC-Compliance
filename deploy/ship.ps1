@@ -7,7 +7,9 @@
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -SshKey .\keys\id_rsa
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Setup        # First time: installs Docker
-#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update       # Re-transfer without rebuild
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update       # Skip rebuild: transfer existing archive + load + start
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Start        # Skip build/transfer: load already-transferred archive + start
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Restart      # Skip build/transfer/load: just docker compose up -d
 #   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
 # Authentication (choose one):
@@ -34,7 +36,9 @@ param(
 
     [string]$SshKey  = "",   # Path to private key (.pem or .ppk for PuTTY)
     [switch]$Setup,          # First time: install Docker on the server
-    [switch]$Update,         # Skip rebuild, transfer existing archive + restart
+    [switch]$Update,         # Skip rebuild: transfer existing archive + load + start
+    [switch]$Start,          # Skip build/transfer: load already-transferred archive + start
+    [switch]$Restart,        # Skip build/transfer/load: just docker compose up -d
     [switch]$BuildOnly,      # Build and save images locally, no transfer
     [switch]$Bundle          # Use Dockerfile.bundle (airgap packages)
 )
@@ -50,7 +54,7 @@ $RemoteDir  = "/opt/sabc-compliance"
 
 # -- Validate arguments -------------------------------------------------------
 if ((-not $Target) -and (-not $BuildOnly) -and (-not $Bundle)) {
-    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server [-SshKey key.pem] [-Setup|-Update|-BuildOnly]"
+    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server [-SshKey key.pem] [-Setup|-Update|-Start|-Restart|-BuildOnly]"
     exit 1
 }
 
@@ -313,32 +317,16 @@ function Transfer-Files {
     Ok "Files transferred"
 }
 
-# -- Step 5: Load images and start --------------------------------------------
-function Deploy-Platform {
-    Info "Loading Docker images on $Target ..."
-    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar"
-
-    Info "Starting platform ..."
-    Invoke-Sudo "docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
-
-    # Resolve display host from SSH target (strip user@)
-    if ($Target -match "@") {
-        $displayHost = $Target.Split("@")[1]
-    } else {
-        $displayHost = $Target
-    }
-
-    # Read the HTTP port from local .env if available
+# -- Helpers: display the URL after any successful deploy ---------------------
+function Show-URLs {
+    if ($Target -match "@") { $displayHost = $Target.Split("@")[1] } else { $displayHost = $Target }
     $httpPort = "8443"
     $envFile = Join-Path $ProjectDir ".env"
     if (Test-Path $envFile) {
         $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTP_PORT=" }
-        if ($portLine) {
-            $httpPort = $portLine.Split("=")[1].Trim()
-        }
+        if ($portLine) { $httpPort = $portLine.Split("=")[1].Trim() }
     }
-
-    Ok "Platform deployed!"
+    Ok "Platform running!"
     Write-Host ""
     Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host "  SABC Compliance Platform" -ForegroundColor Cyan
@@ -353,16 +341,59 @@ function Deploy-Platform {
     Write-Host ""
 }
 
+# -- Step 5a: Start containers (compose up only -- images already loaded) -----
+function Start-Containers {
+    Info "Starting platform ..."
+    Invoke-Sudo "docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
+    Show-URLs
+}
+
+# -- Step 5b: Load images then start ------------------------------------------
+function Deploy-Platform {
+    Info "Loading Docker images on $Target ..."
+    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar"
+    Start-Containers
+}
+
+    # Read the HTTP port from local .env if available
+    $httpPort = "8443"
+    $envFile = Join-Path $ProjectDir ".env"
+    if (Test-Path $envFile) {
+        $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTP_PORT=" }
+        if ($portLine) { $httpPort = $portLine.Split("=")[1].Trim() }
+    }
+}
+
 # -- Main ---------------------------------------------------------------------
+#
+#  Flag summary:
+#    (none)     Full deploy: build -> save -> transfer -> load -> start
+#    -Setup     Install Docker on server first, then full deploy
+#    -Update    Images already saved locally  -> transfer -> load -> start
+#    -Start     Files already on server       -> load -> start
+#    -Restart   Images already loaded         -> docker compose up -d only
+#    -BuildOnly Build and save locally, print manual instructions
+#
 
 if ($BuildOnly -or $Bundle) {
     Build-Images
     Save-Images
     Write-Host ""
     Info "Archive at: $Archive"
-    Info "Transfer manually (WinSCP or pscp), then on the server:"
-    Info "  sudo docker load -i $RemoteDir/sabc-images.tar"
-    Info "  sudo docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
+    Info "Transfer manually (WinSCP or pscp), then on the server run:"
+    Info "  .\deploy\ship.ps1 -Target user@server -Start"
+    exit 0
+}
+
+if ($Restart) {
+    Info "Restarting containers on $Target (images already loaded) ..."
+    Start-Containers
+    exit 0
+}
+
+if ($Start) {
+    Info "Loading and starting on $Target (files already transferred) ..."
+    Deploy-Platform
     exit 0
 }
 
