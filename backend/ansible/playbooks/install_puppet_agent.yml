@@ -56,7 +56,12 @@
           apt-get install -y python3 || true
           find_py >/dev/null 2>&1 || apt-get install -y python3.8 || true
         elif command -v dnf >/dev/null 2>&1; then
-          dnf install -y python3 || true
+          # RHEL 8 / AlmaLinux 8 default "python3" package is 3.6 — too old.
+          # Try versioned packages (AppStream) before falling back to python3.
+          dnf install -y python3.11 2>/dev/null \
+            || dnf install -y python39 2>/dev/null \
+            || dnf install -y python38 2>/dev/null \
+            || dnf install -y python3 || true
         elif command -v yum >/dev/null 2>&1; then
           # Amazon Linux 2 / RHEL 7 / CentOS 7: default python3 is 3.6 — pull 3.8
           yum install -y python38 \

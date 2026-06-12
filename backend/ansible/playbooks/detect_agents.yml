@@ -1,6 +1,10 @@
 ---
-# Read-only agent enrollment detection with elevated privileges.
-# Runs with become: yes to access protected directories and logs.
+# Read-only agent enrollment detection.
+# Uses only "raw" tasks so no Python interpreter is needed on the managed
+# node — this makes it compatible with legacy distributions such as
+# RHEL/AlmaLinux 8 that ship Python 3.6 (Ansible-core 2.17+ generates
+# wrapper code that requires Python 3.7+, breaking the "setup" and "shell"
+# modules on those hosts).
 #
 # The platform backend parses two sentinel strings in the job log:
 #   PUPPET_STATUS=ENROLLED   → sets puppet_enrolled = True
@@ -11,17 +15,16 @@
 - name: Detect Agent Enrollment
   hosts: target
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   tasks:
 
     - name: "══ AGENT ENROLLMENT DETECTION ═══════════════════════════════════"
-      debug:
-        msg: "Checking {{ ansible_fqdn }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"
+      raw: "echo \"Checking $(hostname -f) on $(. /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\" || uname -r)\""
 
     # ── Puppet ────────────────────────────────────────────────────────────────
     - name: Detect Puppet agent enrollment
-      shell: |
+      raw: |
         PUPPET=/opt/puppetlabs/puppet/bin/puppet
         CERTDIR=/etc/puppetlabs/puppet/ssl/certs
         if ! test -f "${PUPPET}"; then
@@ -52,7 +55,7 @@
 
     # ── Wazuh ─────────────────────────────────────────────────────────────────
     - name: Detect Wazuh agent enrollment
-      shell: |
+      raw: |
         AGENTD=/var/ossec/bin/wazuh-agentd
         LOG=/var/ossec/logs/ossec.log
         CONF=/var/ossec/etc/ossec.conf
@@ -95,5 +98,5 @@
     - name: "══ DETECTION COMPLETE ═══════════════════════════════════════════"
       debug:
         msg:
-          - "Puppet : {{ puppet_detection.stdout_lines[0] | default('unknown') }}"
-          - "Wazuh  : {{ wazuh_detection.stdout_lines[0] | default('unknown') }}"
+          - "Puppet : {{ (puppet_detection.stdout_lines | select('match', 'PUPPET_STATUS=.*') | list | first) | default('unknown') }}"
+          - "Wazuh  : {{ (wazuh_detection.stdout_lines | select('match', 'WAZUH_STATUS=.*') | list | first) | default('unknown') }}"
