@@ -370,10 +370,13 @@ function Get-ComposeCmd {
 function Start-Containers {
     Info "Starting platform ..."
     $compose = Get-ComposeCmd
-    # docker-compose 1.29.2 has a ContainerConfig bug when recreating containers
-    # created from newer image formats. Stop and remove old containers first so
-    # compose always does a clean create instead of a recreate.
-    Invoke-Sudo "docker stop sabc-backend sabc-frontend 2>/dev/null; docker rm sabc-backend sabc-frontend 2>/dev/null; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
+    # Wrap all three operations in a single bash -c so they all run under one
+    # sudo invocation. docker-compose 1.29.2 has a ContainerConfig crash when
+    # recreating containers; stopping/removing first forces a clean create.
+    # "|| true" prevents the stop/rm from aborting the script when containers
+    # do not exist yet (first run).
+    $bashCmd = "docker stop sabc-backend sabc-frontend 2>/dev/null || true; docker rm sabc-backend sabc-frontend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
+    Invoke-Sudo "bash -c '$bashCmd'"
     Show-URLs
 }
 
