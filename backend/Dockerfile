@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # click "Install on platform" in the UI.
 RUN set -e; \
     echo "── Installing Chef InSpec via omnitruck ──"; \
-    if curl -fsSL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec; then \
+    if curl -fsSL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec -v 5; then \
         /usr/bin/inspec version && echo "✓ InSpec installed at build time"; \
     else \
         echo "WARN: InSpec install failed at build time — install via UI at runtime"; \

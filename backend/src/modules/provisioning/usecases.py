@@ -412,7 +412,7 @@ class InspecControllerUseCase:
         Requires root (typical inside the backend container). On bare-metal
         deploys without root, returns an error with the manual install command.
         """
-        cmd = "curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec"
+        cmd = "curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec -v 5"
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
