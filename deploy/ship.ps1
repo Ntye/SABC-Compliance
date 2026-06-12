@@ -370,7 +370,7 @@ function Get-ComposeCmd {
 function Start-Containers {
     Info "Starting platform ..."
     $compose = Get-ComposeCmd
-    Invoke-Sudo "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
+    Invoke-Sudo "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
     Show-URLs
 }
 
