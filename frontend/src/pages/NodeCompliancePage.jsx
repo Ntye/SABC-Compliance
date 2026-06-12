@@ -6,16 +6,38 @@ import {
   LineChart, Line,
 } from 'recharts'
 import {
-  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
+  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown, Info,
 } from 'lucide-react'
 import { getNodeCompliance, collectNodeCompliance, triggerRemediation } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
-import { badge, scoreColor } from '../lib/tw.js'
+import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af' }
 const SEV = { high: '#dc2626', medium: '#f59e0b', low: '#3b82f6', info: '#9ca3af' }
+
+// CIS Benchmark top-level sections — used to group controls when the backend
+// hasn't already tagged a `section` (e.g. older stored reports).
+const CIS_SECTIONS = {
+  1: 'Initial Setup', 2: 'Services', 3: 'Network Configuration',
+  4: 'Logging & Auditing', 5: 'Access, Authentication & Authorization',
+  6: 'System Maintenance',
+}
+
+const FRAMEWORKS = [
+  { key: 'all', label: 'All' },
+  { key: 'cis', label: 'CIS' },
+  { key: 'iso27001', label: 'ISO 27001' },
+  { key: 'pci_dss', label: 'PCI-DSS' },
+]
+
+function sectionOf(ctrl) {
+  if (ctrl.section) return ctrl.section
+  const cis = ctrl.frameworks?.cis || (/^\d/.test(ctrl.control_id || '') ? ctrl.control_id : '')
+  const top = String(cis).split('.')[0]
+  return CIS_SECTIONS[top] ? `${top} · ${CIS_SECTIONS[top]}` : 'Other'
+}
 
 function primaryReport(reports) {
   return (
@@ -53,12 +75,14 @@ function ControlRow({ ctrl, t }) {
               {k === 'pci_dss' ? 'PCI' : k.toUpperCase()} {fw[k]}
             </span>
           ))}
-          <span
-            className="inline-flex items-center px-2 py-[3px] rounded-full text-[10px] font-medium"
-            style={{ background: `${SEV[sev]}22`, color: SEV[sev] }}
-          >
-            {t(`compliance.${sev}`)}
-          </span>
+          {ctrl.severity && (
+            <span
+              className="inline-flex items-center px-2 py-[3px] rounded-full text-[10px] font-medium"
+              style={{ background: `${SEV[sev]}22`, color: SEV[sev] }}
+            >
+              {t(`compliance.${sev}`)}
+            </span>
+          )}
           <ChevronDown size={14} className={`text-gray-300 transition-transform ${open ? 'rotate-180' : ''}`} />
         </div>
       </button>
@@ -83,6 +107,28 @@ function Panel({ title, children, className = '' }) {
   )
 }
 
+function SectionGroup({ section, controls, t }) {
+  const [open, setOpen] = useState(true)
+  const passed = controls.filter((c) => c.status === 'pass').length
+  const failed = controls.filter((c) => c.status === 'fail').length
+  const scored = passed + failed
+  const pct = scored ? Math.round((passed / scored) * 100) : 0
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-3 px-5 py-3 bg-gray-50/40 hover:bg-gray-50 text-left">
+        <ChevronDown size={15} className={`text-gray-400 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span className="text-[12px] font-semibold text-gray-700 flex-1">{section}</span>
+        {failed > 0 && <span className="text-[11px] text-red-500 font-medium">{failed} {t('compliance.failed').toLowerCase()}</span>}
+        <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+          <div className={`h-full rounded-full ${scoreBarColor(pct)}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[11px] text-gray-400 tabular-nums w-12 text-right">{passed}/{scored || controls.length}</span>
+      </button>
+      {open && controls.map((ctrl) => <ControlRow key={ctrl.control_id} ctrl={ctrl} t={t} />)}
+    </div>
+  )
+}
+
 export default function NodeCompliancePage() {
   const { id } = useParams()
   const t = useT()
@@ -91,6 +137,8 @@ export default function NodeCompliancePage() {
   const [scanning, setScanning] = useState(false)
   const [remediating, setRemediating] = useState(false)
   const [filter, setFilter] = useState('all')
+  const [fwFilter, setFwFilter] = useState('all')
+  const [scanNote, setScanNote] = useState(null)
 
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
 
@@ -121,19 +169,32 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
-  const controls = useMemo(() => {
-    const details = report?.details || []
-    if (filter === 'failed') return details.filter((d) => d.status === 'fail')
-    if (filter === 'passed') return details.filter((d) => d.status === 'pass')
-    // sort: failed first, then by severity weight
+  // Filtered controls (status + framework), then grouped by CIS section.
+  const sections = useMemo(() => {
+    let details = report?.details || []
+    if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
+    else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
+    if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
+
     const w = { high: 0, medium: 1, low: 2, info: 3 }
-    return [...details].sort((a, b) => {
-      const sa = a.status === 'fail' ? 0 : a.status === 'skip' ? 2 : 1
-      const sb = b.status === 'fail' ? 0 : b.status === 'skip' ? 2 : 1
-      if (sa !== sb) return sa - sb
-      return (w[a.severity] ?? 9) - (w[b.severity] ?? 9)
-    })
-  }, [report, filter])
+    const groups = {}
+    for (const d of details) {
+      const sec = sectionOf(d)
+      ;(groups[sec] ||= []).push(d)
+    }
+    // sort controls within a section: failed first, then by severity
+    for (const sec of Object.keys(groups)) {
+      groups[sec].sort((a, b) => {
+        const sa = a.status === 'fail' ? 0 : a.status === 'skip' ? 2 : 1
+        const sb = b.status === 'fail' ? 0 : b.status === 'skip' ? 2 : 1
+        if (sa !== sb) return sa - sb
+        return (w[a.severity] ?? 9) - (w[b.severity] ?? 9)
+      })
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b))
+  }, [report, filter, fwFilter])
+
+  const totalShown = useMemo(() => sections.reduce((n, [, list]) => n + list.length, 0), [sections])
 
   const enrolled = data && (data.puppet_enrolled || data.wazuh_enrolled)
 
@@ -141,6 +202,7 @@ export default function NodeCompliancePage() {
     setScanning(true)
     try {
       const res = await collectNodeCompliance(id)
+      setScanNote(res.inspec_skipped || null)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
       await refetch()
     } catch (err) {
@@ -198,6 +260,17 @@ export default function NodeCompliancePage() {
       {!enrolled && !loading && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-[12px] text-amber-800">
           {t('compliance.enrollFirst')}
+        </div>
+      )}
+
+      {/* Explain why a non-InSpec source is being shown */}
+      {(scanNote || (report && report.source !== 'inspec')) && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+          <Info size={15} className="text-blue-500 flex-shrink-0 mt-0.5" />
+          <div className="text-[12px] text-blue-800">
+            <span className="font-medium">{t('compliance.fallbackTitle')}</span>{' '}
+            {scanNote || t('compliance.fallbackDesc')}
+          </div>
         </div>
       )}
 
@@ -282,24 +355,42 @@ export default function NodeCompliancePage() {
             <span>{t('compliance.source')}: <b className="text-gray-600">{report.source}</b></span>
           </div>
 
-          {/* Controls list */}
+          {/* Controls — grouped by CIS section, with status + framework filters */}
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="text-[13px] font-semibold text-gray-800">{t('compliance.controlsTitle')}</h3>
-              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                {['all', 'failed', 'passed'].map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${filter === f ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                  >
-                    {t(`compliance.filter${f.charAt(0).toUpperCase() + f.slice(1)}`)}
-                  </button>
-                ))}
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="text-[13px] font-semibold text-gray-800">
+                {t('compliance.controlsTitle')}
+                <span className="ml-2 text-[11px] font-normal text-gray-400">{totalShown}</span>
+              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Framework filter */}
+                <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {FRAMEWORKS.map((f) => (
+                    <button
+                      key={f.key}
+                      onClick={() => setFwFilter(f.key)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${fwFilter === f.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {f.key === 'all' ? t('compliance.filterAll') : f.label}
+                    </button>
+                  ))}
+                </div>
+                {/* Status filter */}
+                <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {['all', 'failed', 'passed'].map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${filter === f ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t(`compliance.filter${f.charAt(0).toUpperCase() + f.slice(1)}`)}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-            {controls.length ? controls.map((ctrl) => (
-              <ControlRow key={ctrl.control_id} ctrl={ctrl} t={t} />
+            {sections.length ? sections.map(([section, list]) => (
+              <SectionGroup key={section} section={section} controls={list} t={t} />
             )) : (
               <div className="p-8 text-center text-[12px] text-gray-400">{t('compliance.noControls')}</div>
             )}

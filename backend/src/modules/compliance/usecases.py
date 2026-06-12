@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 
@@ -11,6 +12,26 @@ from core.domain.interfaces import (
     IComplianceRepository, INodeRepository, ISSHClient,
 )
 from core.errors import NotFoundError, ValidationError
+
+
+# CIS Benchmark top-level sections, used to group controls in the UI.
+_CIS_SECTIONS = {
+    "1": "Initial Setup",
+    "2": "Services",
+    "3": "Network Configuration",
+    "4": "Logging & Auditing",
+    "5": "Access, Authentication & Authorization",
+    "6": "System Maintenance",
+}
+
+
+def _cis_section(cis_id: str | None) -> str:
+    """Map a CIS control id like '5.2.8' to a section label '5 · Access…'."""
+    if not cis_id:
+        return "Other"
+    top = str(cis_id).split(".")[0].strip()
+    name = _CIS_SECTIONS.get(top)
+    return f"{top} · {name}" if name else "Other"
 
 
 async def _resolve_node(repo: INodeRepository, id_or_hostname: str) -> Node:
@@ -160,8 +181,9 @@ class CollectNodeComplianceUseCase:
         collected: list[dict] = []
 
         # Primary: structured InSpec scan. Falls back to the shell spot-check
-        # so the feature never regresses on controllers without InSpec.
-        inspec_report = await self._collect_inspec(node)
+        # so the feature never regresses on controllers without InSpec — but we
+        # capture *why* it fell back so the UI can tell the user.
+        inspec_report, inspec_reason = await self._collect_inspec(node)
         if inspec_report:
             await self._repo.save_report(inspec_report)
             collected.append(self._summarise(inspec_report))
@@ -187,7 +209,10 @@ class CollectNodeComplianceUseCase:
         if not collected:
             raise ValidationError("No compliance data could be collected from the node over SSH.")
 
-        return {"node_id": node.id, "collected": collected}
+        result = {"node_id": node.id, "collected": collected}
+        if inspec_reason:
+            result["inspec_skipped"] = inspec_reason
+        return result
 
     def _summarise(self, r: ComplianceReport) -> dict:
         return {
@@ -201,15 +226,33 @@ class CollectNodeComplianceUseCase:
 
     # ── InSpec scan ───────────────────────────────────────────────────────────
 
-    async def _collect_inspec(self, node: Node) -> ComplianceReport | None:
-        """Run the bundled InSpec profile against the node and parse JSON output."""
+    async def _collect_inspec(self, node: Node) -> tuple[ComplianceReport | None, str | None]:
+        """Run the bundled InSpec profile against the node and parse JSON output.
+
+        Returns ``(report, None)`` on success, or ``(None, reason)`` when the
+        scan is skipped or fails so the caller can surface why it fell back to
+        the shell spot-check.
+        """
         if not self._profile_path or not os.path.isdir(self._profile_path):
-            return None
+            return None, (
+                f"InSpec profile not found at {self._profile_path or '(unset)'} — "
+                "the bundled profile is missing from the deployment."
+            )
+
+        # Resolve the InSpec binary; the configured path may differ per install.
+        inspec_bin = self._inspec_bin
+        if not os.path.isfile(inspec_bin):
+            inspec_bin = shutil.which("inspec") or inspec_bin
+        if not (os.path.isfile(inspec_bin) or shutil.which("inspec")):
+            return None, (
+                "InSpec is not installed on the platform — install it from the "
+                "Infrastructure page to enable structured compliance scans."
+            )
 
         key = node.ssh_key_path or self._default_key
         target = f"ssh://{node.ssh_user}@{node.ip}"
         args = [
-            self._inspec_bin, "exec", self._profile_path,
+            inspec_bin, "exec", self._profile_path,
             "-t", target,
             "-i", key,
             "--port", str(node.ssh_port),
@@ -229,15 +272,25 @@ class CollectNodeComplianceUseCase:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=240)
-        except (FileNotFoundError, asyncio.TimeoutError, Exception):
-            return None
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except FileNotFoundError:
+            return None, "InSpec binary could not be executed on the platform."
+        except asyncio.TimeoutError:
+            return None, "InSpec scan timed out after 240s (node slow or unreachable)."
+        except Exception as exc:
+            return None, f"InSpec scan failed to start: {exc}"
 
         raw = (stdout or b"").decode(errors="replace").strip()
         data = self._extract_json(raw)
         if not data:
-            return None
-        return self._inspec_to_report(node, data)
+            err = (stderr or b"").decode(errors="replace").strip()
+            snippet = (err or raw or "no output")[-400:]
+            return None, f"InSpec produced no parseable output: {snippet}"
+
+        report = self._inspec_to_report(node, data)
+        if not report:
+            return None, "InSpec scan returned no controls."
+        return report, None
 
     @staticmethod
     def _extract_json(raw: str) -> dict | None:
@@ -317,6 +370,7 @@ class CollectNodeComplianceUseCase:
                     "severity": severity,
                     "impact": impact,
                     "frameworks": frameworks,
+                    "section": _cis_section(frameworks.get("cis")),
                     "desc": (ctrl.get("desc") or "").strip()[:600],
                     "message": message[:600],
                 })
@@ -364,7 +418,12 @@ class CollectNodeComplianceUseCase:
                 failed += 1
             else:
                 continue
-            details.append({"control_id": control_id, "title": title, "status": "pass" if ok else "fail"})
+            details.append({
+                "control_id": control_id, "title": title,
+                "status": "pass" if ok else "fail",
+                "frameworks": {"cis": control_id},
+                "section": _cis_section(control_id),
+            })
 
         if not details:
             return None
