@@ -284,3 +284,60 @@ class Rule:
     frameworks: list[dict] = field(default_factory=list)
     code_blocks: dict = field(default_factory=dict)
     inspec_blocks: dict = field(default_factory=dict)
+
+
+@dataclass
+class ProfileControl:
+    """A single control/parameter within a compliance profile (referential).
+
+    Mirrors the SABC "Tech Spec" referential columns: a stable SABC Section ID,
+    the CIS mapping, the recommended and (client-specific) agreed values, the
+    security rationale and the validate/configure guidelines.
+    """
+    id: str
+    profile_id: str
+    section_id: str               # SABC Section ID, e.g. "JR2.C.1.1.0"
+    section: str                  # Section heading, e.g. "Filesystem Configuration"
+    title: str
+    position: int = 0
+    kind: str = "control"         # "control" (Type S) | "section" (Type I header)
+    cis_id: str | None = None
+    description: str | None = None
+    recommended_value: str | None = None
+    agreed_value: str | None = None
+    risk_profile: str | None = None       # High / Medium / Low
+    rationale: str | None = None
+    validate_guideline: str | None = None
+    configure_guideline: str | None = None
+    regulatory: str | None = None
+    notes: str | None = None
+    enabled: bool = True
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class Profile:
+    """A compliance referential — a named, editable collection of controls.
+
+    The SABC Linux hardening referential ships as a built-in profile; operators
+    can edit its controls and create additional custom profiles.
+    """
+    id: str
+    name: str
+    description: str | None = None
+    os_family: str = "linux"
+    version: str = "1.0.0"
+    source: str = "custom"        # "builtin" (seeded) | "custom" (user-created)
+    controls: list[ProfileControl] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    @property
+    def control_count(self) -> int:
+        return sum(1 for c in self.controls if c.kind == "control")
+
+    @property
+    def section_count(self) -> int:
+        return len({c.section for c in self.controls})
+

@@ -116,7 +116,7 @@ export default function Sidebar() {
           <>
             <NavItem path="/infrastructure" label={t('nav.inventory')}       icon={Cpu}      />
             <NavItem path="/jobs"           label={t('nav.activityFeed')}    icon={Terminal} />
-            <NavItem path="/rules"          label={t('nav.customProfiles')}  icon={FileCode} />
+            <NavItem path="/profiles"       label={t('nav.customProfiles')}  icon={FileCode} />
           </>
         )}
 

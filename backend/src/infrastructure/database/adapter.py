@@ -10,12 +10,13 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, Job, Node, NodeGroup, RemediationEvent, Rule, User, UserGroup,
+    ApiKey, ComplianceReport, Job, Node, NodeGroup, Profile, ProfileControl,
+    RemediationEvent, Rule, User, UserGroup,
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceRepository,
     IJobRepository, INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
-    IRuleRepository, IUserRepository, IUserGroupRepository,
+    IProfileRepository, IRuleRepository, IUserRepository, IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,44 @@ rules_table = Table(
     Column("frameworks", Text, default="[]"),
     Column("code_blocks", Text, default="{}"),
     Column("inspec_blocks", Text, default="{}"),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+
+profiles_table = Table(
+    "profiles", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("description", Text),
+    Column("os_family", Text, default="linux"),
+    Column("version", Text, default="1.0.0"),
+    Column("source", Text, default="custom"),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+
+profile_controls_table = Table(
+    "profile_controls", metadata,
+    Column("id", Text, primary_key=True),
+    Column("profile_id", Text, nullable=False),
+    Column("section_id", Text, nullable=False),
+    Column("section", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("position", Integer, default=0),
+    Column("kind", Text, default="control"),
+    Column("cis_id", Text),
+    Column("description", Text),
+    Column("recommended_value", Text),
+    Column("agreed_value", Text),
+    Column("risk_profile", Text),
+    Column("rationale", Text),
+    Column("validate_guideline", Text),
+    Column("configure_guideline", Text),
+    Column("regulatory", Text),
+    Column("notes", Text),
+    Column("enabled", Integer, default=1),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -820,6 +859,146 @@ class RuleRepository(IRuleRepository):
     async def delete(self, id: str) -> None:
         async with self._session() as s:
             await s.execute(delete(rules_table).where(rules_table.c.id == id))
+            await s.commit()
+
+
+# ── Profile Repository ────────────────────────────────────────────────────────
+
+class ProfileRepository(IProfileRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    # ── mapping ──
+    def _control_to_entity(self, row) -> ProfileControl:
+        return ProfileControl(
+            id=row.id,
+            profile_id=row.profile_id,
+            section_id=row.section_id,
+            section=row.section,
+            title=row.title,
+            position=row.position or 0,
+            kind=getattr(row, "kind", None) or "control",
+            cis_id=row.cis_id,
+            description=row.description,
+            recommended_value=row.recommended_value,
+            agreed_value=row.agreed_value,
+            risk_profile=row.risk_profile,
+            rationale=row.rationale,
+            validate_guideline=row.validate_guideline,
+            configure_guideline=row.configure_guideline,
+            regulatory=row.regulatory,
+            notes=row.notes,
+            enabled=bool(row.enabled),
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    def _control_to_dict(self, c: ProfileControl) -> dict:
+        return {
+            "id": c.id, "profile_id": c.profile_id, "section_id": c.section_id,
+            "section": c.section, "title": c.title, "position": c.position,
+            "kind": c.kind, "cis_id": c.cis_id, "description": c.description,
+            "recommended_value": c.recommended_value, "agreed_value": c.agreed_value,
+            "risk_profile": c.risk_profile, "rationale": c.rationale,
+            "validate_guideline": c.validate_guideline,
+            "configure_guideline": c.configure_guideline,
+            "regulatory": c.regulatory, "notes": c.notes, "enabled": int(c.enabled),
+            "created_at": _ts(c.created_at), "updated_at": _ts(c.updated_at),
+        }
+
+    def _profile_to_entity(self, row, controls: list[ProfileControl]) -> Profile:
+        return Profile(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            os_family=row.os_family or "linux",
+            version=row.version or "1.0.0",
+            source=row.source or "custom",
+            controls=controls,
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    def _profile_to_dict(self, p: Profile) -> dict:
+        return {
+            "id": p.id, "name": p.name, "description": p.description,
+            "os_family": p.os_family, "version": p.version, "source": p.source,
+            "created_at": _ts(p.created_at), "updated_at": _ts(p.updated_at),
+        }
+
+    async def _controls_for(self, s, profile_id: str) -> list[ProfileControl]:
+        rows = (await s.execute(
+            select(profile_controls_table)
+            .where(profile_controls_table.c.profile_id == profile_id)
+            .order_by(profile_controls_table.c.position)
+        )).all()
+        return [self._control_to_entity(r) for r in rows]
+
+    # ── profiles ──
+    async def save(self, profile: Profile) -> None:
+        async with self._session() as s:
+            await s.execute(profiles_table.insert().values(**self._profile_to_dict(profile)))
+            for c in profile.controls:
+                await s.execute(profile_controls_table.insert().values(**self._control_to_dict(c)))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> Profile | None:
+        async with self._session() as s:
+            row = (await s.execute(select(profiles_table).where(profiles_table.c.id == id))).first()
+            if not row:
+                return None
+            controls = await self._controls_for(s, id)
+            return self._profile_to_entity(row, controls)
+
+    async def find_all(self) -> list[Profile]:
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(profiles_table).order_by(profiles_table.c.created_at)
+            )).all()
+            out: list[Profile] = []
+            for row in rows:
+                controls = await self._controls_for(s, row.id)
+                out.append(self._profile_to_entity(row, controls))
+            return out
+
+    async def update(self, profile: Profile) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(profiles_table).where(profiles_table.c.id == profile.id)
+                .values(**self._profile_to_dict(profile))
+            )
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(profile_controls_table).where(profile_controls_table.c.profile_id == id))
+            await s.execute(delete(profiles_table).where(profiles_table.c.id == id))
+            await s.commit()
+
+    # ── controls ──
+    async def save_control(self, control: ProfileControl) -> None:
+        async with self._session() as s:
+            await s.execute(profile_controls_table.insert().values(**self._control_to_dict(control)))
+            await s.commit()
+
+    async def update_control(self, control: ProfileControl) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(profile_controls_table).where(profile_controls_table.c.id == control.id)
+                .values(**self._control_to_dict(control))
+            )
+            await s.commit()
+
+    async def find_control(self, control_id: str) -> ProfileControl | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(profile_controls_table).where(profile_controls_table.c.id == control_id)
+            )).first()
+            return self._control_to_entity(row) if row else None
+
+    async def delete_control(self, control_id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(profile_controls_table).where(profile_controls_table.c.id == control_id))
             await s.commit()
 
 

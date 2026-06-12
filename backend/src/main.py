@@ -16,7 +16,7 @@ from core.errors import (
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceRepository,
     JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
-    RuleRepository, UserRepository, UserGroupRepository, create_db,
+    ProfileRepository, RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
 from infrastructure.http.wazuh_client import WazuhRESTClient
 from infrastructure.http.puppet_nc_client import PuppetNCClient
@@ -52,12 +52,14 @@ from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
     GetNodeComplianceUseCase, TriggerRemediationUseCase,
 )
+from modules.profiles.usecases import ProfileUseCases
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
 from interface.http.routes import jobs as jobs_routes
 from interface.http.routes import compliance as compliance_routes
 from interface.http.routes import node_groups as node_groups_routes
+from interface.http.routes import profiles as profiles_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -92,6 +94,7 @@ async def lifespan(app: FastAPI):
     user_repo = UserRepository(session_factory)
     audit_repo = AuditRepository(session_factory)
     rule_repo = RuleRepository(session_factory)
+    profile_repo = ProfileRepository(session_factory)
     platform_config_repo = PlatformConfigRepository(session_factory)
     group_repo = UserGroupRepository(session_factory)
     node_group_repo = NodeGroupRepository(session_factory)
@@ -294,6 +297,10 @@ async def lifespan(app: FastAPI):
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
 
+    # -- Compliance profiles (referentials) --
+    profile_uc = ProfileUseCases(profile_repo)
+    profiles_routes.set_use_cases(profile_uc)
+
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
@@ -302,6 +309,12 @@ async def lifespan(app: FastAPI):
         await SeedDefaultGroupsUseCase(group_repo).execute()
     except Exception as exc:
         logger.debug("Default group seeding: %s", exc)
+
+    # -- Bootstrap: seed the built-in SABC hardening referential --
+    try:
+        await profile_uc.seed_builtin()
+    except Exception as exc:
+        logger.debug("Profile seeding: %s", exc)
 
     try:
         user_creds = await init_admin_user_uc.execute()
@@ -400,6 +413,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(infrastructure_routes.router)
     app.include_router(jobs_routes.router)
     app.include_router(compliance_routes.router)
+    app.include_router(profiles_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

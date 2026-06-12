@@ -9,7 +9,8 @@ import AddVmPage from './pages/AddVmPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import CompliancePage from './pages/CompliancePage.jsx'
 import NodeCompliancePage from './pages/NodeCompliancePage.jsx'
-import PuppetRulesPage from './pages/PuppetRulesPage.jsx'
+import ProfilesPage from './pages/ProfilesPage.jsx'
+import ProfileDetailPage from './pages/ProfileDetailPage.jsx'
 import ApiKeysPage from './pages/ApiKeysPage.jsx'
 import AuditLogPage from './pages/AuditLogPage.jsx'
 import InfrastructurePage from './pages/InfrastructurePage.jsx'
@@ -34,7 +35,9 @@ export default function App() {
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/compliance" element={<CompliancePage />} />
             <Route path="/compliance/:id" element={<NodeCompliancePage />} />
-            <Route path="/rules" element={<PuppetRulesPage />} />
+            <Route path="/profiles" element={<ProfilesPage />} />
+            <Route path="/profiles/:id" element={<ProfileDetailPage />} />
+            <Route path="/rules" element={<Navigate to="/profiles" replace />} />
             <Route path="/keys" element={<ApiKeysPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
             {/* IAM routes */}

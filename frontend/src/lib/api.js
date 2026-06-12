@@ -368,6 +368,40 @@ export async function deleteRule(id) {
   return request('DELETE', `/rules/${id}`)
 }
 
+// ── Compliance Profiles (referentials) ─────────────────────────────────────────
+
+export async function listProfiles() {
+  return request('GET', '/profiles')
+}
+
+export async function getProfile(id) {
+  return request('GET', `/profiles/${id}`)
+}
+
+export async function createProfile(data) {
+  return request('POST', '/profiles', data)
+}
+
+export async function updateProfile(id, data) {
+  return request('PATCH', `/profiles/${id}`, data)
+}
+
+export async function deleteProfile(id) {
+  return request('DELETE', `/profiles/${id}`)
+}
+
+export async function addProfileControl(profileId, data) {
+  return request('POST', `/profiles/${profileId}/controls`, data)
+}
+
+export async function updateProfileControl(profileId, controlId, data) {
+  return request('PATCH', `/profiles/${profileId}/controls/${controlId}`, data)
+}
+
+export async function deleteProfileControl(profileId, controlId) {
+  return request('DELETE', `/profiles/${profileId}/controls/${controlId}`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {
