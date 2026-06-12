@@ -260,13 +260,17 @@ function Setup-Server {
         "systemctl start docker",
         "echo `"Done: `$(docker --version) / `$(docker compose version)`""
     )
-    $lines | Set-Content -Path $tmpScript -Encoding UTF8
-
-    # Prepend the sudo password line so bash -s feeds it to sudo -S
+    # Feed the script to the remote over stdin. When a sudo password is set we
+    # prepend it as the very first line: "sudo -S" reads exactly that one line
+    # for authentication and leaves the remainder of stdin for "bash -s" to
+    # execute. (Encoding is ASCII so PowerShell does not emit a UTF-8 BOM, which
+    # would otherwise corrupt the first line of the script.)
     if ($SudoPassword -ne "") {
-        $sudoSetup = "echo '$SudoPassword' | sudo -S bash -s"
+        $sudoSetup = "sudo -S bash -s"
+        @($SudoPassword) + $lines | Set-Content -Path $tmpScript -Encoding ASCII
     } else {
         $sudoSetup = "sudo bash -s"
+        $lines | Set-Content -Path $tmpScript -Encoding ASCII
     }
     if ($UsePlink) {
         if ($SshKey) {
@@ -290,7 +294,10 @@ function Setup-Server {
 function Transfer-Files {
     Info "Creating remote directory $RemoteDir ..."
     Invoke-Sudo "mkdir -p $RemoteDir"
-    Invoke-Sudo "chown `$(whoami):`$(whoami) $RemoteDir"
+    # Use id -un/-gn (resolved on the remote, as the login user) so this works
+    # even when the primary group name differs from the username -- common on
+    # AD-joined or corporate Linux hosts where chown user:user would fail.
+    Invoke-Sudo "chown `$(id -un):`$(id -gn) $RemoteDir"
 
     Send-File $Archive "$RemoteDir/sabc-images.tar"
     Send-File (Join-Path $ProjectDir "docker-compose.yml") "$RemoteDir/docker-compose.yml"
@@ -307,13 +314,13 @@ function Transfer-Files {
             "BACKEND_PORT=3000",
             "HOST_IP=",
             "HOST_ADMIN_USER="
-        ) | Set-Content -Path $tmpEnv -Encoding UTF8
+        ) | Set-Content -Path $tmpEnv -Encoding ASCII
         Send-File $tmpEnv "$RemoteDir/.env"
         Remove-Item $tmpEnv -ErrorAction SilentlyContinue
     }
 
     Invoke-Sudo "mkdir -p $RemoteDir/backend/packages"
-    Invoke-Sudo "chown -R `$(whoami):`$(whoami) $RemoteDir"
+    Invoke-Sudo "chown -R `$(id -un):`$(id -gn) $RemoteDir"
     Ok "Files transferred"
 }
 
