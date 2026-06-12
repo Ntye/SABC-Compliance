@@ -335,16 +335,42 @@ function Show-URLs {
     Write-Host "  API:     http://${displayHost}:${httpPort}/api" -ForegroundColor White
     Write-Host "  Swagger: http://${displayHost}:3000/docs" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Logs: ssh $Target sudo docker compose -f $RemoteDir/docker-compose.yml logs -f" -ForegroundColor DarkGray
-    Write-Host "  Stop: ssh $Target sudo docker compose -f $RemoteDir/docker-compose.yml down" -ForegroundColor DarkGray
+    Write-Host "  Logs: ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml logs -f" -ForegroundColor DarkGray
+    Write-Host "  Stop: ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml down" -ForegroundColor DarkGray
     Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host ""
+}
+
+# Detect whether the server has the compose plugin (docker compose) or the
+# standalone binary (docker-compose) and return the right invocation.
+function Get-ComposeCmd {
+    if ($UsePlink) {
+        if ($SshKey) {
+            $out = & $PlinkExe -ssh -i $SshKey -batch $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE" 2>&1
+        } else {
+            $out = & $PlinkExe -ssh -pw $SshPassword -batch $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE" 2>&1
+        }
+    } else {
+        if ($SshKey) {
+            $out = & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE"
+        } else {
+            $out = & ssh -o StrictHostKeyChecking=no $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE"
+        }
+    }
+    if ("$out" -match "PLUGIN") {
+        Ok "Docker Compose: plugin (docker compose)"
+        return "docker compose"
+    } else {
+        Ok "Docker Compose: standalone (docker-compose)"
+        return "docker-compose"
+    }
 }
 
 # -- Step 5a: Start containers (compose up only -- images already loaded) -----
 function Start-Containers {
     Info "Starting platform ..."
-    Invoke-Sudo "docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
+    $compose = Get-ComposeCmd
+    Invoke-Sudo "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
     Show-URLs
 }
 
