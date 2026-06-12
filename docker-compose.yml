@@ -61,7 +61,7 @@ services:
       - "${HTTP_PORT:-8443}:80"
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     networks:
       - sabc-net
 

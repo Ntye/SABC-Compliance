@@ -141,8 +141,9 @@ function Invoke-Remote {
 
 # Invoke-Sudo pipes the sudo password via stdin so no TTY is required.
 # If SudoPassword is empty (NOPASSWD account) it falls back to plain sudo.
+# Pass -AllowFail to return without terminating; caller checks $LASTEXITCODE.
 function Invoke-Sudo {
-    param([string]$Cmd)
+    param([string]$Cmd, [switch]$AllowFail)
     if ($SudoPassword -ne "") {
         $sudoCmd = "echo '$SudoPassword' | sudo -S $Cmd"
     } else {
@@ -161,7 +162,7 @@ function Invoke-Sudo {
             & ssh -o StrictHostKeyChecking=no $Target $sudoCmd
         }
     }
-    if ($LASTEXITCODE -ne 0) { Fail "Remote sudo command failed: $Cmd" }
+    if ((-not $AllowFail) -and ($LASTEXITCODE -ne 0)) { Fail "Remote sudo command failed: $Cmd" }
 }
 
 function Send-File {
@@ -383,7 +384,16 @@ function Start-Containers {
     # "|| true" prevents the stop/rm from aborting the script when containers
     # do not exist yet (first run).
     $bashCmd = "docker stop sabc-backend sabc-frontend 2>/dev/null || true; docker rm sabc-backend sabc-frontend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
-    Invoke-Sudo "bash -c '$bashCmd'"
+
+    # Run compose; on failure print the backend log so the crash reason is
+    # visible without needing a separate SSH session.
+    Invoke-Sudo "bash -c '$bashCmd'" -AllowFail
+    if ($LASTEXITCODE -ne 0) {
+        Warn "docker-compose up failed -- showing backend logs for diagnosis:"
+        Invoke-Remote "docker logs --tail 60 sabc-backend 2>&1 || true"
+        Fail "Containers failed to start (see backend logs above)"
+    }
+
     Show-URLs
 }
 
