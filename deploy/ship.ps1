@@ -1,81 +1,87 @@
 #Requires -Version 5.1
-# ═══════════════════════════════════════════════════════════════════════════════
-# SABC Compliance Platform — Windows Deployment Script (PowerShell)
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SABC Compliance Platform -- Windows Deployment Script (PowerShell)
+# =============================================================================
 #
 # Usage:
-#   .\deploy\ship.ps1 -Target ubuntu@<server-ip>
-#   .\deploy\ship.ps1 -Target ubuntu@<server-ip> -SshKey .\keys\id_rsa
-#   .\deploy\ship.ps1 -Target ubuntu@<server-ip> -Setup        # First time: installs Docker
-#   .\deploy\ship.ps1 -Target ubuntu@<server-ip> -Update       # Re-transfer without rebuild
-#   .\deploy\ship.ps1 -BuildOnly                               # Build & save locally only
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -SshKey .\keys\id_rsa
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Setup        # First time: installs Docker
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update       # Re-transfer without rebuild
+#   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
 # Authentication (choose one):
-#   SSH key (recommended):  -SshKey .\path\to\private_key
-#   Password (interactive): omit -SshKey — the system will prompt per command
-#   PuTTY + password:       place plink.exe + pscp.exe next to this script or
-#                           in PATH and use -SshKey for the .ppk path
+#   SSH key (recommended): -SshKey .\path\to\private_key.pem
+#   Password auth:         omit -SshKey -- you will be prompted per step
+#   PuTTY + password:      place plink.exe + pscp.exe next to this script or
+#                          in PATH; use -SshKey for a .ppk key path
 #
 # Prerequisites:
-#   - Docker Desktop for Windows (Linux containers)  https://docs.docker.com/desktop/install/windows-install/
-#   - OpenSSH Client (Windows 10/11: Settings → Apps → Optional Features)
-#     OR PuTTY (plink.exe + pscp.exe) for password auth without prompts
+#   Docker Desktop for Windows (Linux containers)
+#     https://docs.docker.com/desktop/install/windows-install/
+#   OpenSSH Client (built into Windows 10/11)
+#     Settings -> Apps -> Optional Features -> OpenSSH Client
+#   OR PuTTY (plink.exe + pscp.exe) for password auth without prompts
 #
-# Run policy — if blocked, run once:
+# If blocked by execution policy, run once:
 #   Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 #
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
 param(
     [Parameter(Position = 0)]
     [string]$Target = "",
 
-    [string]$SshKey = "",      # Path to private key (.pem or .ppk for PuTTY)
-    [switch]$Setup,            # First-time: install Docker on the server
-    [switch]$Update,           # Skip build, just transfer the existing archive
-    [switch]$BuildOnly,        # Build and save images locally only (no transfer)
-    [switch]$Bundle            # Include airgap packages (Dockerfile.bundle)
+    [string]$SshKey  = "",   # Path to private key (.pem or .ppk for PuTTY)
+    [switch]$Setup,          # First time: install Docker on the server
+    [switch]$Update,         # Skip rebuild, transfer existing archive + restart
+    [switch]$BuildOnly,      # Build and save images locally, no transfer
+    [switch]$Bundle          # Use Dockerfile.bundle (airgap packages)
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# -- Paths --------------------------------------------------------------------
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $Archive    = Join-Path $ScriptDir "sabc-images.tar"
 $RemoteDir  = "/opt/sabc-compliance"
 
-# ── Validate arguments ─────────────────────────────────────────────────────────
-if (-not $Target -and -not $BuildOnly -and -not $Bundle) {
-    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server-ip [-SshKey key.pem] [-Setup|-Update|-BuildOnly]"
+# -- Validate arguments -------------------------------------------------------
+if ((-not $Target) -and (-not $BuildOnly) -and (-not $Bundle)) {
+    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server [-SshKey key.pem] [-Setup|-Update|-BuildOnly]"
     exit 1
 }
 
-# ── Colour helpers ─────────────────────────────────────────────────────────────
-function Info { param($msg) Write-Host ">> $msg" -ForegroundColor Cyan    }
-function Ok   { param($msg) Write-Host "OK $msg" -ForegroundColor Green   }
+# -- Colour helpers -----------------------------------------------------------
+function Info { param($msg) Write-Host ">> $msg" -ForegroundColor Cyan  }
+function Ok   { param($msg) Write-Host "OK $msg" -ForegroundColor Green }
 function Fail { param($msg) Write-Host "!! $msg" -ForegroundColor Red; exit 1 }
-function Warn { param($msg) Write-Host "** $msg" -ForegroundColor Yellow  }
+function Warn { param($msg) Write-Host "** $msg" -ForegroundColor Yellow }
 
-# ── Detect SSH/SCP tool ────────────────────────────────────────────────────────
+# -- Detect SSH/SCP tool ------------------------------------------------------
 $UsePlink = $false
 $PlinkExe = ""
 $PscpExe  = ""
 
 foreach ($p in @($ScriptDir, "C:\Program Files\PuTTY", "C:\PuTTY", "$env:USERPROFILE\Downloads")) {
-    if (Test-Path (Join-Path $p "plink.exe")) {
-        $PlinkExe = Join-Path $p "plink.exe"
-        $PscpExe  = Join-Path $p "pscp.exe"
+    $candidate = Join-Path $p "plink.exe"
+    if (Test-Path $candidate) {
+        $PlinkExe = $candidate
+        $candidate2 = Join-Path $p "pscp.exe"
+        if (Test-Path $candidate2) { $PscpExe = $candidate2 }
         $UsePlink = $true
         break
     }
 }
+
 if (-not $UsePlink) {
     $found = Get-Command "plink.exe" -ErrorAction SilentlyContinue
-    if ($found) {
+    if ($null -ne $found) {
         $PlinkExe = $found.Source
-        $PscpExe  = (Get-Command "pscp.exe" -ErrorAction SilentlyContinue)?.Source
+        $found2   = Get-Command "pscp.exe" -ErrorAction SilentlyContinue
+        if ($null -ne $found2) { $PscpExe = $found2.Source }
         $UsePlink = $true
     }
 }
@@ -83,21 +89,25 @@ if (-not $UsePlink) {
 if ($UsePlink) {
     Ok "Using PuTTY: $PlinkExe"
 } else {
-    if (-not (Get-Command "ssh" -ErrorAction SilentlyContinue)) {
-        Fail "No SSH client found. Enable OpenSSH Client in Windows Settings → Optional Features, or install PuTTY."
+    if ($null -eq (Get-Command "ssh" -ErrorAction SilentlyContinue)) {
+        Fail "No SSH client found. Enable OpenSSH Client in Windows Settings -> Optional Features, or install PuTTY."
     }
-    if ($SshKey) { Ok "Using OpenSSH with key: $SshKey" } else { Ok "Using OpenSSH (will prompt for password each step)" }
+    if ($SshKey) {
+        Ok "Using OpenSSH with key: $SshKey"
+    } else {
+        Ok "Using OpenSSH (you will be prompted for the password on each step)"
+    }
 }
 
-# ── Collect password for PuTTY password-mode ───────────────────────────────────
+# -- Collect password for PuTTY password-mode ---------------------------------
 $SshPassword = ""
-if ($Target -and $UsePlink -and -not $SshKey) {
+if ($Target -and $UsePlink -and (-not $SshKey)) {
     $SecurePass  = Read-Host "SSH password for $Target" -AsSecureString
     $SshPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
                        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePass))
 }
 
-# ── SSH helpers ────────────────────────────────────────────────────────────────
+# -- SSH helpers --------------------------------------------------------------
 function Invoke-Remote {
     param([string]$Cmd)
     if ($UsePlink) {
@@ -135,9 +145,7 @@ function Send-File {
     if ($LASTEXITCODE -ne 0) { Fail "Transfer failed: $LocalPath" }
 }
 
-# scp -C enables SSH-level compression, no gzip needed on Windows
-
-# ── Step 1: Build images ───────────────────────────────────────────────────────
+# -- Step 1: Build images -----------------------------------------------------
 function Build-Images {
     Info "Building Docker images for linux/amd64 ..."
     Push-Location $ProjectDir
@@ -147,7 +155,7 @@ function Build-Images {
         if ($LASTEXITCODE -ne 0) { Fail "docker compose build failed" }
 
         if ($Bundle) {
-            Info "Building bundled image (with airgap packages) ..."
+            Info "Building bundled image (airgap packages) ..."
             & docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
         }
@@ -158,73 +166,87 @@ function Build-Images {
     Ok "Images built (linux/amd64)"
 }
 
-# ── Step 2: Save images to tar ─────────────────────────────────────────────────
+# -- Step 2: Save images to tar -----------------------------------------------
 function Save-Images {
     Info "Saving images to $Archive ..."
-    $images = if ($Bundle) {
-        "sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest"
+    if ($Bundle) {
+        $images = @("sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest")
     } else {
-        "sabc-compliance-backend:latest", "sabc-compliance-frontend:latest"
+        $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest")
     }
-    & docker save -o $Archive @images
+    & docker save -o $Archive $images
     if ($LASTEXITCODE -ne 0) { Fail "docker save failed" }
 
     $sizeMB = [math]::Round((Get-Item $Archive).Length / 1MB)
-    Ok "Archive ready: $Archive (${sizeMB} MB uncompressed; scp -C compresses during transfer)"
+    Ok "Archive ready: $Archive (${sizeMB} MB)"
+    Warn "Tip: scp -C will compress during transfer -- no gzip needed on Windows."
 }
 
-# ── Step 3: Install Docker on server (first time only) ────────────────────────
+# -- Step 3: Install Docker on server (first time only) -----------------------
 function Setup-Server {
     Info "Installing Docker on $Target ..."
-    $setupScript = @'
-set -e
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  echo "Docker already installed: $(docker --version) / $(docker compose version)"
-  exit 0
-fi
-. /etc/os-release
-case "$ID" in
-  ubuntu|debian)
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq ca-certificates curl gnupg lsb-release
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL "https://download.docker.com/linux/$ID/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-    apt-get update -qq
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    ;;
-  rhel|centos|fedora|amzn)
-    yum install -y docker
-    systemctl enable docker && systemctl start docker
-    COMPOSE_VER=$(curl -sSL https://api.github.com/repos/docker/compose/releases/latest | grep tag_name | cut -d'"' -f4)
-    mkdir -p /usr/local/lib/docker/cli-plugins
-    curl -sSL "https://github.com/docker/compose/releases/download/${COMPOSE_VER}/docker-compose-$(uname -s)-$(uname -m)" \
-      -o /usr/local/lib/docker/cli-plugins/docker-compose
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-    ;;
-  *) echo "Unsupported OS: $ID" && exit 1 ;;
-esac
-systemctl enable docker && systemctl start docker
-[ -n "${SUDO_USER:-}" ] && usermod -aG docker "$SUDO_USER" || true
-echo "Done: $(docker --version) / $(docker compose version)"
-'@
 
+    # Write the setup script to a temp file and pipe it over SSH
     $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
-    $setupScript | Set-Content -Path $tmpScript -Encoding UTF8
-    Get-Content $tmpScript | & $(if ($UsePlink) { $PlinkExe } else { "ssh" }) `
-        $(if ($SshKey) { if ($UsePlink) { "-i"; $SshKey } else { "-i"; $SshKey } }) `
-        $(if (-not $UsePlink) { "-o"; "StrictHostKeyChecking=no" }) `
-        $Target "sudo bash -s"
+    $lines = @(
+        "set -e",
+        "if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then",
+        "  echo 'Docker already installed:' `$(docker --version)",
+        "  exit 0",
+        "fi",
+        ". /etc/os-release",
+        "case `"`$ID`" in",
+        "  ubuntu|debian)",
+        "    export DEBIAN_FRONTEND=noninteractive",
+        "    apt-get update -qq",
+        "    apt-get install -y -qq ca-certificates curl gnupg lsb-release",
+        "    install -m 0755 -d /etc/apt/keyrings",
+        "    curl -fsSL `"https://download.docker.com/linux/`$ID/gpg`" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+        "    chmod a+r /etc/apt/keyrings/docker.gpg",
+        "    echo `"deb [arch=`$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/`$ID `$(lsb_release -cs) stable`" > /etc/apt/sources.list.d/docker.list",
+        "    apt-get update -qq",
+        "    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin",
+        "    ;;",
+        "  rhel|centos|fedora|amzn)",
+        "    yum install -y docker",
+        "    systemctl enable docker",
+        "    systemctl start docker",
+        "    COMPOSE_VER=`$(curl -sSL https://api.github.com/repos/docker/compose/releases/latest | grep tag_name | cut -d'`"' -f4)",
+        "    mkdir -p /usr/local/lib/docker/cli-plugins",
+        "    curl -sSL `"https://github.com/docker/compose/releases/download/`${COMPOSE_VER}/docker-compose-`$(uname -s)-`$(uname -m)`" -o /usr/local/lib/docker/cli-plugins/docker-compose",
+        "    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose",
+        "    ;;",
+        "  *) echo `"Unsupported OS: `$ID`"; exit 1 ;;",
+        "esac",
+        "systemctl enable docker",
+        "systemctl start docker",
+        "echo `"Done: `$(docker --version) / `$(docker compose version)`""
+    )
+    $lines | Set-Content -Path $tmpScript -Encoding UTF8
+
+    if ($UsePlink) {
+        if ($SshKey) {
+            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target "sudo bash -s"
+        } else {
+            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target "sudo bash -s"
+        }
+    } else {
+        if ($SshKey) {
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "sudo bash -s"
+        } else {
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target "sudo bash -s"
+        }
+    }
     Remove-Item $tmpScript -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -ne 0) { Fail "Docker installation failed on $Target" }
     Ok "Docker ready on $Target"
 }
 
-# ── Step 4: Transfer files ─────────────────────────────────────────────────────
+# -- Step 4: Transfer files ---------------------------------------------------
 function Transfer-Files {
     Info "Creating remote directory $RemoteDir ..."
-    Invoke-Remote "sudo mkdir -p $RemoteDir && sudo chown `$(whoami):`$(whoami) $RemoteDir"
+    Invoke-Remote "sudo mkdir -p $RemoteDir"
+    Invoke-Remote "sudo chown `$(whoami):`$(whoami) $RemoteDir"
 
     Send-File $Archive "$RemoteDir/sabc-images.tar"
     Send-File (Join-Path $ProjectDir "docker-compose.yml") "$RemoteDir/docker-compose.yml"
@@ -233,20 +255,25 @@ function Transfer-Files {
     if (Test-Path $envFile) {
         Send-File $envFile "$RemoteDir/.env"
     } else {
-        Warn "No .env found locally — writing default on server (HTTP_PORT=8443)"
-        Invoke-Remote @"
-cat > $RemoteDir/.env << 'EOF'
-HTTP_PORT=8443
-BACKEND_PORT=3000
-EOF
-"@
+        # Write a minimal default .env locally, ship it, then delete the temp
+        Warn "No .env found -- writing default on server (HTTP_PORT=8443)"
+        $tmpEnv = [System.IO.Path]::GetTempFileName()
+        @(
+            "HTTP_PORT=8443",
+            "BACKEND_PORT=3000",
+            "HOST_IP=",
+            "HOST_ADMIN_USER="
+        ) | Set-Content -Path $tmpEnv -Encoding UTF8
+        Send-File $tmpEnv "$RemoteDir/.env"
+        Remove-Item $tmpEnv -ErrorAction SilentlyContinue
     }
 
-    Invoke-Remote "sudo mkdir -p $RemoteDir/backend/packages && sudo chown -R `$(whoami):`$(whoami) $RemoteDir"
+    Invoke-Remote "sudo mkdir -p $RemoteDir/backend/packages"
+    Invoke-Remote "sudo chown -R `$(whoami):`$(whoami) $RemoteDir"
     Ok "Files transferred"
 }
 
-# ── Step 5: Load and start ─────────────────────────────────────────────────────
+# -- Step 5: Load images and start --------------------------------------------
 function Deploy-Platform {
     Info "Loading Docker images on $Target ..."
     Invoke-Remote "sudo docker load -i $RemoteDir/sabc-images.tar"
@@ -254,33 +281,39 @@ function Deploy-Platform {
     Info "Starting platform ..."
     Invoke-Remote "sudo docker compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d"
 
-    # Resolve display host from the SSH target (strip user@)
-    $displayHost = if ($Target -match "@") { $Target.Split("@")[1] } else { $Target }
+    # Resolve display host from SSH target (strip user@)
+    if ($Target -match "@") {
+        $displayHost = $Target.Split("@")[1]
+    } else {
+        $displayHost = $Target
+    }
 
-    # Read the actual HTTP port from the .env we shipped (or default 8443)
+    # Read the HTTP port from local .env if available
     $httpPort = "8443"
     $envFile = Join-Path $ProjectDir ".env"
     if (Test-Path $envFile) {
         $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTP_PORT=" }
-        if ($portLine) { $httpPort = $portLine.Split("=")[1].Trim() }
+        if ($portLine) {
+            $httpPort = $portLine.Split("=")[1].Trim()
+        }
     }
 
     Ok "Platform deployed!"
     Write-Host ""
-    Write-Host "══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host "  SABC Compliance Platform" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  UI:      http://${displayHost}:${httpPort}" -ForegroundColor White
     Write-Host "  API:     http://${displayHost}:${httpPort}/api" -ForegroundColor White
     Write-Host "  Swagger: http://${displayHost}:3000/docs" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Logs:  ssh $Target 'sudo docker compose -f $RemoteDir/docker-compose.yml logs -f'" -ForegroundColor DarkGray
-    Write-Host "  Stop:  ssh $Target 'sudo docker compose -f $RemoteDir/docker-compose.yml down'" -ForegroundColor DarkGray
-    Write-Host "══════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  Logs: ssh $Target sudo docker compose -f $RemoteDir/docker-compose.yml logs -f" -ForegroundColor DarkGray
+    Write-Host "  Stop: ssh $Target sudo docker compose -f $RemoteDir/docker-compose.yml down" -ForegroundColor DarkGray
+    Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host ""
 }
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# -- Main ---------------------------------------------------------------------
 
 if ($BuildOnly -or $Bundle) {
     Build-Images
@@ -294,7 +327,9 @@ if ($BuildOnly -or $Bundle) {
 }
 
 if ($Update) {
-    if (-not (Test-Path $Archive)) { Fail "No archive at $Archive — run without -Update first." }
+    if (-not (Test-Path $Archive)) {
+        Fail "No archive at $Archive -- run without -Update first to build."
+    }
     Transfer-Files
     Deploy-Platform
     exit 0
