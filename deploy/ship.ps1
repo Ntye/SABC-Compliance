@@ -370,7 +370,10 @@ function Get-ComposeCmd {
 function Start-Containers {
     Info "Starting platform ..."
     $compose = Get-ComposeCmd
-    Invoke-Sudo "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
+    # docker-compose 1.29.2 has a ContainerConfig bug when recreating containers
+    # created from newer image formats. Stop and remove old containers first so
+    # compose always does a clean create instead of a recreate.
+    Invoke-Sudo "docker stop sabc-backend sabc-frontend 2>/dev/null; docker rm sabc-backend sabc-frontend 2>/dev/null; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
     Show-URLs
 }
 
@@ -379,15 +382,6 @@ function Deploy-Platform {
     Info "Loading Docker images on $Target ..."
     Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar"
     Start-Containers
-}
-
-    # Read the HTTP port from local .env if available
-    $httpPort = "8443"
-    $envFile = Join-Path $ProjectDir ".env"
-    if (Test-Path $envFile) {
-        $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTP_PORT=" }
-        if ($portLine) { $httpPort = $portLine.Split("=")[1].Trim() }
-    }
 }
 
 # -- Main ---------------------------------------------------------------------
