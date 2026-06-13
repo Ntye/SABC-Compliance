@@ -378,19 +378,22 @@ function Get-ComposeCmd {
 function Start-Containers {
     Info "Starting platform ..."
     $compose = Get-ComposeCmd
-    # Wrap all three operations in a single bash -c so they all run under one
-    # sudo invocation. docker-compose 1.29.2 has a ContainerConfig crash when
-    # recreating containers; stopping/removing first forces a clean create.
-    # "|| true" prevents the stop/rm from aborting the script when containers
-    # do not exist yet (first run).
-    $bashCmd = "docker stop sabc-backend sabc-frontend 2>/dev/null || true; docker rm sabc-backend sabc-frontend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
+    # Wrap both operations in a single bash -c so they run under one sudo
+    # invocation.  docker-compose 1.29.2 crashes with a ContainerConfig KeyError
+    # when it tries to recreate a container whose image was built with a newer
+    # Docker version.  "docker-compose down" finds containers by their compose
+    # project labels (not by name), so it removes them cleanly regardless of
+    # whatever prefixed name docker-compose assigned on the previous run.
+    # A plain "docker stop/rm by name" does NOT work because the existing
+    # container may be named "<hash>_sabc-backend" instead of "sabc-backend".
+    $bashCmd = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir down 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
 
     # Run compose; on failure print the backend log so the crash reason is
     # visible without needing a separate SSH session.
     Invoke-Sudo "bash -c '$bashCmd'" -AllowFail
     if ($LASTEXITCODE -ne 0) {
         Warn "docker-compose up failed -- showing backend logs for diagnosis:"
-        Invoke-Remote "docker logs --tail 60 sabc-backend 2>&1 || true"
+        Invoke-Sudo "docker logs --tail 60 sabc-backend 2>&1 || true" -AllowFail
         Fail "Containers failed to start (see backend logs above)"
     }
 
