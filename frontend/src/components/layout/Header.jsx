@@ -17,6 +17,16 @@ const PAGE_KEY = {
   '/rules':          'header.pageRules',
   '/keys':           'header.pageKeys',
   '/audit':          'header.pageAudit',
+  '/profiles':       'header.pageProfiles',
+}
+
+function resolvePageKey(pathname) {
+  if (PAGE_KEY[pathname]) return PAGE_KEY[pathname]
+  // prefix match — longest wins (e.g. /compliance/123 → pageCompliance)
+  const match = Object.keys(PAGE_KEY)
+    .filter((k) => pathname.startsWith(k + '/'))
+    .sort((a, b) => b.length - a.length)[0]
+  return match ? PAGE_KEY[match] : 'header.pageOverview'
 }
 
 export default function Header() {
@@ -29,7 +39,7 @@ export default function Header() {
   // tick lets us re-render after the modal applies a key (localStorage write)
   const [, setTick] = useState(0)
 
-  const titleKey  = PAGE_KEY[location.pathname] || 'header.pageOverview'
+  const titleKey  = resolvePageKey(location.pathname)
   const title     = t(titleKey)
   const storedKey = getStoredApiKey()
   const maskedKey = storedKey ? storedKey.slice(0, 8) + '••••••••' : ''

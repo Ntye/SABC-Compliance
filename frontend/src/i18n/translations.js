@@ -47,6 +47,7 @@ export const translations = {
       pageOverview: 'Overview', pageNodes: 'Node Registry', pageAddVm: 'Add VM',
       pageInfrastructure: 'Infrastructure', pageJobs: 'Jobs', pageCompliance: 'Compliance',
       pageRules: 'Puppet Rules', pageKeys: 'API Keys', pageAudit: 'Audit Log',
+      pageProfiles: 'Custom Profiles',
     },
     activate: {
       title: 'Override API key',
@@ -343,6 +344,8 @@ export const translations = {
       installInspec: 'Install InSpec',
       installing: 'Installing…',
       inspecInstalled: 'InSpec installed on the platform',
+      scanAll: 'Scan All', scanningAll: 'Scanning…', scanAllDone: '{{n}} node(s) scanned',
+      export: 'Export', exportJson: 'JSON', exportCsv: 'CSV', exportPdf: 'PDF',
     },
     rules:      { title: 'Puppet Rules',comingSoon: 'Compliance rules library — coming in Feature 5.' },
     profiles: {
@@ -512,6 +515,7 @@ export const translations = {
       pageOverview: 'Aperçu', pageNodes: 'Registre des nœuds', pageAddVm: 'Ajouter VM',
       pageInfrastructure: 'Infrastructure', pageJobs: 'Tâches', pageCompliance: 'Conformité',
       pageRules: 'Règles Puppet', pageKeys: 'Clés API', pageAudit: 'Journal d\'audit',
+      pageProfiles: 'Profils personnalisés',
     },
     activate: {
       title: 'Remplacer la clé API',
@@ -807,6 +811,8 @@ export const translations = {
       installInspec: 'Installer InSpec',
       installing: 'Installation…',
       inspecInstalled: 'InSpec installé sur la plateforme',
+      scanAll: 'Tout scanner', scanningAll: 'Scan en cours…', scanAllDone: '{{n}} nœud(s) scannés',
+      export: 'Exporter', exportJson: 'JSON', exportCsv: 'CSV', exportPdf: 'PDF',
     },
     rules:      { title: 'Règles Puppet',     comingSoon: 'Bibliothèque de règles — disponible dans la fonctionnalité 5.' },
     profiles: {

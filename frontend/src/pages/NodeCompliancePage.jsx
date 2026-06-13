@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
@@ -17,6 +17,106 @@ import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
+
+// ── Export helpers ────────────────────────────────────────────────────────────
+
+function downloadBlob(content, type, filename) {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportNodeJson(data, report) {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    node: { hostname: data.hostname, ip: data.ip, os_family: data.os_family },
+    report: {
+      score: report.score, passed_checks: report.passed_checks,
+      failed_checks: report.failed_checks, skipped_checks: report.skipped_checks,
+      source: report.source, collected_at: report.collected_at, profile: report.profile,
+      controls: report.details || [],
+    },
+  }
+  downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
+    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.json`)
+}
+
+function exportNodeCsv(data, report) {
+  const rows = [['Control ID', 'Title', 'Status', 'Severity', 'Section', 'Description', 'Failure Detail']]
+  for (const ctrl of (report.details || [])) {
+    rows.push([ctrl.control_id, ctrl.title, ctrl.status, ctrl.severity || '',
+      ctrl.section || '', ctrl.desc || '', ctrl.message || ''])
+  }
+  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+  downloadBlob(csv, 'text/csv',
+    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.csv`)
+}
+
+function exportNodePdf(data, report) {
+  const rows = (report.details || []).map((ctrl) => {
+    const color = ctrl.status === 'fail' ? '#dc2626' : ctrl.status === 'pass' ? '#16a34a' : '#6b7280'
+    const bg = ctrl.status === 'fail' ? '#fff5f5' : ''
+    return `<tr style="background:${bg}">
+      <td>${ctrl.control_id}</td>
+      <td>${ctrl.title}</td>
+      <td style="color:${color};font-weight:600">${ctrl.status}</td>
+      <td>${ctrl.severity || ''}</td>
+      <td>${ctrl.section || ''}</td>
+    </tr>`
+  }).join('')
+  const scoreColor = report.score >= 90 ? '#16a34a' : report.score >= 70 ? '#f59e0b' : '#dc2626'
+  const html = `<!DOCTYPE html><html><head><title>SABC — ${data.hostname}</title>
+<style>
+  body{font-family:sans-serif;font-size:11px;margin:24px}
+  h2{margin:0 0 4px}.meta{color:#555;margin-bottom:16px}
+  .score{font-size:22px;font-weight:700;color:${scoreColor}}
+  table{width:100%;border-collapse:collapse;margin-top:12px}
+  th,td{border:1px solid #e5e7eb;padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:#f9fafb;font-size:10px;font-weight:600;text-transform:uppercase}
+  @media print{body{margin:0}}
+</style></head><body>
+<h2>SABC Compliance Report — ${data.hostname}</h2>
+<div class="meta">
+  IP: ${data.ip} · OS: ${data.os_family} ·
+  Score: <span class="score">${report.score}%</span> ·
+  ${report.passed_checks} passed · ${report.failed_checks} failed ·
+  Scanned: ${new Date(report.collected_at).toLocaleString()}
+</div>
+<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Severity</th><th>Section</th></tr></thead>
+<tbody>${rows}</tbody></table></body></html>`
+  const win = window.open('', '_blank')
+  if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
+}
+
+function ExportMenu({ nodeData, report, t }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  function close() { setOpen(false) }
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50"
+      >
+        <Download size={14} />
+        {t('compliance.export')}
+        <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={close} />
+          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-36 py-1 text-[12px]">
+            <button onClick={() => { exportNodeJson(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportJson')}</button>
+            <button onClick={() => { exportNodeCsv(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportCsv')}</button>
+            <button onClick={() => { exportNodePdf(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportPdf')}</button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af' }
 const SEV = { high: '#dc2626', medium: '#f59e0b', low: '#3b82f6', info: '#9ca3af' }
@@ -425,6 +525,7 @@ export default function NodeCompliancePage() {
           {data && <p className="text-[12px] text-gray-400">{data.ip} · {data.os_family}</p>}
         </div>
         <div className="flex items-center gap-2">
+          {report && data && <ExportMenu nodeData={data} report={report} t={t} />}
           <button
             onClick={runScan}
             disabled={scanning}

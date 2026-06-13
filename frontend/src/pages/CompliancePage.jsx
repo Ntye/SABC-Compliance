@@ -1,19 +1,18 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts'
-import { ShieldCheck, RefreshCw, ChevronRight, AlertTriangle } from 'lucide-react'
-import { getComplianceSummary } from '../lib/api.js'
+import { ShieldCheck, RefreshCw, ChevronRight, AlertTriangle, Play, Download, ChevronDown } from 'lucide-react'
+import { getComplianceSummary, collectNodeCompliance } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
+import { useToast } from '../context/ToastContext.jsx'
 import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af', high: '#dc2626' }
 
-// Pick the report that best represents a node's security posture.
-// InSpec is the structured scan; fall back to the CIS shell check, then anything.
 function primaryReport(node) {
   const reports = node.reports || []
   return (
@@ -47,9 +46,132 @@ function KpiCard({ label, value, accent, icon: Icon }) {
   )
 }
 
+// ── Export helpers ────────────────────────────────────────────────────────────
+
+function downloadBlob(content, type, filename) {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportFleetJson(nodes) {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    nodes: nodes.map((node) => {
+      const r = primaryReport(node)
+      return {
+        node_id: node.node_id,
+        hostname: node.hostname,
+        ip: node.ip,
+        os_family: node.os_family,
+        score: r?.score ?? null,
+        passed_checks: r?.passed_checks ?? null,
+        failed_checks: r?.failed_checks ?? null,
+        skipped_checks: r?.skipped_checks ?? null,
+        source: r?.source ?? null,
+        collected_at: r?.collected_at ?? null,
+      }
+    }),
+  }
+  downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
+    `sabc-fleet-${new Date().toISOString().slice(0, 10)}.json`)
+}
+
+function exportFleetCsv(nodes) {
+  const rows = [['Node', 'IP', 'OS', 'Score (%)', 'Passed', 'Failed', 'Skipped', 'Source', 'Last Scan']]
+  for (const node of nodes) {
+    const r = primaryReport(node)
+    rows.push([
+      node.hostname, node.ip, node.os_family,
+      r ? r.score : '', r ? r.passed_checks : '', r ? r.failed_checks : '',
+      r ? (r.skipped_checks || 0) : '', r ? r.source : '',
+      r ? new Date(r.collected_at).toISOString() : '',
+    ])
+  }
+  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+  downloadBlob(csv, 'text/csv', `sabc-fleet-${new Date().toISOString().slice(0, 10)}.csv`)
+}
+
+function exportFleetPdf(nodes, title) {
+  const rows = nodes.map((node) => {
+    const r = primaryReport(node)
+    const score = r ? r.score : null
+    const color = score === null ? '#6b7280' : score >= 90 ? '#16a34a' : score >= 70 ? '#f59e0b' : '#dc2626'
+    return `<tr>
+      <td><b>${node.hostname}</b><br/><small style="color:#666">${node.ip}</small></td>
+      <td><span style="color:${color};font-weight:700">${score !== null ? score + '%' : '—'}</span></td>
+      <td>${r ? `<span style="color:#16a34a">${r.passed_checks}✓</span> <span style="color:#dc2626">${r.failed_checks}✗</span>` : '—'}</td>
+      <td>${r ? r.source : '—'}</td>
+      <td>${r ? new Date(r.collected_at).toLocaleString() : '—'}</td>
+    </tr>`
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><title>${title}</title>
+<style>
+  body{font-family:sans-serif;font-size:12px;margin:24px}
+  h2{margin:0 0 4px}p{color:#666;margin:0 0 16px}
+  table{width:100%;border-collapse:collapse}
+  th,td{border:1px solid #e5e7eb;padding:6px 10px;text-align:left;vertical-align:top}
+  th{background:#f9fafb;font-size:10px;font-weight:600;text-transform:uppercase}
+  @media print{body{margin:0}}
+</style></head><body>
+<h2>${title}</h2><p>Generated: ${new Date().toLocaleString()} · ${nodes.length} node(s)</p>
+<table><thead><tr><th>Node</th><th>Score</th><th>Controls</th><th>Source</th><th>Last Scan</th></tr></thead>
+<tbody>${rows}</tbody></table></body></html>`
+
+  const win = window.open('', '_blank')
+  if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
+}
+
+// ── Export dropdown ───────────────────────────────────────────────────────────
+
+function ExportMenu({ nodes, t }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  function close() { setOpen(false) }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-[12px] text-gray-600 hover:bg-gray-50"
+      >
+        <Download size={13} />
+        {t('compliance.export')}
+        <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={close} />
+          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-36 py-1 text-[12px]">
+            <button onClick={() => { exportFleetJson(nodes); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">
+              {t('compliance.exportJson')}
+            </button>
+            <button onClick={() => { exportFleetCsv(nodes); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">
+              {t('compliance.exportCsv')}
+            </button>
+            <button onClick={() => { exportFleetPdf(nodes, t('compliance.title')); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">
+              {t('compliance.exportPdf')}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export default function CompliancePage() {
   const t = useT()
+  const toast = useToast()
   const { data, loading, refetch } = useApi(getComplianceSummary)
+  const [scanningAll, setScanningAll] = useState(false)
 
   const stats = useMemo(() => {
     const nodes = data || []
@@ -82,6 +204,21 @@ export default function CompliancePage() {
 
   const hasData = stats.scanned.length > 0
 
+  async function scanAll() {
+    if (!stats.nodes.length) return
+    setScanningAll(true)
+    try {
+      const results = await Promise.allSettled(stats.nodes.map((n) => collectNodeCompliance(n.node_id)))
+      const done = results.filter((r) => r.status === 'fulfilled').length
+      toast(t('compliance.scanAllDone', { n: done }), 'success')
+      await refetch()
+    } catch {
+      toast(t('compliance.scanAllDone', { n: 0 }), 'error')
+    } finally {
+      setScanningAll(false)
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -93,13 +230,24 @@ export default function CompliancePage() {
           </h2>
           <p className="text-[13px] text-gray-500 mt-0.5">{t('compliance.subtitle')}</p>
         </div>
-        <button
-          onClick={refetch}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-[12px] text-gray-600 hover:bg-gray-50"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          {t('common.refresh') || 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={refetch}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-[12px] text-gray-600 hover:bg-gray-50"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            {t('common.refresh') || 'Refresh'}
+          </button>
+          <ExportMenu nodes={stats.nodes} t={t} />
+          <button
+            onClick={scanAll}
+            disabled={scanningAll || !stats.nodes.length}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-brand text-white text-[12px] font-medium hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Play size={13} className={scanningAll ? 'animate-pulse' : ''} />
+            {scanningAll ? t('compliance.scanningAll') : t('compliance.scanAll')}
+          </button>
+        </div>
       </div>
 
       {/* KPI cards */}

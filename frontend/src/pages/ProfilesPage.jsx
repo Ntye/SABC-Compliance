@@ -69,16 +69,16 @@ export default function ProfilesPage() {
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[18px] font-semibold text-gray-900">{t('profiles.title')}</h2>
           <p className="text-[13px] text-gray-500 mt-0.5">{t('profiles.subtitle')}</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors"
+          className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors flex-shrink-0"
         >
           <Plus size={14} />
           {t('profiles.newProfile')}
@@ -89,61 +89,77 @@ export default function ProfilesPage() {
       {error && <div className="text-[13px] text-red-600 bg-red-50 rounded-lg p-4">{error}</div>}
 
       {!loading && !error && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {(profiles || []).map((p) => (
-            <div
-              key={p.id}
-              onClick={() => navigate(`/profiles/${p.id}`)}
-              className="group bg-white border border-gray-100 rounded-xl p-5 hover:border-brand/40 hover:shadow-sm cursor-pointer transition-all"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-9 h-9 rounded-lg bg-brand/10 flex items-center justify-center flex-shrink-0">
-                    <FileCode size={17} className="text-brand" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-[14px] font-semibold text-gray-900 truncate">{p.name}</h3>
-                      {p.source === 'builtin'
-                        ? <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
-                        : <span className={badge('gray')}>{t('profiles.custom')}</span>}
-                    </div>
-                    <div className="text-[11px] text-gray-400 mt-0.5">v{p.version} · {p.os_family}</div>
-                  </div>
-                </div>
-                <ChevronRight size={16} className="text-gray-300 group-hover:text-brand transition-colors flex-shrink-0" />
-              </div>
-
-              {p.description && (
-                <p className="text-[12px] text-gray-500 mt-3 line-clamp-2">{p.description}</p>
-              )}
-
-              <div className="flex items-center gap-4 mt-4 pt-3 border-t border-gray-50">
-                <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
-                  <ListChecks size={13} className="text-gray-400" />
-                  {p.control_count} {t('profiles.controls')}
-                </span>
-                <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
-                  <Layers size={13} className="text-gray-400" />
-                  {p.section_count} {t('profiles.sections')}
-                </span>
-                {p.source !== 'builtin' && (
-                  <button
-                    onClick={(e) => handleDelete(p, e)}
-                    className="ml-auto p-1.5 text-gray-300 hover:text-red-500 rounded transition-colors"
-                    title={t('common.delete')}
+        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+          {(profiles || []).length === 0 ? (
+            <div className="py-16 text-center text-[13px] text-gray-400">{t('profiles.empty')}</div>
+          ) : (
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-5 py-2.5">{t('profiles.name')}</th>
+                  <th className="text-left px-5 py-2.5">{t('profiles.osFamily')}</th>
+                  <th className="text-left px-5 py-2.5 hidden sm:table-cell">Version</th>
+                  <th className="text-left px-5 py-2.5">{t('profiles.controls')} / {t('profiles.sections')}</th>
+                  <th className="px-5 py-2.5" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {(profiles || []).map((p) => (
+                  <tr
+                    key={p.id}
+                    onClick={() => navigate(`/profiles/${p.id}`)}
+                    className="hover:bg-gray-50/50 cursor-pointer group"
                   >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-
-          {(profiles || []).length === 0 && (
-            <div className="col-span-full text-center py-16 text-[13px] text-gray-400">
-              {t('profiles.empty')}
-            </div>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-brand/10 flex items-center justify-center flex-shrink-0">
+                          <FileCode size={15} className="text-brand" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-gray-800">{p.name}</span>
+                            {p.source === 'builtin'
+                              ? <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
+                              : <span className={badge('gray')}>{t('profiles.custom')}</span>}
+                          </div>
+                          {p.description && (
+                            <div className="text-[11px] text-gray-400 truncate max-w-[340px] mt-0.5">{p.description}</div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 text-gray-600">{p.os_family}</td>
+                    <td className="px-5 py-3 text-gray-400 hidden sm:table-cell">v{p.version}</td>
+                    <td className="px-5 py-3">
+                      <span className="flex items-center gap-3 text-gray-600">
+                        <span className="flex items-center gap-1">
+                          <ListChecks size={12} className="text-gray-400" />
+                          <b>{p.control_count}</b>
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Layers size={12} className="text-gray-400" />
+                          <b>{p.section_count}</b>
+                        </span>
+                      </span>
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        {p.source !== 'builtin' && (
+                          <button
+                            onClick={(e) => handleDelete(p, e)}
+                            className="p-1.5 text-gray-300 hover:text-red-500 rounded transition-colors"
+                            title={t('common.delete')}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                        <ChevronRight size={15} className="text-gray-300 group-hover:text-brand transition-colors" />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}
@@ -158,6 +174,7 @@ export default function ProfilesPage() {
                 autoFocus
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
                 placeholder={t('profiles.namePlaceholder')}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-brand"
               />
