@@ -509,7 +509,7 @@ export default function NodeDetailPage() {
             <ShieldCheck size={15} className="text-brand" />{t('nodeDetail.compliance.title')}
           </h3>
           <div className="flex items-center gap-2">
-            <button onClick={handleCollect} disabled={collecting || !enrolled} title={!enrolled ? t('nodeDetail.compliance.enrollFirst') : ''}
+            <button onClick={handleCollect} disabled={collecting}
               className={`${btnSm(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
               {collecting ? <Spinner size={12} /> : <RefreshCw size={12} />}{t('nodeDetail.compliance.collect')}
             </button>
@@ -520,12 +520,7 @@ export default function NodeDetailPage() {
           </div>
         </div>
 
-        {!enrolled && (
-          <div className="flex items-start gap-2 px-3 py-2.5 bg-blue-50 rounded-lg mb-4">
-            <AlertTriangle size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
-            <p className="text-[11px] text-blue-700">{t('nodeDetail.compliance.enrollFirst')}</p>
-          </div>
-        )}
+
 
         {reports.length === 0 ? (
           <EmptyState icon={ShieldCheck} title={t('nodeDetail.compliance.noReports')} description={t('nodeDetail.compliance.noReportsDesc')} />
