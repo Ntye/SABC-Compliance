@@ -172,6 +172,8 @@ export default function CompliancePage() {
   const toast = useToast()
   const { data, loading, refetch } = useApi(getComplianceSummary)
   const [scanningAll, setScanningAll] = useState(false)
+  const [scanDone, setScanDone] = useState(0)
+  const [scanTotal, setScanTotal] = useState(0)
 
   const stats = useMemo(() => {
     const nodes = data || []
@@ -206,16 +208,25 @@ export default function CompliancePage() {
 
   async function scanAll() {
     if (!stats.nodes.length) return
+    const nodes = stats.nodes
     setScanningAll(true)
+    setScanDone(0)
+    setScanTotal(nodes.length)
     try {
-      const results = await Promise.allSettled(stats.nodes.map((n) => collectNodeCompliance(n.node_id)))
-      const done = results.filter((r) => r.status === 'fulfilled').length
+      let done = 0
+      await Promise.allSettled(nodes.map(async (n) => {
+        try { await collectNodeCompliance(n.node_id) } catch { /* ignore individual failure */ }
+        done += 1
+        setScanDone(done)
+      }))
       toast(t('compliance.scanAllDone', { n: done }), 'success')
       await refetch()
     } catch {
       toast(t('compliance.scanAllDone', { n: 0 }), 'error')
     } finally {
       setScanningAll(false)
+      setScanDone(0)
+      setScanTotal(0)
     }
   }
 
@@ -249,6 +260,29 @@ export default function CompliancePage() {
           </button>
         </div>
       </div>
+
+      {/* Scan All progress bar */}
+      {scanningAll && scanTotal > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 px-5 py-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[12px] font-medium text-gray-700">
+              {t('compliance.scanningAllProgress', { done: scanDone, total: scanTotal })}
+            </span>
+            <span className="text-[12px] font-semibold text-brand tabular-nums">
+              {Math.round((scanDone / scanTotal) * 100)}%
+            </span>
+          </div>
+          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${Math.round((scanDone / scanTotal) * 100)}%`,
+                background: 'linear-gradient(90deg, #2563eb 0%, #7c3aed 100%)',
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

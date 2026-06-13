@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
@@ -413,7 +413,29 @@ export default function NodeCompliancePage() {
   const toast = useToast()
   const { data, loading, refetch } = useApi(() => getNodeCompliance(id), { deps: [id] })
   const { data: inspecStatus, refetch: refetchInspec } = useApi(getInspecStatus)
-  const [scanning, setScanning] = useState(false)
+  const [scanning,    setScanning]    = useState(false)
+  const [scanPct,     setScanPct]     = useState(0)
+  const scanStartRef = useRef(null)
+  const scanTimerRef = useRef(null)
+
+  useEffect(() => {
+    if (scanning) {
+      scanStartRef.current = Date.now()
+      setScanPct(0)
+      scanTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - scanStartRef.current
+        // Asymptotic: quickly reaches ~60%, slows toward 99%
+        setScanPct(Math.min(99, Math.round(99 * (1 - Math.exp(-elapsed / 22000)))))
+      }, 250)
+    } else {
+      clearInterval(scanTimerRef.current)
+      if (scanStartRef.current !== null) {
+        setScanPct(100)
+        setTimeout(() => { setScanPct(0); scanStartRef.current = null }, 900)
+      }
+    }
+    return () => clearInterval(scanTimerRef.current)
+  }, [scanning])
   const [installing, setInstalling] = useState(false)
   const [remediating, setRemediating] = useState(false)
   const [filter, setFilter] = useState('all')
@@ -545,6 +567,29 @@ export default function NodeCompliancePage() {
           </button>
         </div>
       </div>
+
+      {/* Scan progress bar */}
+      {(scanning || scanPct > 0) && (
+        <div className="bg-white rounded-xl border border-gray-100 px-5 py-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[12px] font-medium text-gray-700">
+              {scanning ? t('compliance.scanInProgress') : t('compliance.scanComplete')}
+            </span>
+            <span className="text-[12px] font-semibold text-brand tabular-nums">{scanPct}%</span>
+          </div>
+          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${scanPct}%`,
+                background: scanPct === 100
+                  ? '#16a34a'
+                  : 'linear-gradient(90deg, #2563eb 0%, #7c3aed 100%)',
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* InSpec not installed on the platform — offer to install it right here */}
       {inspecStatus && !inspecInstalled && (
