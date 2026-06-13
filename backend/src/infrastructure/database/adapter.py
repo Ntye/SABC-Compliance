@@ -1001,6 +1001,24 @@ class ProfileRepository(IProfileRepository):
             await s.execute(delete(profile_controls_table).where(profile_controls_table.c.id == control_id))
             await s.commit()
 
+    async def search_controls(self, query: str, limit: int = 40) -> list[ProfileControl]:
+        async with self._session() as s:
+            q = f"%{query.lower()}%"
+            stmt = (
+                select(profile_controls_table)
+                .where(
+                    (func.lower(profile_controls_table.c.title).like(q)) |
+                    (func.lower(profile_controls_table.c.section_id).like(q)) |
+                    (func.lower(profile_controls_table.c.section).like(q)) |
+                    (func.lower(profile_controls_table.c.cis_id).like(q))
+                )
+                .where(profile_controls_table.c.kind == "control")
+                .order_by(profile_controls_table.c.section_id)
+                .limit(limit)
+            )
+            rows = (await s.execute(stmt)).all()
+            return [self._control_to_entity(r) for r in rows]
+
 
 # ── Platform Config Repository ────────────────────────────────────────────────
 

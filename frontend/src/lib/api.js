@@ -402,6 +402,10 @@ export async function deleteProfileControl(profileId, controlId) {
   return request('DELETE', `/profiles/${profileId}/controls/${controlId}`)
 }
 
+export async function searchAllControls(q, limit = 40) {
+  return request('GET', `/profiles/-/controls?q=${encodeURIComponent(q)}&limit=${limit}`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {

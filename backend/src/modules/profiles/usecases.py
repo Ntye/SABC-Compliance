@@ -207,3 +207,9 @@ class ProfileUseCases:
         if not control:
             raise ValidationError("Control not found.")
         await self._repo.delete_control(control_id)
+
+    async def search_controls(self, query: str, limit: int = 40) -> list[ProfileControl]:
+        """Search controls across all profiles — used by the reuse picker in the UI."""
+        if not query or len(query.strip()) < 2:
+            return []
+        return await self._repo.search_controls(query.strip(), limit)

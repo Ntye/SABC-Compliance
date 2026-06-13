@@ -371,6 +371,11 @@ export const translations = {
       controlSaved: 'Control updated', controlAdded: 'Control added', controlDeleted: 'Control removed',
       saveFailed: 'Could not save control',
       confirmDeleteControl: 'Remove the control "{{name}}"?',
+      addSection: 'Add Section',
+      searchExisting: 'Reuse existing control as template',
+      searchExistingPlaceholder: 'Search by title, section ID, CIS…',
+      searching: 'Searching…',
+      noExistingMatch: 'No matching controls in other profiles.',
     },
     audit:      { title: 'Audit Log',   comingSoon: 'HTTP audit log — coming in Feature 6.' },
     settings: {
@@ -830,6 +835,11 @@ export const translations = {
       controlSaved: 'Contrôle mis à jour', controlAdded: 'Contrôle ajouté', controlDeleted: 'Contrôle supprimé',
       saveFailed: 'Impossible d\'enregistrer le contrôle',
       confirmDeleteControl: 'Supprimer le contrôle « {{name}} » ?',
+      addSection: 'Ajouter une section',
+      searchExisting: 'Réutiliser un contrôle existant comme modèle',
+      searchExistingPlaceholder: 'Rechercher par titre, ID section, CIS…',
+      searching: 'Recherche…',
+      noExistingMatch: 'Aucun contrôle correspondant dans les autres profils.',
     },
     audit:      { title: 'Journal d\'audit',  comingSoon: 'Journal d\'audit HTTP — disponible dans la fonctionnalité 6.' },
     settings: {

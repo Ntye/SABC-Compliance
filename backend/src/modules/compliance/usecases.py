@@ -146,12 +146,6 @@ class CollectNodeComplianceUseCase:
     async def execute(self, id_or_hostname: str, auto_install: bool = True) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
-        if not (node.puppet_enrolled or node.wazuh_enrolled):
-            raise ValidationError(
-                "Node is not enrolled with Puppet or Wazuh yet — enroll it from the "
-                "Infrastructure page before collecting compliance data."
-            )
-
         # Ensure InSpec is present on the controller; install on demand so the
         # operator can scan directly from the compliance page.
         if not self._inspec_available():

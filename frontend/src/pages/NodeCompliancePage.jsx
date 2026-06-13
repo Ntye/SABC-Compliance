@@ -32,8 +32,6 @@ const CIS_SECTIONS = {
 const FRAMEWORKS = [
   { key: 'all', label: 'All' },
   { key: 'cis', label: 'CIS' },
-  { key: 'iso27001', label: 'ISO 27001' },
-  { key: 'pci_dss', label: 'PCI-DSS' },
 ]
 
 function sectionOf(ctrl) {

@@ -106,6 +106,16 @@ async def list_profiles(principal: AuthPrincipal = Depends(get_current_principal
     return [_profile_summary(p) for p in profiles]
 
 
+@router.get("/-/controls", summary="Search controls across all profiles (reuse picker)")
+async def search_controls(
+    q: str = "",
+    limit: int = 40,
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    controls = await _uc.search_controls(q, min(limit, 100))
+    return [_control_dict(c) for c in controls]
+
+
 @router.post("", summary="Create a custom compliance profile")
 async def create_profile(body: ProfileCreateRequest, principal: AuthPrincipal = Depends(require_operator)):
     try:
