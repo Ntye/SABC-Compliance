@@ -8,7 +8,7 @@ import {
 import {
   getProfile, updateProfile, addProfileControl,
   updateProfileControl, deleteProfileControl, searchAllControls,
-  getControlHistory,
+  getControlHistory, importInspecCommands,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -530,9 +530,10 @@ export default function ProfileDetailPage() {
   const toast = useToast()
   const { data: profile, loading, error, refetch } = useApi(() => getProfile(id), { deps: [id] })
 
-  const [query,   setQuery]   = useState('')
-  const [editing, setEditing] = useState(null)
-  const [saving,  setSaving]  = useState(false)
+  const [query,      setQuery]      = useState('')
+  const [editing,    setEditing]    = useState(null)
+  const [saving,     setSaving]     = useState(false)
+  const [importing,  setImporting]  = useState(false)
 
   const tree = useMemo(
     () => buildTree(profile?.controls || [], query),
@@ -607,7 +608,26 @@ export default function ProfileDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+            {profile.source === 'builtin' && (
+              <button
+                onClick={async () => {
+                  setImporting(true)
+                  try {
+                    const r = await importInspecCommands(id)
+                    toast(t('profiles.importDone', { n: r.updated }), 'success')
+                    refetch()
+                  } catch (e) {
+                    toast(e.message || t('profiles.importFailed'), 'error')
+                  } finally { setImporting(false) }
+                }}
+                disabled={importing}
+                className="flex items-center gap-1.5 border border-brand/30 bg-brand/5 text-brand text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-brand/10 disabled:opacity-50"
+              >
+                {importing ? <Spinner size={12} /> : <History size={13} />}
+                {importing ? t('profiles.importing') : t('profiles.importInspec')}
+              </button>
+            )}
             <button
               onClick={() => openAdd({ kind: 'section' })}
               className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"

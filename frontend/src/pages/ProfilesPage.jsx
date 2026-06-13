@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, X, FileCode, Layers, ListChecks, Lock, Trash2, ChevronRight } from 'lucide-react'
+import { Plus, X, FileCode, Layers, ListChecks, Lock, Trash2, Pencil } from 'lucide-react'
 import { listProfiles, createProfile, deleteProfile } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -143,7 +143,7 @@ export default function ProfilesPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-end gap-1.5">
                         {p.source !== 'builtin' && (
                           <button
                             onClick={(e) => handleDelete(p, e)}
@@ -153,7 +153,13 @@ export default function ProfilesPage() {
                             <Trash2 size={14} />
                           </button>
                         )}
-                        <ChevronRight size={15} className="text-gray-300 group-hover:text-brand transition-colors" />
+                        <button
+                          onClick={() => navigate(`/profiles/${p.id}`)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-brand border border-brand/25 bg-brand/5 rounded-lg hover:bg-brand/10 transition-colors whitespace-nowrap"
+                        >
+                          <Pencil size={11} />
+                          {t('profiles.viewControls')}
+                        </button>
                       </div>
                     </td>
                   </tr>

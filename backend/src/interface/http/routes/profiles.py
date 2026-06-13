@@ -191,3 +191,35 @@ async def get_control_history(
         {"id": e["id"], "saved_at": e["saved_at"], "snapshot": _json.loads(e["snapshot"])}
         for e in entries
     ]
+
+
+@router.post("/{profile_id}/import-inspec", summary="Populate check_command from bundled InSpec profile")
+async def import_inspec_commands(
+    profile_id: str,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """
+    Reads the bundled InSpec .rb control files and writes the matching Ruby
+    snippet into check_command for every referential control that has an empty
+    check_command.  Controls that already have a check_command are never
+    overwritten — edit history ensures no data is lost.
+    """
+    from modules.profiles.inspec_import import load_all_inspec_controls, match_controls
+    p = await _uc.get_profile(profile_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+
+    inspec_controls = load_all_inspec_controls()
+    seed_controls = [
+        {"id": c.id, "cis_id": c.cis_id, "title": c.title}
+        for c in p.controls
+        if c.kind == "control" and not c.check_command
+    ]
+    mapping = match_controls(inspec_controls, seed_controls)
+
+    updated = 0
+    for ctrl_id, code in mapping.items():
+        await _uc.update_control(ctrl_id, {"check_command": code})
+        updated += 1
+
+    return {"updated": updated, "total_inspec": len(inspec_controls), "total_seed": len(seed_controls)}
