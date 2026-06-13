@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { getGatewayUrl, logout, setGatewayUrl } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
-import sabcLogo from '../../assets/sabc-logo.png'
+import sabcLogo from '../../assets/bdc-logo.png'
 
 function SectionHeader({ label, collapsible, open, onToggle }) {
   return (
@@ -75,13 +75,12 @@ export default function Sidebar() {
   return (
     <aside className="w-[220px] flex-shrink-0 bg-sidebar-bg flex flex-col h-full">
       {/* Logo */}
-      <div className="px-4 pt-4 pb-3 border-b border-white/5">
+      <div className="px-4 pt-5 pb-4 border-b border-white/5 flex flex-col items-center">
         <img
           src={sabcLogo}
-          alt="SABC"
-          className="h-9 w-9 rounded-full border border-gray-400/40 object-cover"
+          alt="Boissons du Cameroun"
+          className="w-[148px] object-contain"
         />
-        <div className="text-[10px] text-gray-500 mt-1.5 pl-0.5">{t('nav.platform')}</div>
       </div>
 
       {/* Nav */}
