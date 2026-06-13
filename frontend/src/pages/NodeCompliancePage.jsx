@@ -20,9 +20,8 @@ import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af' }
 const SEV = { high: '#dc2626', medium: '#f59e0b', low: '#3b82f6', info: '#9ca3af' }
+const SEV_W = { high: 0, medium: 1, low: 2, info: 3 }
 
-// CIS Benchmark top-level sections — used to group controls when the backend
-// hasn't already tagged a `section` (e.g. older stored reports).
 const CIS_SECTIONS = {
   1: 'Initial Setup', 2: 'Services', 3: 'Network Configuration',
   4: 'Logging & Auditing', 5: 'Access, Authentication & Authorization',
@@ -39,6 +38,98 @@ function sectionOf(ctrl) {
   const cis = ctrl.frameworks?.cis || (/^\d/.test(ctrl.control_id || '') ? ctrl.control_id : '')
   const top = String(cis).split('.')[0]
   return CIS_SECTIONS[top] ? `${top} · ${CIS_SECTIONS[top]}` : 'Other'
+}
+
+function numParts(cid) {
+  return (cid || '').split('.').filter((p) => /^\d+$/.test(p))
+}
+
+function ctrlCounts(controls) {
+  let passed = 0, failed = 0
+  for (const c of controls) {
+    if (c.status === 'pass') passed++
+    else if (c.status === 'fail') failed++
+  }
+  return { passed, failed, total: controls.length }
+}
+
+function mergeCounts(...cs) {
+  return cs.reduce(
+    (a, c) => ({ passed: a.passed + c.passed, failed: a.failed + c.failed, total: a.total + c.total }),
+    { passed: 0, failed: 0, total: 0 },
+  )
+}
+
+// Build a 3-level hierarchy from compliance controls using their numeric control_id parts.
+// Level 1 (TopGroup)  : sectionOf(ctrl)  e.g. "1 · Initial Setup"
+// Level 2 (Section)   : first 2 numeric parts  e.g. "1.1"
+// Level 3 (Subsection): first 3 numeric parts  e.g. "1.1.1"
+// Controls sit inside subsections.  Any level whose key is '__flat' renders without a header.
+function buildComplianceTree(controls) {
+  const byStatus = (a, b) => {
+    const sa = a.status === 'fail' ? 0 : a.status === 'skip' ? 2 : 1
+    const sb = b.status === 'fail' ? 0 : b.status === 'skip' ? 2 : 1
+    return sa !== sb ? sa - sb : (SEV_W[a.severity] ?? 9) - (SEV_W[b.severity] ?? 9)
+  }
+
+  const sorted = [...controls].sort((a, b) => {
+    const ap = numParts(a.control_id), bp = numParts(b.control_id)
+    for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+      const d = parseInt(ap[i] ?? '0') - parseInt(bp[i] ?? '0')
+      if (d) return d
+    }
+    return (a.control_id || '').localeCompare(b.control_id || '')
+  })
+
+  function numSort(items) {
+    return [...items].sort((a, b) => {
+      if (a.key === '__flat') return -1
+      if (b.key === '__flat') return 1
+      const ak = a.key.split('.').map(Number)
+      const bk = b.key.split('.').map(Number)
+      for (let i = 0; i < Math.max(ak.length, bk.length); i++) {
+        const d = (ak[i] || 0) - (bk[i] || 0)
+        if (d) return d
+      }
+      return 0
+    })
+  }
+
+  const topMap = new Map()
+
+  for (const ctrl of sorted) {
+    const topName = sectionOf(ctrl)
+    if (!topMap.has(topName)) topMap.set(topName, { name: topName, secMap: new Map() })
+    const top = topMap.get(topName)
+
+    const parts = numParts(ctrl.control_id)
+    const secKey = parts.length >= 3 ? parts.slice(0, 2).join('.') : '__flat'
+    if (!top.secMap.has(secKey))
+      top.secMap.set(secKey, { key: secKey, label: secKey === '__flat' ? '' : secKey, ssMap: new Map() })
+    const sec = top.secMap.get(secKey)
+
+    const ssKey = parts.length >= 4 ? parts.slice(0, 3).join('.') : '__flat'
+    if (!sec.ssMap.has(ssKey))
+      sec.ssMap.set(ssKey, { key: ssKey, label: ssKey === '__flat' ? '' : ssKey, controls: [] })
+    sec.ssMap.get(ssKey).controls.push(ctrl)
+  }
+
+  const groups = []
+  for (const [, top] of topMap) {
+    groups.push({
+      name: top.name,
+      sections: numSort([...top.secMap.values()]).map((sec) => ({
+        ...sec,
+        subsections: numSort([...sec.ssMap.values()]).map((ss) => ({
+          ...ss,
+          controls: [...ss.controls].sort(byStatus),
+        })),
+      })),
+    })
+  }
+
+  groups.sort((a, b) => (parseInt(a.name) || 999) - (parseInt(b.name) || 999))
+  return groups
 }
 
 function primaryReport(reports) {
@@ -63,7 +154,10 @@ function ControlRow({ ctrl, t }) {
   const sev = ctrl.severity || 'info'
   return (
     <div className="border-b border-gray-50 last:border-0">
-      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50/50 text-left">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50/50 text-left"
+      >
         <StatusIcon status={ctrl.status} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -92,7 +186,9 @@ function ControlRow({ ctrl, t }) {
         <div className="px-5 pb-3 pl-[42px] space-y-1.5">
           {ctrl.desc && <p className="text-[12px] text-gray-500">{ctrl.desc}</p>}
           {ctrl.message && (
-            <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">{ctrl.message}</pre>
+            <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">
+              {ctrl.message}
+            </pre>
           )}
         </div>
       )}
@@ -109,24 +205,104 @@ function Panel({ title, children, className = '' }) {
   )
 }
 
-function SectionGroup({ section, controls, t }) {
+// Level 3: sub-subsection (e.g. "1.1.1") — __flat renders controls directly
+function ComplianceSubsection({ ss, t }) {
   const [open, setOpen] = useState(true)
-  const passed = controls.filter((c) => c.status === 'pass').length
-  const failed = controls.filter((c) => c.status === 'fail').length
+
+  if (ss.key === '__flat') {
+    return <>{ss.controls.map((c) => <ControlRow key={c.control_id} ctrl={c} t={t} />)}</>
+  }
+
+  const { passed, failed, total } = ctrlCounts(ss.controls)
   const scored = passed + failed
   const pct = scored ? Math.round((passed / scored) * 100) : 0
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 pl-9 pr-5 py-2 hover:bg-gray-50/30 text-left"
+      >
+        <ChevronDown
+          size={12}
+          className={`text-gray-300 flex-shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+        />
+        <span className="text-[10px] font-mono font-semibold text-brand/50 w-12 flex-shrink-0">{ss.label}</span>
+        <span className="flex-1" />
+        {failed > 0 && <span className="text-[11px] text-red-500 font-medium mr-1.5">{failed}✗</span>}
+        <div className="w-12 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+          <div className={`h-full rounded-full ${scoreBarColor(pct)}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[10px] text-gray-400 tabular-nums w-10 text-right">{passed}/{scored || total}</span>
+      </button>
+      {open && ss.controls.map((c) => <ControlRow key={c.control_id} ctrl={c} t={t} />)}
+    </div>
+  )
+}
+
+// Level 2: sub-section (e.g. "1.1") — __flat renders subsections directly
+function ComplianceSection({ sec, t }) {
+  const [open, setOpen] = useState(true)
+
+  if (sec.key === '__flat') {
+    return <>{sec.subsections.map((ss) => <ComplianceSubsection key={ss.key} ss={ss} t={t} />)}</>
+  }
+
+  const counts = mergeCounts(...sec.subsections.map((ss) => ctrlCounts(ss.controls)))
+  const { passed, failed, total } = counts
+  const scored = passed + failed
+  const pct = scored ? Math.round((passed / scored) * 100) : 0
+
+  return (
+    <div className="border-b border-gray-50 last:border-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-3 pl-6 pr-5 py-2.5 bg-white/80 hover:bg-gray-50/30 text-left"
+      >
+        <ChevronDown
+          size={13}
+          className={`text-gray-400 flex-shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+        />
+        <span className="text-[11px] font-mono font-semibold text-gray-500 w-14 flex-shrink-0">{sec.label}</span>
+        <span className="flex-1" />
+        {failed > 0 && <span className="text-[11px] text-red-500 font-medium mr-2">{failed} failed</span>}
+        <div className="w-14 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+          <div className={`h-full rounded-full ${scoreBarColor(pct)}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[11px] text-gray-400 tabular-nums w-10 text-right">{passed}/{scored || total}</span>
+      </button>
+      {open && sec.subsections.map((ss) => <ComplianceSubsection key={ss.key} ss={ss} t={t} />)}
+    </div>
+  )
+}
+
+// Level 1: top section group (e.g. "1 · Initial Setup")
+function ComplianceTopGroup({ group, t }) {
+  const [open, setOpen] = useState(true)
+  const counts = mergeCounts(
+    ...group.sections.map((sec) => mergeCounts(...sec.subsections.map((ss) => ctrlCounts(ss.controls)))),
+  )
+  const { passed, failed, total } = counts
+  const scored = passed + failed
+  const pct = scored ? Math.round((passed / scored) * 100) : 0
+
   return (
     <div className="border-b border-gray-100 last:border-0">
-      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-3 px-5 py-3 bg-gray-50/40 hover:bg-gray-50 text-left">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-3 px-5 py-3 bg-gray-50/60 hover:bg-gray-50 text-left"
+      >
         <ChevronDown size={15} className={`text-gray-400 transition-transform ${open ? '' : '-rotate-90'}`} />
-        <span className="text-[12px] font-semibold text-gray-700 flex-1">{section}</span>
-        {failed > 0 && <span className="text-[11px] text-red-500 font-medium">{failed} {t('compliance.failed').toLowerCase()}</span>}
+        <span className="text-[12px] font-semibold text-gray-700 flex-1">{group.name}</span>
+        {failed > 0 && (
+          <span className="text-[11px] text-red-500 font-medium">{failed} {t('compliance.failed').toLowerCase()}</span>
+        )}
         <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden">
           <div className={`h-full rounded-full ${scoreBarColor(pct)}`} style={{ width: `${pct}%` }} />
         </div>
-        <span className="text-[11px] text-gray-400 tabular-nums w-12 text-right">{passed}/{scored || controls.length}</span>
+        <span className="text-[11px] text-gray-400 tabular-nums w-12 text-right">{passed}/{scored || total}</span>
       </button>
-      {open && controls.map((ctrl) => <ControlRow key={ctrl.control_id} ctrl={ctrl} t={t} />)}
+      {open && group.sections.map((sec) => <ComplianceSection key={sec.key} sec={sec} t={t} />)}
     </div>
   )
 }
@@ -150,7 +326,11 @@ export default function NodeCompliancePage() {
     if (!data) return []
     return (data.reports || [])
       .filter((r) => r.source === 'inspec' || r.source === 'cis-ssh')
-      .map((r) => ({ ts: new Date(r.collected_at).getTime(), date: new Date(r.collected_at).toLocaleDateString(), score: r.score }))
+      .map((r) => ({
+        ts: new Date(r.collected_at).getTime(),
+        date: new Date(r.collected_at).toLocaleDateString(),
+        score: r.score,
+      }))
       .sort((a, b) => a.ts - b.ts)
   }, [data])
 
@@ -173,34 +353,22 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
-  // Filtered controls (status + framework), then grouped by CIS section.
-  const sections = useMemo(() => {
+  const complianceTree = useMemo(() => {
     let details = report?.details || []
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
     else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
     if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
-
-    const w = { high: 0, medium: 1, low: 2, info: 3 }
-    const groups = {}
-    for (const d of details) {
-      const sec = sectionOf(d)
-      ;(groups[sec] ||= []).push(d)
-    }
-    // sort controls within a section: failed first, then by severity
-    for (const sec of Object.keys(groups)) {
-      groups[sec].sort((a, b) => {
-        const sa = a.status === 'fail' ? 0 : a.status === 'skip' ? 2 : 1
-        const sb = b.status === 'fail' ? 0 : b.status === 'skip' ? 2 : 1
-        if (sa !== sb) return sa - sb
-        return (w[a.severity] ?? 9) - (w[b.severity] ?? 9)
-      })
-    }
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b))
+    return buildComplianceTree(details)
   }, [report, filter, fwFilter])
 
-  const totalShown = useMemo(() => sections.reduce((n, [, list]) => n + list.length, 0), [sections])
-
-  const enrolled = data && (data.puppet_enrolled || data.wazuh_enrolled)
+  const totalShown = useMemo(
+    () =>
+      complianceTree.reduce(
+        (n, g) => n + g.sections.reduce((m, s) => m + s.subsections.reduce((k, ss) => k + ss.controls.length, 0), 0),
+        0,
+      ),
+    [complianceTree],
+  )
 
   async function runScan() {
     setScanning(true)
@@ -259,7 +427,7 @@ export default function NodeCompliancePage() {
         <div className="flex items-center gap-2">
           <button
             onClick={runScan}
-            disabled={scanning || !enrolled}
+            disabled={scanning}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Play size={14} className={scanning ? 'animate-pulse' : ''} />
@@ -276,12 +444,6 @@ export default function NodeCompliancePage() {
           </button>
         </div>
       </div>
-
-      {!enrolled && !loading && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-[12px] text-amber-800">
-          {t('compliance.enrollFirst')}
-        </div>
-      )}
 
       {/* InSpec not installed on the platform — offer to install it right here */}
       {inspecStatus && !inspecInstalled && (
@@ -383,7 +545,7 @@ export default function NodeCompliancePage() {
             <span>{t('compliance.source')}: <b className="text-gray-600">{report.source}</b></span>
           </div>
 
-          {/* Controls — grouped by CIS section, with status + framework filters */}
+          {/* Controls — nested tree by CIS section hierarchy */}
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
               <h3 className="text-[13px] font-semibold text-gray-800">
@@ -391,7 +553,6 @@ export default function NodeCompliancePage() {
                 <span className="ml-2 text-[11px] font-normal text-gray-400">{totalShown}</span>
               </h3>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Framework filter */}
                 <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
                   {FRAMEWORKS.map((f) => (
                     <button
@@ -403,7 +564,6 @@ export default function NodeCompliancePage() {
                     </button>
                   ))}
                 </div>
-                {/* Status filter */}
                 <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
                   {['all', 'failed', 'passed'].map((f) => (
                     <button
@@ -417,9 +577,11 @@ export default function NodeCompliancePage() {
                 </div>
               </div>
             </div>
-            {sections.length ? sections.map(([section, list]) => (
-              <SectionGroup key={section} section={section} controls={list} t={t} />
-            )) : (
+            {complianceTree.length ? (
+              complianceTree.map((group) => (
+                <ComplianceTopGroup key={group.name} group={group} t={t} />
+              ))
+            ) : (
               <div className="p-8 text-center text-[12px] text-gray-400">{t('compliance.noControls')}</div>
             )}
           </div>
