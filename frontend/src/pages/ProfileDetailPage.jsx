@@ -3,11 +3,12 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Plus, X, Search, Pencil, Trash2,
   ChevronDown, ChevronRight, Lock, ListChecks,
-  Layers, Save, FolderPlus, Copy,
+  Layers, Save, FolderPlus, Copy, History, RotateCcw,
 } from 'lucide-react'
 import {
   getProfile, updateProfile, addProfileControl,
   updateProfileControl, deleteProfileControl, searchAllControls,
+  getControlHistory,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -29,6 +30,7 @@ const FIELDS = [
   { key: 'rationale',           label: 'rationale',           kind: 'area' },
   { key: 'validate_guideline',  label: 'validateGuideline',   kind: 'area' },
   { key: 'configure_guideline', label: 'configureGuideline',  kind: 'area' },
+  { key: 'check_command',       label: 'checkCommand',        kind: 'code' },
   { key: 'regulatory',          label: 'regulatory',          kind: 'text' },
   { key: 'notes',               label: 'notes',               kind: 'area' },
 ]
@@ -46,7 +48,7 @@ function emptyControl(defaults = {}) {
     section_id: '', section: 'General', title: '', kind: 'control', cis_id: '',
     risk_profile: '', description: '', recommended_value: '', agreed_value: '',
     rationale: '', validate_guideline: '', configure_guideline: '',
-    regulatory: '', notes: '', enabled: true,
+    check_command: '', regulatory: '', notes: '', enabled: true,
     ...defaults,
   }
 }
@@ -241,9 +243,69 @@ function TopGroup({ group, onEdit, onDelete, onAdd, readOnly, t }) {
   )
 }
 
+// ── Control history modal ─────────────────────────────────────────────────────
+function HistoryModal({ profileId, control, onClose, onRestore, t }) {
+  const [entries, setEntries] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getControlHistory(profileId, control.id)
+      .then((r) => setEntries(r || []))
+      .catch(() => setEntries([]))
+      .finally(() => setLoading(false))
+  }, [profileId, control.id])
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-[14px] font-semibold text-gray-900">{t('profiles.controlHistory')}</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">{control.title}</p>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={17} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {loading && <div className="text-center py-8 text-[12px] text-gray-400">{t('common.loading')}</div>}
+          {!loading && entries.length === 0 && (
+            <div className="text-center py-8 text-[12px] text-gray-400">{t('profiles.historyEmpty')}</div>
+          )}
+          {entries.map((e) => (
+            <div key={e.id} className="border border-gray-100 rounded-lg p-3 bg-gray-50/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] text-gray-500 font-mono">
+                  {new Date(e.saved_at).toLocaleString()}
+                </span>
+                <button
+                  onClick={() => { onRestore(e.snapshot); onClose() }}
+                  className="flex items-center gap-1 text-[11px] text-brand hover:text-brand/80 font-medium"
+                >
+                  <RotateCcw size={11} /> {t('profiles.restore')}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                {['title', 'cis_id', 'check_command', 'validate_guideline', 'agreed_value', 'notes'].map((k) =>
+                  e.snapshot[k] ? (
+                    <div key={k} className="col-span-2">
+                      <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide">{k.replace(/_/g, ' ')} </span>
+                      <span className="text-[11px] text-gray-700 font-mono whitespace-pre-wrap break-all line-clamp-2">{e.snapshot[k]}</span>
+                    </div>
+                  ) : null
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Control add/edit drawer ───────────────────────────────────────────────────
 function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
   const [form, setForm] = useState(control)
+  const [showHistory, setShowHistory] = useState(false)
   const isNew = !control.id
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -289,6 +351,16 @@ function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
   const showSectionFields = form.kind === 'section'
 
   return (
+    <>
+    {showHistory && (
+      <HistoryModal
+        profileId={profileId}
+        control={control}
+        onClose={() => setShowHistory(false)}
+        onRestore={(snap) => setForm((f) => ({ ...f, ...snap }))}
+        t={t}
+      />
+    )}
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="relative bg-white w-full max-w-2xl h-full shadow-xl flex flex-col">
@@ -297,7 +369,18 @@ function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
           <h3 className="text-[15px] font-semibold text-gray-900">
             {isNew ? t('profiles.addControl') : t('profiles.editControl')}
           </h3>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={18} /></button>
+          <div className="flex items-center gap-1">
+            {!isNew && (
+              <button
+                onClick={() => setShowHistory(true)}
+                className="p-1.5 text-gray-400 hover:text-brand rounded"
+                title={t('profiles.controlHistory')}
+              >
+                <History size={16} />
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={18} /></button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -390,6 +473,17 @@ function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
                   >
                     {RISK.map((r) => <option key={r} value={r}>{r || '—'}</option>)}
                   </select>
+                ) : fld.kind === 'code' ? (
+                  <div>
+                    <p className="text-[10px] text-gray-400 mb-1">{t('profiles.checkCommandHint')}</p>
+                    <textarea
+                      value={form[fld.key] || ''}
+                      onChange={(e) => set(fld.key, e.target.value)}
+                      rows={8}
+                      spellCheck={false}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[11px] font-mono bg-gray-950 text-green-400 outline-none focus:border-brand resize-y"
+                    />
+                  </div>
                 ) : fld.kind === 'area' ? (
                   <textarea
                     value={form[fld.key] || ''}
@@ -425,6 +519,7 @@ function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
         </div>
       </div>
     </div>
+    </>
   )
 }
 

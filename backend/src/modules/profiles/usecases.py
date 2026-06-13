@@ -25,7 +25,7 @@ _EDITABLE_FIELDS = {
     "section_id", "section", "title", "kind", "cis_id", "description",
     "recommended_value", "agreed_value", "risk_profile", "rationale",
     "validate_guideline", "configure_guideline", "regulatory", "notes",
-    "enabled", "position",
+    "check_command", "enabled", "position",
 }
 
 
@@ -79,6 +79,7 @@ class ProfileUseCases:
                 configure_guideline=c.get("configure_guideline"),
                 regulatory=c.get("regulatory"),
                 notes=c.get("notes"),
+                check_command=c.get("check_command"),
                 enabled=bool(c.get("enabled", True)),
                 created_at=now,
                 updated_at=now,
@@ -179,6 +180,7 @@ class ProfileUseCases:
             configure_guideline=data.get("configure_guideline"),
             regulatory=data.get("regulatory"),
             notes=data.get("notes"),
+            check_command=data.get("check_command"),
             enabled=bool(data.get("enabled", True)),
             created_at=now,
             updated_at=now,
@@ -190,6 +192,18 @@ class ProfileUseCases:
         control = await self._repo.find_control(control_id)
         if not control:
             raise ValidationError("Control not found.")
+        # Save a history snapshot before applying changes
+        snapshot = json.dumps({
+            "section_id": control.section_id, "section": control.section,
+            "title": control.title, "kind": control.kind, "cis_id": control.cis_id,
+            "description": control.description, "recommended_value": control.recommended_value,
+            "agreed_value": control.agreed_value, "risk_profile": control.risk_profile,
+            "rationale": control.rationale, "validate_guideline": control.validate_guideline,
+            "configure_guideline": control.configure_guideline, "regulatory": control.regulatory,
+            "notes": control.notes, "check_command": control.check_command,
+            "enabled": control.enabled, "position": control.position,
+        })
+        await self._repo.save_control_history(control_id, snapshot)
         for fld in _EDITABLE_FIELDS:
             if fld in data and data[fld] is not None:
                 if fld == "enabled":
@@ -201,6 +215,9 @@ class ProfileUseCases:
         control.updated_at = datetime.utcnow()
         await self._repo.update_control(control)
         return await self._repo.find_control(control_id)
+
+    async def get_control_history(self, control_id: str) -> list[dict]:
+        return await self._repo.get_control_history(control_id)
 
     async def delete_control(self, control_id: str) -> None:
         control = await self._repo.find_control(control_id)

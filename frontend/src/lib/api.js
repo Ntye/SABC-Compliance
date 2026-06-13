@@ -406,6 +406,10 @@ export async function searchAllControls(q, limit = 40) {
   return request('GET', `/profiles/-/controls?q=${encodeURIComponent(q)}&limit=${limit}`)
 }
 
+export async function getControlHistory(profileId, controlId) {
+  return request('GET', `/profiles/${profileId}/controls/${controlId}/history`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {

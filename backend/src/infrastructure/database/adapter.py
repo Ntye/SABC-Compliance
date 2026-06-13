@@ -197,9 +197,18 @@ profile_controls_table = Table(
     Column("configure_guideline", Text),
     Column("regulatory", Text),
     Column("notes", Text),
+    Column("check_command", Text),
     Column("enabled", Integer, default=1),
     Column("created_at", Text),
     Column("updated_at", Text),
+)
+
+profile_control_history_table = Table(
+    "profile_control_history", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("control_id", Text, nullable=False),
+    Column("snapshot", Text, nullable=False),
+    Column("saved_at", Text, nullable=False),
 )
 
 
@@ -271,6 +280,10 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
                 pass  # column already exists
         try:
             await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
+        except Exception:
+            pass  # column already exists
+        try:
+            await conn.execute(text("ALTER TABLE profile_controls ADD COLUMN check_command TEXT"))
         except Exception:
             pass  # column already exists
         # jobs.logs was a JSON blob that suffered a write-race; now replaced by
@@ -888,6 +901,7 @@ class ProfileRepository(IProfileRepository):
             configure_guideline=row.configure_guideline,
             regulatory=row.regulatory,
             notes=row.notes,
+            check_command=getattr(row, "check_command", None),
             enabled=bool(row.enabled),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -902,7 +916,9 @@ class ProfileRepository(IProfileRepository):
             "risk_profile": c.risk_profile, "rationale": c.rationale,
             "validate_guideline": c.validate_guideline,
             "configure_guideline": c.configure_guideline,
-            "regulatory": c.regulatory, "notes": c.notes, "enabled": int(c.enabled),
+            "regulatory": c.regulatory, "notes": c.notes,
+            "check_command": c.check_command,
+            "enabled": int(c.enabled),
             "created_at": _ts(c.created_at), "updated_at": _ts(c.updated_at),
         }
 
@@ -1018,6 +1034,25 @@ class ProfileRepository(IProfileRepository):
             )
             rows = (await s.execute(stmt)).all()
             return [self._control_to_entity(r) for r in rows]
+
+    async def save_control_history(self, control_id: str, snapshot: str) -> None:
+        async with self._session() as s:
+            await s.execute(profile_control_history_table.insert().values(
+                control_id=control_id,
+                snapshot=snapshot,
+                saved_at=datetime.utcnow().isoformat(),
+            ))
+            await s.commit()
+
+    async def get_control_history(self, control_id: str) -> list[dict]:
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(profile_control_history_table)
+                .where(profile_control_history_table.c.control_id == control_id)
+                .order_by(profile_control_history_table.c.id.desc())
+                .limit(50)
+            )).all()
+            return [{"id": r.id, "snapshot": r.snapshot, "saved_at": r.saved_at} for r in rows]
 
 
 # ── Platform Config Repository ────────────────────────────────────────────────

@@ -311,6 +311,7 @@ class ProfileControl:
     configure_guideline: str | None = None
     regulatory: str | None = None
     notes: str | None = None
+    check_command: str | None = None     # InSpec Ruby snippet for this control
     enabled: bool = True
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)

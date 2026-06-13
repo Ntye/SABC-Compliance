@@ -39,6 +39,7 @@ class ControlRequest(BaseModel):
     configure_guideline: str | None = None
     regulatory: str | None = None
     notes: str | None = None
+    check_command: str | None = None
     enabled: bool | None = None
     position: int | None = None
 
@@ -74,6 +75,7 @@ def _control_dict(c: ProfileControl) -> dict:
         "configure_guideline": c.configure_guideline,
         "regulatory": c.regulatory,
         "notes": c.notes,
+        "check_command": c.check_command,
         "enabled": c.enabled,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
@@ -176,3 +178,16 @@ async def delete_control(profile_id: str, control_id: str, principal: AuthPrinci
         return {"deleted": True}
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/{profile_id}/controls/{control_id}/history", summary="Control edit history")
+async def get_control_history(
+    profile_id: str, control_id: str,
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    import json as _json
+    entries = await _uc.get_control_history(control_id)
+    return [
+        {"id": e["id"], "saved_at": e["saved_at"], "snapshot": _json.loads(e["snapshot"])}
+        for e in entries
+    ]

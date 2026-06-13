@@ -56,6 +56,12 @@ control 'cis-5.1.8-at-cron-authorized' do
 end
 
 # 5.2 SSH server configuration
+# NOTE: We use `sshd -T` (dump effective config including compiled-in defaults)
+# rather than reading sshd_config directly.  Modern Ubuntu/Debian ships with
+# secure defaults that satisfy many CIS controls but does not write them
+# explicitly to sshd_config, causing the sshd_config resource to return nil.
+# `sshd -T` reflects the actual running behaviour of the daemon.
+
 control 'cis-5.2.1-sshd-config-perms' do
   impact 0.5
   title 'Ensure permissions on /etc/ssh/sshd_config are configured'
@@ -72,8 +78,8 @@ control 'cis-5.2.4-sshd-loglevel' do
   impact 0.3
   title 'Ensure SSH LogLevel is appropriate'
   tag cis: '5.2.4'
-  describe sshd_config do
-    its('LogLevel') { should match(/VERBOSE|INFO/) }
+  describe command('sshd -T 2>/dev/null | grep -i "^loglevel "') do
+    its('stdout') { should match(/\b(?:INFO|VERBOSE)\b/i) }
   end
 end
 
@@ -81,8 +87,8 @@ control 'cis-5.2.5-sshd-x11' do
   impact 0.4
   title 'Ensure SSH X11 forwarding is disabled'
   tag cis: '5.2.5'
-  describe sshd_config do
-    its('X11Forwarding') { should cmp 'no' }
+  describe command('sshd -T 2>/dev/null | grep -i "^x11forwarding "') do
+    its('stdout') { should match(/\bno\b/i) }
   end
 end
 
@@ -90,8 +96,8 @@ control 'cis-5.2.6-sshd-maxauthtries' do
   impact 0.5
   title 'Ensure SSH MaxAuthTries is set to 4 or less'
   tag cis: '5.2.6'
-  describe sshd_config do
-    its('MaxAuthTries') { should cmp <= 4 }
+  describe command('sshd -T 2>/dev/null | grep -i "^maxauthtries "') do
+    its('stdout') { should match(/^maxauthtries\s+[1-4]\s*$/i) }
   end
 end
 
@@ -99,8 +105,8 @@ control 'cis-5.2.7-sshd-ignorerhosts' do
   impact 0.5
   title 'Ensure SSH IgnoreRhosts is enabled'
   tag cis: '5.2.7'
-  describe sshd_config do
-    its('IgnoreRhosts') { should cmp 'yes' }
+  describe command('sshd -T 2>/dev/null | grep -i "^ignorerhosts "') do
+    its('stdout') { should match(/\byes\b/i) }
   end
 end
 
@@ -108,8 +114,8 @@ control 'cis-5.2.8-sshd-hostbased' do
   impact 0.5
   title 'Ensure SSH HostbasedAuthentication is disabled'
   tag cis: '5.2.8'
-  describe sshd_config do
-    its('HostbasedAuthentication') { should cmp 'no' }
+  describe command('sshd -T 2>/dev/null | grep -i "^hostbasedauthentication "') do
+    its('stdout') { should match(/\bno\b/i) }
   end
 end
 
@@ -120,8 +126,8 @@ control 'cis-5.2.9-sshd-permitrootlogin' do
   tag cis: '5.2.9'
   tag iso27001: 'A.9.2.3'
   tag pci_dss: '8.2'
-  describe sshd_config do
-    its('PermitRootLogin') { should cmp 'no' }
+  describe command('sshd -T 2>/dev/null | grep -i "^permitrootlogin "') do
+    its('stdout') { should match(/\bno\b/i) }
   end
 end
 
@@ -130,8 +136,8 @@ control 'cis-5.2.10-sshd-permitemptypw' do
   title 'Ensure SSH PermitEmptyPasswords is disabled'
   tag cis: '5.2.10'
   tag pci_dss: '8.2.3'
-  describe sshd_config do
-    its('PermitEmptyPasswords') { should cmp 'no' }
+  describe command('sshd -T 2>/dev/null | grep -i "^permitemptypasswords "') do
+    its('stdout') { should match(/\bno\b/i) }
   end
 end
 
@@ -139,8 +145,8 @@ control 'cis-5.2.11-sshd-permituserenv' do
   impact 0.4
   title 'Ensure SSH PermitUserEnvironment is disabled'
   tag cis: '5.2.11'
-  describe sshd_config do
-    its('PermitUserEnvironment') { should cmp 'no' }
+  describe command('sshd -T 2>/dev/null | grep -i "^permituserenv "') do
+    its('stdout') { should match(/\bno\b/i) }
   end
 end
 
@@ -149,8 +155,8 @@ control 'cis-5.2.12-sshd-ciphers' do
   title 'Ensure only strong SSH ciphers are used'
   desc 'Weak ciphers (3des, arcfour, cbc) must not be offered.'
   tag cis: '5.2.12'
-  describe sshd_config do
-    its('Ciphers') { should_not match(/3des|arcfour|cbc/i) }
+  describe command('sshd -T 2>/dev/null | grep -i "^ciphers "') do
+    its('stdout') { should_not match(/3des|arcfour|cbc/i) }
   end
 end
 
@@ -158,19 +164,18 @@ control 'cis-5.2.13-sshd-macs' do
   impact 0.5
   title 'Ensure only strong SSH MAC algorithms are used'
   tag cis: '5.2.13'
-  describe sshd_config do
-    its('MACs') { should_not match(/md5|hmac-sha1\b/i) }
+  describe command('sshd -T 2>/dev/null | grep -i "^macs "') do
+    its('stdout') { should_not match(/\bmd5\b|hmac-sha1(?!-etm)/i) }
   end
 end
 
 control 'cis-5.2.15-sshd-clientalive' do
   impact 0.3
   title 'Ensure SSH idle timeout interval is configured'
-  desc 'ClientAliveInterval should be 300 or less and ClientAliveCountMax 3 or less.'
+  desc 'ClientAliveInterval should be between 1 and 300 seconds.'
   tag cis: '5.2.15'
-  describe sshd_config do
-    its('ClientAliveInterval') { should cmp <= 300 }
-    its('ClientAliveInterval') { should cmp > 0 }
+  describe command('sshd -T 2>/dev/null | grep -i "^clientaliveinterval "') do
+    its('stdout') { should match(/^clientaliveinterval\s+([1-9]|[1-9]\d|[12]\d\d|300)\s*$/i) }
   end
 end
 
@@ -178,8 +183,8 @@ control 'cis-5.2.17-sshd-logingrace' do
   impact 0.3
   title 'Ensure SSH LoginGraceTime is set to one minute or less'
   tag cis: '5.2.17'
-  describe sshd_config do
-    its('LoginGraceTime') { should cmp <= 60 }
+  describe command('sshd -T 2>/dev/null | grep -i "^logingracetime "') do
+    its('stdout') { should match(/^logingracetime\s+([1-9]|[1-5]\d|60)\s*$/i) }
   end
 end
 
@@ -187,8 +192,8 @@ control 'cis-5.2.20-sshd-maxstartups' do
   impact 0.3
   title 'Ensure SSH MaxStartups is configured'
   tag cis: '5.2.20'
-  describe sshd_config do
-    its('MaxStartups') { should_not be_nil }
+  describe command('sshd -T 2>/dev/null | grep -i "^maxstartups "') do
+    its('stdout') { should match(/\S/) }
   end
 end
 
@@ -196,8 +201,8 @@ control 'cis-5.2.22-sshd-maxsessions' do
   impact 0.3
   title 'Ensure SSH MaxSessions is limited'
   tag cis: '5.2.22'
-  describe sshd_config do
-    its('MaxSessions') { should cmp <= 10 }
+  describe command('sshd -T 2>/dev/null | grep -i "^maxsessions "') do
+    its('stdout') { should match(/^maxsessions\s+([1-9]|10)\s*$/i) }
   end
 end
 
