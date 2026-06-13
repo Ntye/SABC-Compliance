@@ -410,6 +410,10 @@ export async function getControlHistory(profileId, controlId) {
   return request('GET', `/profiles/${profileId}/controls/${controlId}/history`)
 }
 
+export async function importInspecCommands(profileId) {
+  return request('POST', `/profiles/${profileId}/import-inspec`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {
