@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import {
   getNodeCompliance, collectNodeCompliance, triggerRemediation,
-  getInspecStatus, installInspecOnController,
+  getScanEngineStatus, installScanEngineOnController,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
@@ -234,7 +234,7 @@ function buildComplianceTree(controls) {
 
 function primaryReport(reports) {
   return (
-    reports.find((r) => r.source === 'inspec') ||
+    reports.find((r) => r.source === 'scan') ||
     reports.find((r) => r.source === 'cis-ssh') ||
     reports.find((r) => r.source !== 'puppet') ||
     null
@@ -267,8 +267,8 @@ function ControlRow({ ctrl, t }) {
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {fwKeys.map((k) => (
-            <span key={k} className={badge(k === 'pci_dss' ? 'pci-dss' : k)}>
-              {k === 'pci_dss' ? 'PCI' : k.toUpperCase()} {fw[k]}
+            <span key={k} className={badge(k)}>
+              {k.toUpperCase()} {fw[k]}
             </span>
           ))}
           {ctrl.severity && (
@@ -412,7 +412,7 @@ export default function NodeCompliancePage() {
   const t = useT()
   const toast = useToast()
   const { data, loading, refetch } = useApi(() => getNodeCompliance(id), { deps: [id] })
-  const { data: inspecStatus, refetch: refetchInspec } = useApi(getInspecStatus)
+  const { data: scanEngineStatus, refetch: refetchScanEngine } = useApi(getScanEngineStatus)
   const [scanning,    setScanning]    = useState(false)
   const [scanPct,     setScanPct]     = useState(0)
   const scanStartRef = useRef(null)
@@ -441,13 +441,13 @@ export default function NodeCompliancePage() {
   const [filter, setFilter] = useState('all')
   const [fwFilter, setFwFilter] = useState('all')
 
-  const inspecInstalled = inspecStatus?.installed
+  const scanEngineInstalled = scanEngineStatus?.installed
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
 
   const history = useMemo(() => {
     if (!data) return []
     return (data.reports || [])
-      .filter((r) => r.source === 'inspec' || r.source === 'cis-ssh')
+      .filter((r) => r.source === 'scan' || r.source === 'cis-ssh')
       .map((r) => ({
         ts: new Date(r.collected_at).getTime(),
         date: new Date(r.collected_at).toLocaleDateString(),
@@ -497,7 +497,7 @@ export default function NodeCompliancePage() {
     try {
       const res = await collectNodeCompliance(id)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
-      await Promise.all([refetch(), refetchInspec()])
+      await Promise.all([refetch(), refetchScanEngine()])
     } catch (err) {
       toast(err.message, 'error')
     } finally {
@@ -505,15 +505,15 @@ export default function NodeCompliancePage() {
     }
   }
 
-  async function installInspec() {
+  async function installScanEngine() {
     setInstalling(true)
     try {
-      const res = await installInspecOnController()
+      const res = await installScanEngineOnController()
       if (res.installed || res.success) {
-        toast(t('compliance.inspecInstalled'), 'success')
-        await refetchInspec()
+        toast(t('compliance.scanEngineInstalled'), 'success')
+        await refetchScanEngine()
       } else {
-        toast(res.error || 'InSpec installation failed', 'error')
+        toast(res.error || 'Scan engine installation failed', 'error')
       }
     } catch (err) {
       toast(err.message, 'error')
@@ -591,21 +591,21 @@ export default function NodeCompliancePage() {
         </div>
       )}
 
-      {/* InSpec not installed on the platform — offer to install it right here */}
-      {inspecStatus && !inspecInstalled && (
+      {/* Scan engine not installed on the platform — offer to install it right here */}
+      {scanEngineStatus && !scanEngineInstalled && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
           <ShieldAlert size={17} className="text-blue-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <p className="text-[12px] font-medium text-blue-900">{t('compliance.inspecMissingTitle')}</p>
-            <p className="text-[11px] text-blue-700 mt-0.5">{t('compliance.inspecMissingDesc')}</p>
+            <p className="text-[12px] font-medium text-blue-900">{t('compliance.scanEngineMissingTitle')}</p>
+            <p className="text-[11px] text-blue-700 mt-0.5">{t('compliance.scanEngineMissingDesc')}</p>
           </div>
           <button
-            onClick={installInspec}
+            onClick={installScanEngine}
             disabled={installing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[12px] font-medium hover:bg-blue-700 disabled:opacity-50 flex-shrink-0"
           >
             <Download size={13} className={installing ? 'animate-pulse' : ''} />
-            {installing ? t('compliance.installing') : t('compliance.installInspec')}
+            {installing ? t('compliance.installing') : t('compliance.installScanEngine')}
           </button>
         </div>
       )}

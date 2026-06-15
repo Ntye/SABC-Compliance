@@ -124,8 +124,6 @@ control 'cis-5.2.9-sshd-permitrootlogin' do
   title 'Ensure SSH root login is disabled'
   desc 'PermitRootLogin must be no so administrators authenticate as themselves and escalate.'
   tag cis: '5.2.9'
-  tag iso27001: 'A.9.2.3'
-  tag pci_dss: '8.2'
   describe command('sshd -T 2>/dev/null | grep -i "^permitrootlogin "') do
     its('stdout') { should match(/\bno\b/i) }
   end
@@ -135,7 +133,6 @@ control 'cis-5.2.10-sshd-permitemptypw' do
   impact 1.0
   title 'Ensure SSH PermitEmptyPasswords is disabled'
   tag cis: '5.2.10'
-  tag pci_dss: '8.2.3'
   describe command('sshd -T 2>/dev/null | grep -i "^permitemptypasswords "') do
     its('stdout') { should match(/\bno\b/i) }
   end
@@ -212,7 +209,6 @@ control 'cis-5.3.1-pwquality' do
   title 'Ensure password creation requirements are configured'
   desc 'pwquality should enforce a minimum length of 14 characters.'
   tag cis: '5.3.1'
-  tag iso27001: 'A.9.4.3'
   describe.one do
     describe parse_config_file('/etc/security/pwquality.conf') do
       its('minlen') { should cmp >= 14 }
@@ -256,7 +252,6 @@ control 'cis-5.4.1.1-pass-max-days' do
   impact 0.5
   title 'Ensure password expiration is 365 days or less'
   tag cis: '5.4.1.1'
-  tag pci_dss: '8.2.4'
   describe login_defs do
     its('PASS_MAX_DAYS') { should cmp <= 365 }
   end

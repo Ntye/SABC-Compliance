@@ -1,16 +1,16 @@
 """
-Parse the bundled InSpec .rb profile controls and match them to
+Parse the bundled CIS .rb profile controls and match them to
 referential profile controls by CIS ID prefix + title keywords.
-Used by the "Import InSpec Commands" action in the UI.
+Used by the "Import Scan Commands" action in the UI.
 """
 from __future__ import annotations
 import glob
 import os
 import re
 
-_INSPEC_DIR = os.path.join(
+_SCAN_PROFILES_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "..",
-    "inspec-profiles", "sabc-linux-baseline", "controls",
+    "scan-profiles", "sabc-linux-baseline", "controls",
 )
 
 
@@ -103,10 +103,10 @@ def _extract_from_content(content: str) -> dict[str, dict]:
     return out
 
 
-def load_all_inspec_controls() -> dict[str, dict]:
-    """Load and parse all .rb control files from the bundled InSpec profile."""
+def load_all_scan_controls() -> dict[str, dict]:
+    """Load and parse all .rb control files from the bundled CIS profile."""
     all_controls: dict[str, dict] = {}
-    rb_dir = os.path.normpath(_INSPEC_DIR)
+    rb_dir = os.path.normpath(_SCAN_PROFILES_DIR)
     for fpath in sorted(glob.glob(os.path.join(rb_dir, "*.rb"))):
         try:
             content = open(fpath, encoding="utf-8").read()
@@ -117,27 +117,27 @@ def load_all_inspec_controls() -> dict[str, dict]:
 
 
 def match_controls(
-    inspec_controls: dict[str, dict],
+    scan_controls: dict[str, dict],
     seed_controls: list[dict],
 ) -> dict[str, str]:
     """
-    Return {seed_control_id -> inspec_code} for best-matching pairs.
+    Return {seed_control_id -> scan_code} for best-matching pairs.
 
     Matching rules (in order):
-      1. seed.cis_id starts with inspec.cis_tag (or equals it)
-      2. At least one keyword from the inspec control_id appears in seed.title
-    When multiple InSpec controls match one seed control, the first (by sort
+      1. seed.cis_id starts with scan control's cis_tag (or equals it)
+      2. At least one keyword from the scan control_id appears in seed.title
+    When multiple controls match one seed control, the first (by sort
     order) wins so that the most specific match takes precedence.
     """
     result: dict[str, str] = {}
 
-    for ctrl_id in sorted(inspec_controls):
-        inspec = inspec_controls[ctrl_id]
-        cis_tag = inspec["cis_tag"]
+    for ctrl_id in sorted(scan_controls):
+        scan = scan_controls[ctrl_id]
+        cis_tag = scan["cis_tag"]
         if not cis_tag:
             continue
 
-        # Keywords: strip the "cis-N.N.N-" prefix from the InSpec control ID
+        # Keywords: strip the "cis-N.N.N-" prefix from the control ID
         cis_prefix_dash = "cis-" + cis_tag.replace(".", "-") + "-"
         keyword_part = ctrl_id.replace(cis_prefix_dash, "", 1) if ctrl_id.startswith(cis_prefix_dash) else ""
         keywords = [k for k in re.split(r"[-_]", keyword_part) if len(k) > 2]
@@ -151,6 +151,6 @@ def match_controls(
                 continue
             sc_id = sc["id"]
             if sc_id not in result:
-                result[sc_id] = inspec["code"]
+                result[sc_id] = scan["code"]
 
     return result

@@ -423,9 +423,9 @@ export default function NodeDetailPage() {
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[12px] text-gray-600">InSpec</span>
-              <span className={badge(node.inspec_installed ? 'success' : 'gray')}>
-                {node.inspec_installed ? t('common.enrolled') : t('common.notEnrolled')}
+              <span className="text-[12px] text-gray-600">{t('infra.scanEngine')}</span>
+              <span className={badge(node.scan_ready ? 'success' : 'gray')}>
+                {node.scan_ready ? t('common.enrolled') : t('common.notEnrolled')}
               </span>
             </div>
           </div>

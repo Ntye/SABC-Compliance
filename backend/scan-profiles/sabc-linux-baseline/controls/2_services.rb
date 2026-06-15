@@ -11,7 +11,6 @@ control 'cis-2.1.1-time-sync' do
   title 'Ensure a time synchronization daemon is in use'
   desc 'A running NTP/chrony/timesyncd daemon keeps clocks (and log timestamps) accurate.'
   tag cis: '2.1.1'
-  tag iso27001: 'A.12.4.4'
   describe.one do
     describe service('chronyd') do
       it { should be_running }
@@ -66,7 +65,6 @@ end
     title "Ensure #{label} server is not installed"
     desc "The #{label} service should not be installed on a hardened host unless explicitly required."
     tag cis: '2.2'
-    tag pci_dss: '2.2.3'
     pkgs.each do |p|
       describe package(p) do
         it { should_not be_installed }

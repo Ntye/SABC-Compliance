@@ -41,7 +41,7 @@ nodes_table = Table(
     Column("status", Text, default="registered"),
     Column("puppet_enrolled", Integer, default=0),
     Column("wazuh_enrolled", Integer, default=0),
-    Column("inspec_installed", Integer, default=0),
+    Column("scan_ready", Integer, default=0),
     Column("last_seen", Text),
     Column("created_at", Text),
     Column("updated_at", Text),
@@ -159,7 +159,7 @@ rules_table = Table(
     Column("active", Integer, default=1),
     Column("frameworks", Text, default="[]"),
     Column("code_blocks", Text, default="{}"),
-    Column("inspec_blocks", Text, default="{}"),
+    Column("scan_blocks", Text, default="{}"),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -308,13 +308,28 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
             except Exception:
                 pass
 
-        # Compliance reports — migrations for structured InSpec scan output
+        # Compliance reports — migrations for structured scan output
         for col, typ in [("profile", "TEXT"), ("duration", "TEXT"),
                          ("skipped_checks", "INTEGER")]:
             try:
                 await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
             except Exception:
                 pass
+
+        # Column renames: inspec_installed → scan_ready, inspec_blocks → scan_blocks
+        # SQLite does not support RENAME COLUMN before 3.25, so we ADD the new column
+        # and leave the old one (data is migrated via getattr fallback in _to_entity).
+        try:
+            await conn.execute(text("ALTER TABLE nodes ADD COLUMN scan_ready INTEGER DEFAULT 0"))
+            # Backfill from old column if it exists
+            await conn.execute(text("UPDATE nodes SET scan_ready = inspec_installed WHERE inspec_installed IS NOT NULL AND scan_ready = 0"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE rules ADD COLUMN scan_blocks TEXT DEFAULT '{}'"))
+            await conn.execute(text("UPDATE rules SET scan_blocks = inspec_blocks WHERE inspec_blocks IS NOT NULL AND (scan_blocks IS NULL OR scan_blocks = '{}')"))
+        except Exception:
+            pass
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory
@@ -344,7 +359,7 @@ class NodeRepository(INodeRepository):
             status=row.status or "registered",
             puppet_enrolled=bool(row.puppet_enrolled),
             wazuh_enrolled=bool(row.wazuh_enrolled),
-            inspec_installed=bool(row.inspec_installed),
+            scan_ready=bool(getattr(row, 'scan_ready', None) or getattr(row, 'inspec_installed', None)),
             last_seen=_dt(row.last_seen),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -368,7 +383,7 @@ class NodeRepository(INodeRepository):
             "status": node.status,
             "puppet_enrolled": int(node.puppet_enrolled),
             "wazuh_enrolled": int(node.wazuh_enrolled),
-            "inspec_installed": int(node.inspec_installed),
+            "scan_ready": int(node.scan_ready),
             "last_seen": _ts(node.last_seen),
             "created_at": _ts(node.created_at),
             "updated_at": _ts(node.updated_at),
@@ -585,7 +600,7 @@ class ComplianceRepository(IComplianceRepository):
                     "status": node.status,
                     "puppet_enrolled": node.puppet_enrolled,
                     "wazuh_enrolled": node.wazuh_enrolled,
-                    "inspec_installed": node.inspec_installed,
+                    "scan_ready": node.scan_ready,
                     "reports": [
                         {
                             "id": r.id, "source": r.source, "framework": r.framework,
@@ -823,7 +838,7 @@ class RuleRepository(IRuleRepository):
             active=bool(row.active),
             frameworks=json.loads(row.frameworks or "[]"),
             code_blocks=json.loads(row.code_blocks or "{}"),
-            inspec_blocks=json.loads(row.inspec_blocks or "{}"),
+            scan_blocks=json.loads(getattr(row, 'scan_blocks', None) or getattr(row, 'inspec_blocks', None) or "{}"),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
         )
@@ -833,7 +848,7 @@ class RuleRepository(IRuleRepository):
             "id": rule.id, "control_id": rule.control_id, "name": rule.name,
             "description": rule.description, "remediation_notes": rule.remediation_notes,
             "active": int(rule.active), "frameworks": json.dumps(rule.frameworks),
-            "code_blocks": json.dumps(rule.code_blocks), "inspec_blocks": json.dumps(rule.inspec_blocks),
+            "code_blocks": json.dumps(rule.code_blocks), "scan_blocks": json.dumps(rule.scan_blocks),
             "created_at": _ts(rule.created_at), "updated_at": _ts(rule.updated_at),
         }
 

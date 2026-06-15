@@ -7,7 +7,7 @@ import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
   checkPuppetAgentPlatform,
-  getInspecStatus, installInspecOnController, verifyInspecAllNodes, verifyInspecNode,
+  getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
   checkNodeHealth,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -718,7 +718,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
   )
 }
 
-// ── Tab 3: Verification (InSpec) ──────────────────────────────────────────────
+// ── Tab 3: Verification (Scan readiness) ──────────────────────────────────────
 
 function VerifyTab({ nodes, onRefresh, t }) {
   const [status, setStatus]       = useState(null)
@@ -734,7 +734,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
 
   async function loadStatus() {
     try {
-      setStatus(await getInspecStatus())
+      setStatus(await getScanEngineStatus())
     } catch (_) {
       setStatus({ installed: false, version: null })
     } finally {
@@ -747,8 +747,8 @@ function VerifyTab({ nodes, onRefresh, t }) {
   async function handleInstall() {
     setInstalling(true)
     try {
-      const res = await installInspecOnController()
-      toast(t('infra.inspecInstallDone', { version: res.version || '' }), 'success')
+      const res = await installScanEngineOnController()
+      toast(t('infra.scanEngineInstallDone', { version: res.version || '' }), 'success')
       await loadStatus()
     } catch (err) {
       toast(err.message, 'error')
@@ -761,9 +761,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
     setVerifying(true)
     setResults(null)
     try {
-      const res = await verifyInspecAllNodes()
+      const res = await verifyScanEngineAllNodes()
       setResults(res)
-      toast(t('infra.inspecVerifyDone', { ok: res.reachable, total: res.total }), 'success')
+      toast(t('infra.scanEngineVerifyDone', { ok: res.reachable, total: res.total }), 'success')
       onRefresh?.()
     } catch (err) {
       toast(err.message, 'error')
@@ -776,7 +776,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
     setProbing((p) => ({ ...p, [nodeId]: true }))
     setProbeErrors((p) => ({ ...p, [nodeId]: null }))
     try {
-      const result = await verifyInspecNode(nodeId)
+      const result = await verifyScanEngineNode(nodeId)
       const errMsg = result.output || result.error || null
       if (!result.reachable && errMsg) {
         setProbeErrors((p) => ({ ...p, [nodeId]: errMsg }))
@@ -805,11 +805,11 @@ function VerifyTab({ nodes, onRefresh, t }) {
     }
   }
 
-  const reachableCount = nodes.filter((n) => n.inspec_installed).length
+  const reachableCount = nodes.filter((n) => n.scan_ready).length
 
   return (
     <>
-      {/* InSpec info card */}
+      {/* Scan engine info card */}
       <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
@@ -817,36 +817,36 @@ function VerifyTab({ nodes, onRefresh, t }) {
               <ShieldCheck size={16} className={status?.installed ? 'text-brand' : 'text-gray-300'} />
             </div>
             <div>
-              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.inspec')}</h3>
-              <p className="text-[11px] text-gray-400">{t('infra.inspecDesc')}</p>
+              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.scanEngine')}</h3>
+              <p className="text-[11px] text-gray-400">{t('infra.scanEngineDesc')}</p>
             </div>
           </div>
           {loading ? (
             <Spinner size={12} />
           ) : status?.installed ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-50 text-green-700">
-              <CheckCircle size={9} /> {t('infra.inspecInstalled')}
+              <CheckCircle size={9} /> {t('infra.scanEngineInstalled')}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">
-              {t('infra.inspecMissing')}
+              {t('infra.scanEngineMissing')}
             </span>
           )}
         </div>
 
-        <p className="text-[12px] text-gray-500 mb-4 leading-relaxed">{t('infra.inspecExplain')}</p>
+        <p className="text-[12px] text-gray-500 mb-4 leading-relaxed">{t('infra.scanEngineExplain')}</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="px-3 py-2 bg-gray-50 rounded-lg">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecPlatformVersion')}</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.scanEnginePlatformVersion')}</p>
             <p className="text-[12px] font-mono text-gray-700">
-              {status?.installed ? (status.version || 'installed') : t('infra.inspecMissing')}
+              {status?.installed ? (status.version || 'installed') : t('infra.scanEngineMissing')}
             </p>
           </div>
           <div className="px-3 py-2 bg-gray-50 rounded-lg">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecCoverage')}</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.scanEngineCoverage')}</p>
             <p className="text-[12px] font-mono text-gray-700">
-              {reachableCount} / {nodes.length} {t('infra.inspecNodesReachable')}
+              {reachableCount} / {nodes.length} {t('infra.scanEngineNodesReachable')}
             </p>
           </div>
         </div>
@@ -855,7 +855,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
           {!status?.installed && (
             <button onClick={handleInstall} disabled={installing} className={btnSm(true)}>
               {installing ? <Spinner size={11} /> : <Server size={11} />}
-              {installing ? t('infra.inspecInstalling') : t('infra.inspecInstallBtn')}
+              {installing ? t('infra.scanEngineInstalling') : t('infra.scanEngineInstallBtn')}
             </button>
           )}
           <button
@@ -864,14 +864,14 @@ function VerifyTab({ nodes, onRefresh, t }) {
             className={btnSm(status?.installed)}
           >
             {verifying ? <Spinner size={11} /> : <RefreshCw size={11} />}
-            {verifying ? t('infra.inspecVerifying') : t('infra.inspecVerifyBtn')}
+            {verifying ? t('infra.scanEngineVerifying') : t('infra.scanEngineVerifyBtn')}
           </button>
         </div>
 
         {results && results.results?.length > 0 && (
           <div className="mt-4 border-t border-gray-100 pt-3">
             <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider mb-2">
-              {t('infra.inspecLastVerify')}
+              {t('infra.scanEngineLastVerify')}
             </p>
             <div className="space-y-1.5 max-h-36 overflow-y-auto">
               {results.results.map((r) => (
@@ -897,9 +897,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
       {/* Per-node table */}
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-          <h4 className="text-[13px] font-semibold text-gray-800">{t('infra.nodeInspection')}</h4>
+          <h4 className="text-[13px] font-semibold text-gray-800">{t('infra.nodeScanReadiness')}</h4>
           <span className="text-[11px] text-gray-400">
-            {reachableCount} / {nodes.length} {t('infra.inspecNodesReachable')}
+            {reachableCount} / {nodes.length} {t('infra.scanEngineNodesReachable')}
           </span>
         </div>
         {nodes.length === 0 ? (
@@ -922,7 +922,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
                     <p className="text-[11px] text-gray-400 font-mono">{n.ip}</p>
                   </td>
                   <td className="px-5 py-3">
-                    <Pip ok={n.inspec_installed || false} label={n.inspec_installed ? t('infra.reachable') : t('infra.unreachable')} />
+                    <Pip ok={n.scan_ready || false} label={n.scan_ready ? t('infra.reachable') : t('infra.unreachable')} />
                     {probeErrors[n.id] && (
                       <p
                         className="text-[10px] text-red-500 font-mono mt-1 max-w-[220px] truncate cursor-help"
@@ -943,7 +943,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
                         className={btnSm(false)}
                       >
                         {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
-                        {t('infra.inspect')}
+                        {t('infra.probe')}
                       </button>
                       <button
                         onClick={() => handleDiagnose(n.id)}

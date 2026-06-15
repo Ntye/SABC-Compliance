@@ -27,13 +27,19 @@ export const badge = (variant) => {
     operator: `${base} bg-amber-500/15 text-amber-700`,
     readonly: `${base} bg-gray-100 text-gray-500`,
     cis: `${base} bg-blue-600/15 text-blue-700`,
-    iso27001: `${base} bg-green-600/15 text-green-700`,
-    'pci-dss': `${base} bg-amber-500/15 text-amber-700`,
+    internal: `${base} bg-violet-600/15 text-violet-700`,
     RedHat: `${base} bg-amber-100 text-amber-800`,
     Debian: `${base} bg-blue-100 text-blue-800`,
   }
   return variants[variant] || variants.gray
 }
+
+export const FRAMEWORK_LABELS = {
+  cis: 'CIS Benchmark',
+  internal: 'Internal Referential',
+}
+
+export const frameworkLabel = (id) => FRAMEWORK_LABELS[id] || (id ? id.toUpperCase() : '—')
 
 export const scoreColor = (n) =>
   n >= 90 ? 'text-green-600' : n >= 70 ? 'text-amber-600' : 'text-red-600'

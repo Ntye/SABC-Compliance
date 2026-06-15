@@ -45,7 +45,7 @@ from modules.nodes.usecases import (
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
-    GetJobUseCase, InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    GetJobUseCase, ScanEngineUseCase, InstallServiceUseCase, ListJobsUseCase,
     SetMasterHostUseCase, StartJobUseCase,
 )
 from modules.compliance.usecases import (
@@ -258,7 +258,7 @@ async def lifespan(app: FastAPI):
     install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
     install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
     check_health_uc          = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
-    inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
+    scan_engine_uc           = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
@@ -268,7 +268,7 @@ async def lifespan(app: FastAPI):
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
         check_health_uc=check_health_uc,
-        inspec_uc=inspec_uc,
+        scan_engine_uc=scan_engine_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,
     )
@@ -280,10 +280,10 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Compliance use cases --
-    # Bundled InSpec profile lives at backend/inspec-profiles/sabc-linux-baseline.
-    inspec_profile_path = os.path.join(
+    # Bundled CIS profile lives at backend/scan-profiles/sabc-linux-baseline.
+    scan_profile_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "inspec-profiles", "sabc-linux-baseline",
+        "scan-profiles", "sabc-linux-baseline",
     )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
@@ -291,8 +291,8 @@ async def lifespan(app: FastAPI):
         collect_uc=CollectNodeComplianceUseCase(
             node_repo, compliance_repo, ssh_client,
             default_ssh_key_path=settings.ssh_key_path,
-            profile_path=inspec_profile_path,
-            inspec_ctrl=inspec_uc,
+            profile_path=scan_profile_path,
+            scan_ctrl=scan_engine_uc,
         ),
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
@@ -357,7 +357,9 @@ def create_app() -> FastAPI:
 ## SABC Integrated Linux Compliance Platform
 
 Manages a fleet of Linux servers (Rocky Linux 9 + Ubuntu 22.04) with automated
-compliance enforcement across **CIS Benchmarks**, **ISO/IEC 27001**, and **PCI-DSS**.
+compliance enforcement across two frameworks: **CIS Benchmark** (built-in hardening
+baseline) and **Internal Referential** (SABC company-specific baseline, independently
+maintained and distinct from the CIS framework).
 
 ### Closed Feedback Loop
 Wazuh detects a violation → webhook → Puppet remediation → recorded result.

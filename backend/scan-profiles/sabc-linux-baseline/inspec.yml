@@ -8,9 +8,8 @@ summary: >-
   A comprehensive CIS Benchmark for Linux executed by the SABC compliance
   platform. Controls cover all six CIS sections — Initial Setup, Services,
   Network Configuration, Logging & Auditing, Access/Authentication/Authorization
-  and System Maintenance. Each control is mapped to its CIS number and, where
-  applicable, ISO/IEC 27001 and PCI-DSS, and carries an impact score used to
-  derive a severity for reporting.
+  and System Maintenance. Each control is mapped to its CIS number and carries
+  an impact score used to derive a severity for reporting.
 version: 2.0.0
 supports:
   - platform: linux

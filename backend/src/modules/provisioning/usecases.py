@@ -373,18 +373,17 @@ class DetectAgentsUseCase:
         })
 
 
-class InspecControllerUseCase:
-    """Manages the platform-side (controller) InSpec installation.
+class ScanEngineUseCase:
+    """Manages the platform-side (controller) scan engine (CINC Auditor) installation.
 
-    InSpec is agentless: it lives once on the SABC platform server and reaches
-    each registered node over SSH. This use case answers two questions:
-      1. Is InSpec installed on the controller? (and at what version)
-      2. Can InSpec actually reach a given node over SSH? (which marks the
-         node as inspec_installed = True so the compliance engine knows it
-         can run controls against it).
+    The scan engine is agentless: it lives once on the SABC platform server and
+    reaches each registered node over SSH. This use case answers two questions:
+      1. Is the scan engine installed on the controller? (and at what version)
+      2. Can the scan engine reach a given node over SSH? (which marks the
+         node as scan_ready = True so the compliance engine can run controls).
     """
 
-    INSPEC_BIN = "/usr/bin/cinc-auditor"
+    SCAN_BIN = "/usr/bin/cinc-auditor"
 
     def __init__(self, node_repo: INodeRepository, default_ssh_key_path: str) -> None:
         self._node_repo = node_repo
@@ -394,17 +393,17 @@ class InspecControllerUseCase:
         """Return {installed, version, executable_path}."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                self.INSPEC_BIN, "version",
+                self.SCAN_BIN, "version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode == 0:
                 version = stdout.decode().strip().splitlines()[0] if stdout else "unknown"
-                return {"installed": True, "version": version, "executable_path": self.INSPEC_BIN}
+                return {"installed": True, "version": version, "executable_path": self.SCAN_BIN}
         except (FileNotFoundError, asyncio.TimeoutError, Exception):
             pass
-        return {"installed": False, "version": None, "executable_path": self.INSPEC_BIN}
+        return {"installed": False, "version": None, "executable_path": self.SCAN_BIN}
 
     async def install_on_controller(self) -> dict:
         """Install CINC Auditor on the platform server via the CINC omnitruck script.
@@ -437,21 +436,16 @@ class InspecControllerUseCase:
     async def verify_node(self, node_id: str) -> dict:
         """Probe a single node over SSH and persist the result.
 
-        We deliberately use plain SSH (not `inspec detect`) for the reachability
-        check: InSpec runs over the same SSH channel that Ansible already uses,
-        so if SSH works the controller can drive InSpec controls. Plain SSH
-        also sidesteps InSpec's Ruby Net::SSH host-key check (which doesn't
-        honor the container's defaults on first connect) and the Chef license
-        prompt entirely.
+        We use plain SSH for the reachability check: the scan engine uses the
+        same SSH channel that Ansible already uses, so if SSH works the
+        controller can run compliance controls against the node.
         """
         node = await self._node_repo.find_by_id(node_id)
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
 
-        # Check InSpec installation status separately from SSH reachability.
-        # The SSH test below doesn't need InSpec — it just verifies the channel
-        # that InSpec would use. We always run it so the badge reflects reality.
-        inspec_status = await self.get_status()
+        # Check scan engine installation status separately from SSH reachability.
+        scan_status = await self.get_status()
 
         key = node.ssh_key_path or self._default_key
         args = [
@@ -463,7 +457,7 @@ class InspecControllerUseCase:
             "-i", key,
             "-p", str(node.ssh_port),
             f"{node.ssh_user}@{node.ip}",
-            "echo INSPEC_REACHABLE",
+            "echo SCAN_REACHABLE",
         ]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -474,7 +468,7 @@ class InspecControllerUseCase:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
             out = (stdout or b"").decode(errors="replace")
             err = (stderr or b"").decode(errors="replace")
-            ok = proc.returncode == 0 and "INSPEC_REACHABLE" in out
+            ok = proc.returncode == 0 and "SCAN_REACHABLE" in out
             output = (out + "\n" + err).strip() if not ok else None
         except asyncio.TimeoutError:
             ok = False
@@ -485,7 +479,7 @@ class InspecControllerUseCase:
 
         # Always persist — the user's expectation is "click verify, see the
         # current truth", so we record this run's result unconditionally.
-        node.inspec_installed = ok
+        node.scan_ready = ok
         node.updated_at = datetime.utcnow()
         await self._node_repo.update(node)
 
@@ -495,7 +489,7 @@ class InspecControllerUseCase:
             "reachable": ok,
             "output": output[-1500:] if output else None,
         }
-        if not inspec_status["installed"]:
+        if not scan_status["installed"]:
             result["error"] = (
                 "CINC Auditor n'est pas installé sur la plateforme — "
                 "cliquez « Installer sur la plateforme » pour activer les scans de conformité."
@@ -508,7 +502,7 @@ class InspecControllerUseCase:
         if not status["installed"]:
             return {
                 "controller": status,
-                "error": "InSpec is not installed on the platform",
+                "error": "Scan engine is not installed on the platform",
                 "results": [],
             }
 

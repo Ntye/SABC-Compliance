@@ -20,7 +20,6 @@ title 'Section 6 — System Maintenance'
     title "Ensure permissions on #{path} are configured"
     desc "#{path} must be root-owned and no more permissive than #{meta[:mode]}."
     tag cis: meta[:cid]
-    tag pci_dss: '8.2.1'
     only_if { file(path).exist? }
     describe file(path) do
       its('owner') { should eq 'root' }
@@ -57,7 +56,6 @@ control 'cis-6.2.1-no-empty-passwords' do
   title 'Ensure no accounts have empty password fields'
   desc 'Every enabled account must have a password hash set in /etc/shadow.'
   tag cis: '6.2.1'
-  tag pci_dss: '8.2.3'
   describe command("awk -F: '($2 == \"\") {print $1}' /etc/shadow 2>/dev/null") do
     its('stdout.strip') { should eq '' }
   end
@@ -77,7 +75,6 @@ control 'cis-6.2.5-root-uid-0-unique' do
   title 'Ensure root is the only UID 0 account'
   desc 'Only the root account may have UID 0.'
   tag cis: '6.2.5'
-  tag iso27001: 'A.9.2.3'
   describe command("awk -F: '($3 == 0) {print $1}' /etc/passwd 2>/dev/null") do
     its('stdout.strip') { should eq 'root' }
   end

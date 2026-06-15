@@ -15,7 +15,7 @@ const SERVICE_LABELS = {
   'wazuh-manager':         'Wazuh Manager Install',
   'wazuh-agent':           'Wazuh Agent Install',
   'provision':             'VM Provision (Add VM)',
-  'inspec-verify':         'Compliance Scan (InSpec)',
+  'scan-verify':           'Compliance Scan',
   'install_check_health':  'Node Health Check',
   'detect_agents':         'Agent Detection',
 }

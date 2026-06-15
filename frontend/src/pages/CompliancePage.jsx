@@ -16,7 +16,7 @@ const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af', high: '#dc2626' }
 function primaryReport(node) {
   const reports = node.reports || []
   return (
-    reports.find((r) => r.source === 'inspec') ||
+    reports.find((r) => r.source === 'scan') ||
     reports.find((r) => r.source === 'cis-ssh') ||
     reports.find((r) => r.source !== 'puppet') ||
     null
@@ -24,7 +24,7 @@ function primaryReport(node) {
 }
 
 function sourceLabel(t, source) {
-  if (source === 'inspec') return t('compliance.sourceInspec')
+  if (source === 'scan') return t('compliance.sourceScan')
   if (source === 'cis-ssh') return t('compliance.sourceCisSsh')
   if (source === 'puppet') return t('compliance.sourcePuppet')
   return source
@@ -394,7 +394,7 @@ export default function CompliancePage() {
                       ) : '—'}
                     </td>
                     <td className="px-5 py-3">
-                      {r ? <span className={badge(r.source === 'inspec' ? 'info' : 'gray')}>{sourceLabel(t, r.source)}</span> : '—'}
+                      {r ? <span className={badge(r.source === 'scan' ? 'info' : 'gray')}>{sourceLabel(t, r.source)}</span> : '—'}
                     </td>
                     <td className="px-5 py-3 text-gray-400">
                       {r ? new Date(r.collected_at).toLocaleString() : t('compliance.neverScanned')}

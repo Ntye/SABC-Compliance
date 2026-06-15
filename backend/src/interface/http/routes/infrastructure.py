@@ -48,7 +48,7 @@ _install_wazuh_manager_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
 _check_health_uc = None
-_inspec_uc = None
+_scan_engine_uc = None
 _node_repo = None
 _packages_dir: str = ""
 
@@ -61,14 +61,14 @@ def set_use_cases(
     install_puppet_agent_uc,
     install_wazuh_agent_uc,
     check_health_uc=None,
-    inspec_uc=None,
+    scan_engine_uc=None,
     node_repo=None,
     packages_dir: str = "",
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
-    global _check_health_uc, _inspec_uc
+    global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
@@ -77,7 +77,7 @@ def set_use_cases(
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
     _check_health_uc = check_health_uc
-    _inspec_uc = inspec_uc
+    _scan_engine_uc = scan_engine_uc
     _node_repo = node_repo
     _packages_dir = packages_dir
 
@@ -230,18 +230,18 @@ async def check_node_health(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-# ── InSpec (platform controller) ──────────────────────────────────────────────
-# InSpec is agentless: it lives on the SABC platform and reaches each node over
-# SSH. These endpoints expose the controller-side install state and let the
-# operator verify that the platform can actually probe each node.
+# ── Scan engine (platform controller) ─────────────────────────────────────────
+# The scan engine (CINC Auditor) is agentless: it lives on the SABC platform
+# and reaches each node over SSH. These endpoints expose the controller-side
+# install state and let the operator verify that the platform can probe each node.
 
-class InspecStatusResponse(BaseModel):
+class ScanEngineStatusResponse(BaseModel):
     installed: bool
     version: str | None = None
     executable_path: str
 
 
-class InspecVerifyResult(BaseModel):
+class ScanEngineVerifyResult(BaseModel):
     node_id: str | None = None
     hostname: str | None = None
     reachable: bool
@@ -249,48 +249,47 @@ class InspecVerifyResult(BaseModel):
     error: str | None = None
 
 
-class InspecVerifyAllResponse(BaseModel):
-    controller: InspecStatusResponse
+class ScanEngineVerifyAllResponse(BaseModel):
+    controller: ScanEngineStatusResponse
     total: int = 0
     reachable: int = 0
-    results: list[InspecVerifyResult] = []
+    results: list[ScanEngineVerifyResult] = []
     error: str | None = None
 
 
-@router.get("/inspec/status", response_model=InspecStatusResponse, summary="InSpec platform install status")
-async def get_inspec_status(principal: AuthPrincipal = Depends(get_current_principal)):
-    """Return whether InSpec is installed on the SABC platform server."""
-    if _inspec_uc is None:
-        raise HTTPException(status_code=503, detail="InSpec use case not configured")
-    return InspecStatusResponse(**(await _inspec_uc.get_status()))
+@router.get("/scan-engine/status", response_model=ScanEngineStatusResponse, summary="Scan engine platform install status")
+async def get_scan_engine_status(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Return whether the scan engine (CINC Auditor) is installed on the SABC platform server."""
+    if _scan_engine_uc is None:
+        raise HTTPException(status_code=503, detail="Scan engine use case not configured")
+    return ScanEngineStatusResponse(**(await _scan_engine_uc.get_status()))
 
 
-@router.post("/inspec/install", summary="Install InSpec on the platform server")
-async def install_inspec_on_controller(principal: AuthPrincipal = Depends(require_operator)):
-    """Run the official Chef InSpec installer inside the platform container."""
-    if _inspec_uc is None:
-        raise HTTPException(status_code=503, detail="InSpec use case not configured")
-    result = await _inspec_uc.install_on_controller()
+@router.post("/scan-engine/install", summary="Install the scan engine on the platform server")
+async def install_scan_engine_on_controller(principal: AuthPrincipal = Depends(require_operator)):
+    """Run the CINC Auditor installer inside the platform container."""
+    if _scan_engine_uc is None:
+        raise HTTPException(status_code=503, detail="Scan engine use case not configured")
+    result = await _scan_engine_uc.install_on_controller()
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result)
     return result
 
 
-@router.post("/inspec/verify", response_model=InspecVerifyAllResponse, summary="Verify InSpec can reach every node")
-async def verify_inspec_all(principal: AuthPrincipal = Depends(require_operator)):
-    """Probe every node via `inspec detect` over SSH and mark nodes inspec_installed
-    when reachable. Used to confirm the platform can run InSpec controls remotely."""
-    if _inspec_uc is None:
-        raise HTTPException(status_code=503, detail="InSpec use case not configured")
-    return await _inspec_uc.verify_all_nodes()
+@router.post("/scan-engine/verify", response_model=ScanEngineVerifyAllResponse, summary="Verify scan engine can reach every node")
+async def verify_scan_engine_all(principal: AuthPrincipal = Depends(require_operator)):
+    """Probe every node over SSH and mark nodes scan_ready when reachable."""
+    if _scan_engine_uc is None:
+        raise HTTPException(status_code=503, detail="Scan engine use case not configured")
+    return await _scan_engine_uc.verify_all_nodes()
 
 
-@router.post("/inspec/verify/{node_id}", response_model=InspecVerifyResult, summary="Verify InSpec can reach a single node")
-async def verify_inspec_node(node_id: str, principal: AuthPrincipal = Depends(require_operator)):
-    """Probe one node and update its inspec_installed flag."""
-    if _inspec_uc is None:
-        raise HTTPException(status_code=503, detail="InSpec use case not configured")
+@router.post("/scan-engine/verify/{node_id}", response_model=ScanEngineVerifyResult, summary="Verify scan engine can reach a single node")
+async def verify_scan_engine_node(node_id: str, principal: AuthPrincipal = Depends(require_operator)):
+    """Probe one node and update its scan_ready flag."""
+    if _scan_engine_uc is None:
+        raise HTTPException(status_code=503, detail="Scan engine use case not configured")
     try:
-        return await _inspec_uc.verify_node(node_id)
+        return await _scan_engine_uc.verify_node(node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

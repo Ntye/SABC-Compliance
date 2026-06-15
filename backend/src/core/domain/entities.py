@@ -3,6 +3,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar
 
+# The two canonical compliance frameworks supported by the platform.
+# CIS Benchmark: the published CIS hardening standard (built-in profile source).
+# Internal Referential: BdC/SABC company baseline — distinct entity, derived from
+# CIS but independently maintained and may evolve to incorporate other standards.
+FRAMEWORKS = [
+    {"id": "cis",      "name": "CIS Benchmark"},
+    {"id": "internal", "name": "Internal Referential"},
+]
+FRAMEWORK_IDS = tuple(f["id"] for f in FRAMEWORKS)
+
 
 @dataclass
 class Node:
@@ -22,7 +32,7 @@ class Node:
     dns_resolves: bool | None = None
     puppet_enrolled: bool = False
     wazuh_enrolled: bool = False
-    inspec_installed: bool = False
+    scan_ready: bool = False
     last_seen: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
@@ -283,7 +293,7 @@ class Rule:
     active: bool = True
     frameworks: list[dict] = field(default_factory=list)
     code_blocks: dict = field(default_factory=dict)
-    inspec_blocks: dict = field(default_factory=dict)
+    scan_blocks: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -311,7 +321,7 @@ class ProfileControl:
     configure_guideline: str | None = None
     regulatory: str | None = None
     notes: str | None = None
-    check_command: str | None = None     # InSpec Ruby snippet for this control
+    check_command: str | None = None     # scan check snippet for this control
     enabled: bool = True
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)

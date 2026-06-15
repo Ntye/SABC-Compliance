@@ -33,7 +33,7 @@ class NodeResponse(BaseModel):
     status: str
     puppet_enrolled: bool
     wazuh_enrolled: bool
-    inspec_installed: bool
+    scan_ready: bool
     last_seen: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -154,7 +154,7 @@ def _to_response(node, detect_job_id: str | None = None) -> NodeResponse:
         status=node.status,
         puppet_enrolled=node.puppet_enrolled,
         wazuh_enrolled=node.wazuh_enrolled,
-        inspec_installed=node.inspec_installed,
+        scan_ready=node.scan_ready,
         last_seen=node.last_seen,
         created_at=node.created_at,
         updated_at=node.updated_at,

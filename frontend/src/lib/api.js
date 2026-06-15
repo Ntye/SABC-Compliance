@@ -299,24 +299,24 @@ export async function checkPuppetAgentPlatform(nodeId) {
   return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
 }
 
-// ── InSpec (platform / controller) ──────────────────────────────────────────
-// InSpec runs only on the SABC platform server and reaches each node over SSH.
-// No InSpec install on the managed nodes.
+// ── Scan engine (platform / controller) ──────────────────────────────────────
+// CINC Auditor runs only on the SABC platform server and reaches each node
+// over SSH — no installation required on the managed nodes.
 
-export async function getInspecStatus() {
-  return request('GET', '/infrastructure/inspec/status')
+export async function getScanEngineStatus() {
+  return request('GET', '/infrastructure/scan-engine/status')
 }
 
-export async function installInspecOnController() {
-  return request('POST', '/infrastructure/inspec/install')
+export async function installScanEngineOnController() {
+  return request('POST', '/infrastructure/scan-engine/install')
 }
 
-export async function verifyInspecAllNodes() {
-  return request('POST', '/infrastructure/inspec/verify')
+export async function verifyScanEngineAllNodes() {
+  return request('POST', '/infrastructure/scan-engine/verify')
 }
 
-export async function verifyInspecNode(nodeId) {
-  return request('POST', `/infrastructure/inspec/verify/${encodeURIComponent(nodeId)}`)
+export async function verifyScanEngineNode(nodeId) {
+  return request('POST', `/infrastructure/scan-engine/verify/${encodeURIComponent(nodeId)}`)
 }
 
 export async function checkNodeHealth(nodeId) {
@@ -410,8 +410,8 @@ export async function getControlHistory(profileId, controlId) {
   return request('GET', `/profiles/${profileId}/controls/${controlId}/history`)
 }
 
-export async function importInspecCommands(profileId) {
-  return request('POST', `/profiles/${profileId}/import-inspec`)
+export async function importScanControls(profileId) {
+  return request('POST', `/profiles/${profileId}/import-scan-controls`)
 }
 
 // ── Audit ─────────────────────────────────────────────────────────────────────

@@ -29,7 +29,6 @@ title 'Section 3 — Network Configuration'
     title "Ensure #{param} is set to #{expected}"
     desc "Kernel network parameter #{param} must equal #{expected} to harden the host's network stack."
     tag cis: '3.2'
-    tag iso27001: 'A.13.1.1'
     describe kernel_parameter(param) do
       its('value') { should eq expected }
     end
@@ -77,7 +76,6 @@ control 'cis-3.5.2-firewall-active' do
   title 'Ensure a host firewall is active'
   desc 'A firewall service (firewalld, ufw or nftables) must be running.'
   tag cis: '3.5.2'
-  tag pci_dss: '1.1'
   describe.one do
     describe service('firewalld') do
       it { should be_running }

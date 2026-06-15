@@ -10,8 +10,6 @@ control 'cis-4.1.1.1-auditd-installed' do
   title 'Ensure auditd is installed'
   desc 'The audit daemon records security-relevant events for detection and forensics.'
   tag cis: '4.1.1.1'
-  tag iso27001: 'A.12.4.1'
-  tag pci_dss: '10.2'
   describe.one do
     describe package('auditd') do
       it { should be_installed }
@@ -27,7 +25,6 @@ control 'cis-4.1.1.2-auditd-enabled' do
   title 'Ensure auditd service is enabled and running'
   desc 'auditd must start at boot and be running to capture audit events.'
   tag cis: '4.1.1.2'
-  tag pci_dss: '10.2'
   describe service('auditd') do
     it { should be_enabled }
     it { should be_running }
@@ -90,7 +87,6 @@ control 'cis-4.2.1-rsyslog-or-journald' do
   title 'Ensure a system logging service is installed and active'
   desc 'rsyslog or systemd-journald must be running so that events are recorded.'
   tag cis: '4.2.1'
-  tag iso27001: 'A.12.4.1'
   describe.one do
     describe service('rsyslog') do
       it { should be_running }

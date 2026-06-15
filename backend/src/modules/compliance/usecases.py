@@ -73,7 +73,7 @@ class GetNodeComplianceUseCase:
             "status": node.status,
             "puppet_enrolled": node.puppet_enrolled,
             "wazuh_enrolled": node.wazuh_enrolled,
-            "inspec_installed": node.inspec_installed,
+            "scan_ready": node.scan_ready,
             "reports": [
                 {
                     "id": r.id, "source": r.source, "framework": r.framework,
@@ -100,24 +100,20 @@ class GetNodeComplianceUseCase:
 
 class CollectNodeComplianceUseCase:
     """
-    Run a structured InSpec compliance scan against an enrolled node.
+    Run a structured compliance scan against an enrolled node using CINC Auditor.
 
-    The bundled CIS Benchmark profile is executed from the controller over
-    InSpec's agentless ssh:// transport — every control carries an impact score,
-    a severity, a CIS section and framework references (CIS / ISO 27001 /
-    PCI-DSS). There is no shell fallback: this is a complete InSpec scan or a
-    clear, actionable error. When ``auto_install`` is set and InSpec is missing
-    from the controller, it is installed on demand so the operator can scan
-    directly from the compliance page.
+    The bundled CIS Benchmark profile is executed from the controller over an
+    agentless ssh:// transport — every control carries an impact score, a
+    severity, and a CIS section reference. There is no shell fallback: this is
+    a complete scan or a clear, actionable error. When ``auto_install`` is set
+    and the scan engine is missing from the controller, it is installed on demand
+    so the operator can scan directly from the compliance page.
 
     The Puppet last-run summary is collected as a supplementary report when the
     Puppet agent is enrolled.
-
-    Gated on the node being Puppet/Wazuh enrolled so the UI only starts showing
-    data once the node is part of the managed infrastructure.
     """
 
-    INSPEC_BIN = "/usr/bin/cinc-auditor"
+    SCAN_BIN = "/usr/bin/cinc-auditor"
 
     def __init__(
         self,
@@ -126,31 +122,31 @@ class CollectNodeComplianceUseCase:
         ssh: ISSHClient,
         default_ssh_key_path: str = "",
         profile_path: str = "",
-        inspec_bin: str | None = None,
-        inspec_ctrl=None,
+        scan_bin: str | None = None,
+        scan_ctrl=None,
     ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
         self._ssh = ssh
         self._default_key = default_ssh_key_path
         self._profile_path = profile_path
-        self._inspec_bin = inspec_bin or self.INSPEC_BIN
-        # InspecControllerUseCase — used to install InSpec on demand.
-        self._inspec_ctrl = inspec_ctrl
+        self._scan_bin = scan_bin or self.SCAN_BIN
+        # ScanEngineUseCase — used to install the scan engine on demand.
+        self._scan_engine_ctrl = scan_ctrl
 
-    def _inspec_available(self) -> bool:
+    def _scan_engine_available(self) -> bool:
         return bool(
-            os.path.isfile(self._inspec_bin) or shutil.which("cinc-auditor")
+            os.path.isfile(self._scan_bin) or shutil.which("cinc-auditor")
         )
 
     async def execute(self, id_or_hostname: str, auto_install: bool = True) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
-        # Ensure InSpec is present on the controller; install on demand so the
-        # operator can scan directly from the compliance page.
-        if not self._inspec_available():
-            if auto_install and self._inspec_ctrl is not None:
-                install = await self._inspec_ctrl.install_on_controller()
+        # Ensure the scan engine is present on the controller; install on demand
+        # so the operator can scan directly from the compliance page.
+        if not self._scan_engine_available():
+            if auto_install and self._scan_engine_ctrl is not None:
+                install = await self._scan_engine_ctrl.install_on_controller()
                 if not (install.get("installed") or install.get("success")):
                     raise ValidationError(
                         "CINC Auditor is not installed on the platform and automatic "
@@ -164,15 +160,15 @@ class CollectNodeComplianceUseCase:
 
         collected: list[dict] = []
 
-        # Complete, structured InSpec scan — no shell fallback.
-        inspec_report, inspec_reason = await self._collect_inspec(node)
-        if not inspec_report:
-            raise ValidationError(inspec_reason or "The InSpec scan did not produce any results.")
+        # Complete, structured compliance scan — no shell fallback.
+        scan_report, scan_reason = await self._collect_scan(node)
+        if not scan_report:
+            raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
 
-        await self._repo.save_report(inspec_report)
-        collected.append(self._summarise(inspec_report))
-        if not node.inspec_installed:
-            node.inspec_installed = True
+        await self._repo.save_report(scan_report)
+        collected.append(self._summarise(scan_report))
+        if not node.scan_ready:
+            node.scan_ready = True
             node.updated_at = datetime.utcnow()
             try:
                 await self._nodes.update(node)
@@ -198,35 +194,34 @@ class CollectNodeComplianceUseCase:
             "collected_at": r.collected_at.isoformat(),
         }
 
-    # ── InSpec scan ───────────────────────────────────────────────────────────
+    # ── Compliance scan ────────────────────────────────────────────────────────
 
-    async def _collect_inspec(self, node: Node) -> tuple[ComplianceReport | None, str | None]:
-        """Run the bundled InSpec profile against the node and parse JSON output.
+    async def _collect_scan(self, node: Node) -> tuple[ComplianceReport | None, str | None]:
+        """Run the bundled CIS profile against the node and parse JSON output.
 
         Returns ``(report, None)`` on success, or ``(None, reason)`` when the
-        scan is skipped or fails so the caller can surface why it fell back to
-        the shell spot-check.
+        scan is skipped or fails so the caller can surface a clear error.
         """
         if not self._profile_path or not os.path.isdir(self._profile_path):
             return None, (
-                f"InSpec profile not found at {self._profile_path or '(unset)'} — "
+                f"Scan profile not found at {self._profile_path or '(unset)'} — "
                 "the bundled profile is missing from the deployment."
             )
 
-        # Resolve the InSpec binary; the configured path may differ per install.
-        inspec_bin = self._inspec_bin
-        if not os.path.isfile(inspec_bin):
-            inspec_bin = shutil.which("cinc-auditor") or inspec_bin
-        if not (os.path.isfile(inspec_bin) or shutil.which("cinc-auditor")):
+        # Resolve the scan binary; the configured path may differ per install.
+        scan_bin = self._scan_bin
+        if not os.path.isfile(scan_bin):
+            scan_bin = shutil.which("cinc-auditor") or scan_bin
+        if not (os.path.isfile(scan_bin) or shutil.which("cinc-auditor")):
             return None, (
                 "CINC Auditor is not installed on the platform — install it from the "
-                "Infrastructure page to enable structured compliance scans."
+                "Infrastructure page to enable compliance scans."
             )
 
         key = node.ssh_key_path or self._default_key
         target = f"ssh://{node.ssh_user}@{node.ip}"
         args = [
-            inspec_bin, "exec", self._profile_path,
+            scan_bin, "exec", self._profile_path,
             "-t", target,
             "-i", key,
             "--port", str(node.ssh_port),
@@ -247,25 +242,25 @@ class CollectNodeComplianceUseCase:
         except FileNotFoundError:
             return None, "CINC Auditor binary could not be executed on the platform."
         except asyncio.TimeoutError:
-            return None, "InSpec scan timed out after 240s (node slow or unreachable)."
+            return None, "Compliance scan timed out after 240s (node slow or unreachable)."
         except Exception as exc:
-            return None, f"InSpec scan failed to start: {exc}"
+            return None, f"Compliance scan failed to start: {exc}"
 
         raw = (stdout or b"").decode(errors="replace").strip()
         data = self._extract_json(raw)
         if not data:
             err = (stderr or b"").decode(errors="replace").strip()
             snippet = (err or raw or "no output")[-400:]
-            return None, f"InSpec produced no parseable output: {snippet}"
+            return None, f"Scan produced no parseable output: {snippet}"
 
-        report = self._inspec_to_report(node, data)
+        report = self._scan_to_report(node, data)
         if not report:
-            return None, "InSpec scan returned no controls."
+            return None, "Compliance scan returned no controls."
         return report, None
 
     @staticmethod
     def _extract_json(raw: str) -> dict | None:
-        """InSpec may emit a license/info banner before the JSON document."""
+        """The scan engine may emit a license/info banner before the JSON document."""
         if not raw:
             return None
         try:
@@ -291,8 +286,7 @@ class CollectNodeComplianceUseCase:
             return "low"
         return "info"
 
-    def _inspec_to_report(self, node: Node, data: dict) -> ComplianceReport | None:
-        framework_keys = ("cis", "iso27001", "iso_27001", "pci_dss", "pci-dss", "nist")
+    def _scan_to_report(self, node: Node, data: dict) -> ComplianceReport | None:
         details: list[dict] = []
         passed = failed = skipped = 0
 
@@ -321,10 +315,11 @@ class CollectNodeComplianceUseCase:
                     message = (results[0].get("skip_message") or results[0].get("message") or "").strip()
 
                 tags = ctrl.get("tags") or {}
+                # Only extract the CIS framework tag; all other framework tags are ignored.
                 frameworks = {
-                    ("pci_dss" if k == "pci-dss" else k): v
+                    k: v
                     for k, v in tags.items()
-                    if k in framework_keys and v
+                    if k == "cis" and v
                 }
 
                 if status == "pass":
@@ -355,7 +350,7 @@ class CollectNodeComplianceUseCase:
         return ComplianceReport(
             id=str(uuid.uuid4()),
             node_id=node.id,
-            source="inspec",
+            source="scan",
             framework="cis",
             passed_checks=passed,
             failed_checks=failed,

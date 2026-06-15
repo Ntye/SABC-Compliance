@@ -12,7 +12,6 @@ title 'Section 1 — Initial Setup'
     title "Ensure mounting of #{fs} filesystems is disabled"
     desc "The #{fs} filesystem type should not be loadable unless there is a documented business need."
     tag cis: '1.1.1'
-    tag iso27001: 'A.12.6.2'
     describe kernel_module(fs) do
       it { should_not be_loaded }
       it { should be_disabled }
@@ -61,7 +60,6 @@ control 'cis-1.3.1-aide-installed' do
   title 'Ensure a filesystem integrity checking tool (AIDE) is installed'
   desc 'AIDE detects unauthorized changes to files and directories.'
   tag cis: '1.3.1'
-  tag iso27001: 'A.12.2.1'
   describe.one do
     describe package('aide') do
       it { should be_installed }
@@ -96,7 +94,6 @@ control 'cis-1.5.1-aslr' do
   title 'Ensure address space layout randomization (ASLR) is enabled'
   desc 'kernel.randomize_va_space must be 2 to randomize process memory layout.'
   tag cis: '1.5.1'
-  tag iso27001: 'A.12.6.1'
   describe kernel_parameter('kernel.randomize_va_space') do
     its('value') { should eq 2 }
   end
