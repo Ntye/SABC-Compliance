@@ -128,11 +128,6 @@ const CIS_SECTIONS = {
   6: 'System Maintenance',
 }
 
-const FRAMEWORKS = [
-  { key: 'all', label: 'All' },
-  { key: 'cis', label: 'CIS' },
-]
-
 const PROFILE_OPTIONS = [
   { id: null,                  labelKey: 'compliance.allProfiles' },
   { id: 'cis-benchmark',       labelKey: 'compliance.cisBenchmark' },
@@ -291,7 +286,7 @@ function ControlRow({ ctrl, t }) {
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {fwKeys.map((k) => (
             <span key={k} className={badge(k)}>
-              {k.toUpperCase()} {fw[k]}
+              {k === 'cis' ? `CIS ${fw[k]}` : fw[k]}
             </span>
           ))}
           {ctrl.severity && (
@@ -537,6 +532,24 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
+  // Framework filter options adapt to what the report actually contains:
+  // a CIS scan exposes "CIS"; an Internal Referential scan exposes "SABC"
+  // (plus "CIS" for any controls with no referential equivalent).
+  const fwOptions = useMemo(() => {
+    const keys = new Set()
+    for (const d of report?.details || []) for (const k of Object.keys(d.frameworks || {})) keys.add(k)
+    const labelMap = { cis: 'CIS', internal: 'SABC' }
+    return [
+      { key: 'all', label: t('compliance.filterAll') },
+      ...[...keys].sort().map((k) => ({ key: k, label: labelMap[k] || k.toUpperCase() })),
+    ]
+  }, [report, t])
+
+  // Reset the framework filter when the active key isn't present in this report.
+  useEffect(() => {
+    if (fwFilter !== 'all' && !fwOptions.some((o) => o.key === fwFilter)) setFwFilter('all')
+  }, [fwOptions, fwFilter])
+
   const complianceTree = useMemo(() => {
     let details = report?.details || []
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
@@ -777,17 +790,19 @@ export default function NodeCompliancePage() {
                 <span className="ml-2 text-[11px] font-normal text-gray-400">{totalShown}</span>
               </h3>
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                  {FRAMEWORKS.map((f) => (
-                    <button
-                      key={f.key}
-                      onClick={() => setFwFilter(f.key)}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${fwFilter === f.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                      {f.key === 'all' ? t('compliance.filterAll') : f.label}
-                    </button>
-                  ))}
-                </div>
+                {fwOptions.length > 1 && (
+                  <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                    {fwOptions.map((f) => (
+                      <button
+                        key={f.key}
+                        onClick={() => setFwFilter(f.key)}
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${fwFilter === f.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
                   {['all', 'failed', 'passed'].map((f) => (
                     <button

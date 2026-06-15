@@ -12,7 +12,7 @@ from core.domain.entities import (
     ComplianceReport, Node, RemediationEvent,
 )
 from core.domain.interfaces import (
-    IComplianceRepository, INodeRepository, ISSHClient,
+    IComplianceRepository, INodeRepository, IProfileRepository, ISSHClient,
 )
 from core.errors import NotFoundError, ValidationError
 
@@ -26,6 +26,36 @@ _CIS_SECTIONS = {
     "5": "Access, Authentication & Authorization",
     "6": "System Maintenance",
 }
+
+# Curated aliases for the handful of controls whose CIS numbering shifted
+# between the scan profile (newer CIS) and the Internal Referential's mapping
+# (older CIS). Maps a scanned CIS id → the referential's CIS id so the runtime
+# match can still resolve them. Title/exact-id matching covers the rest.
+_CIS_ALIAS = {
+    "1.3.1":  "1.2.1",    # Ensure AIDE (filesystem integrity tool) is installed
+    "5.1.1":  "4.1.1",    # Ensure cron daemon is enabled and running
+    "5.2.12": "4.2.13",   # Ensure only strong SSH ciphers are used
+    "5.2.13": "4.2.14",   # Ensure only strong SSH MAC algorithms are used
+    "5.2.22": "4.2.21",   # Ensure SSH MaxSessions is limited
+    "2.1.1":  "2.1.1.1",  # Ensure a time synchronization daemon is in use
+}
+
+
+def _norm_title(s: str | None) -> str:
+    """Normalise a control title for fuzzy matching across referentials."""
+    s = (s or "").lower()
+    out = []
+    for ch in s:
+        out.append(ch if ch.isalnum() else " ")
+    return " ".join("".join(out).split()).rstrip(".")
+
+
+def _cis_from_control_id(control_id: str | None) -> str | None:
+    """Extract the CIS id from a scan control id like 'cis-1.3.1-aide-installed'."""
+    if not control_id:
+        return None
+    m = re.match(r"cis-([0-9][0-9.]*)", str(control_id))
+    return m.group(1) if m else None
 
 
 def _cis_section(cis_id: str | None) -> str:
@@ -127,6 +157,7 @@ class CollectNodeComplianceUseCase:
         profile_path: str = "",
         scan_bin: str | None = None,
         scan_ctrl=None,
+        profile_repo: IProfileRepository | None = None,
     ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
@@ -136,6 +167,9 @@ class CollectNodeComplianceUseCase:
         self._scan_bin = scan_bin or self.SCAN_BIN
         # ScanEngineUseCase — used to install the scan engine on demand.
         self._scan_engine_ctrl = scan_ctrl
+        # Profile repository — used to relabel scan results with a chosen
+        # referential's section IDs/titles (e.g. the Internal Referential).
+        self._profiles = profile_repo
 
     def _scan_engine_available(self) -> bool:
         return bool(
@@ -170,7 +204,7 @@ class CollectNodeComplianceUseCase:
         if not scan_report:
             raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
 
-        self._apply_profile(scan_report, profile_id)
+        await self._relabel_for_profile(scan_report, profile_id)
         await self._repo.save_report(scan_report)
         collected.append(self._summarise(scan_report))
         if not node.scan_ready:
@@ -200,15 +234,59 @@ class CollectNodeComplianceUseCase:
             "collected_at": r.collected_at.isoformat(),
         }
 
-    @staticmethod
-    def _apply_profile(report: ComplianceReport, profile_id: str | None) -> None:
-        """Override report profile/framework labels based on the operator's selection."""
+    async def _relabel_for_profile(self, report: ComplianceReport, profile_id: str | None) -> None:
+        """Relabel report + per-control details for the operator's chosen profile.
+
+        * CIS Benchmark / default ("all"): keep the CIS labelling from the scan.
+        * Internal Referential: remap each control to its SABC section ID, title
+          and section heading by matching the scanned CIS id (exact, then alias,
+          then normalised title) against the referential's controls. Controls
+          with no referential equivalent keep their CIS label.
+        """
         if profile_id == CIS_BENCHMARK_PROFILE_ID:
             report.profile = "CIS Benchmark"
             report.framework = "cis"
-        elif profile_id == INTERNAL_PROFILE_ID:
-            report.profile = "SABC Linux Baseline"
-            report.framework = "internal"
+            return
+        if profile_id != INTERNAL_PROFILE_ID:
+            return  # None / "all" — leave the scan's default labelling untouched
+
+        report.profile = "SABC Linux Baseline"
+        report.framework = "internal"
+        if self._profiles is None:
+            return
+        try:
+            profile = await self._profiles.find_by_id(INTERNAL_PROFILE_ID)
+        except Exception:
+            profile = None
+        if not profile or not profile.controls:
+            return
+
+        by_cis: dict[str, object] = {}
+        by_title: dict[str, object] = {}
+        for c in profile.controls:
+            if c.kind != "control":
+                continue
+            if c.cis_id and c.cis_id not in by_cis:
+                by_cis[c.cis_id] = c
+            nt = _norm_title(c.title)
+            if nt and nt not in by_title:
+                by_title[nt] = c
+
+        for d in report.details:
+            cis = (d.get("frameworks") or {}).get("cis") or _cis_from_control_id(d.get("control_id"))
+            match = None
+            if cis:
+                match = by_cis.get(cis) or by_cis.get(_CIS_ALIAS.get(cis, ""))
+            if not match:
+                match = by_title.get(_norm_title(d.get("title")))
+            if not match:
+                continue  # no referential equivalent — keep the CIS label
+            d["cis_ref"] = cis                       # preserve CIS id for reference/export
+            d["control_id"] = match.section_id or d.get("control_id")
+            d["title"] = match.title or d.get("title")
+            d["section_id"] = match.section_id
+            d["section"] = match.section or d.get("section")
+            d["frameworks"] = {"internal": match.section_id}
 
     # ── Compliance scan ────────────────────────────────────────────────────────
 
