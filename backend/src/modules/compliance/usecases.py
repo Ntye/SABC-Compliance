@@ -250,6 +250,16 @@ class CollectNodeComplianceUseCase:
         data = self._extract_json(raw)
         if not data:
             err = (stderr or b"").decode(errors="replace").strip()
+            # An unreachable node is the most common cause: surface it clearly
+            # instead of dumping the raw "no parseable output" engine log.
+            transport = self._ssh_transport_error(f"{err}\n{raw}")
+            if transport:
+                return None, (
+                    f"Cannot establish an SSH connection to {node.ip}:{node.ssh_port} "
+                    f"(user '{node.ssh_user}'): {transport}. Verify the node is online, "
+                    "the SSH service is running on that port, and the platform's SSH key "
+                    "is authorized for this user."
+                )
             snippet = (err or raw or "no output")[-400:]
             return None, f"Scan produced no parseable output: {snippet}"
 
@@ -257,6 +267,41 @@ class CollectNodeComplianceUseCase:
         if not report:
             return None, "Compliance scan returned no controls."
         return report, None
+
+    @staticmethod
+    def _ssh_transport_error(text: str) -> str | None:
+        """Detect an SSH transport failure in the scan engine output.
+
+        CINC Auditor reports an unreachable node in its train ssh backend log
+        (e.g. ``Errno::ECONNREFUSED``, ``connection failed``, ``SSH session
+        could not be established``) rather than as JSON. Map those signatures to
+        a short, human-readable cause so the operator gets an actionable error.
+        """
+        if not text:
+            return None
+        low = text.lower()
+        causes = [
+            ("econnrefused", "connection refused"),
+            ("connection refused", "connection refused"),
+            ("etimedout", "connection timed out"),
+            ("connection timed out", "connection timed out"),
+            ("ehostunreach", "host unreachable"),
+            ("no route to host", "host unreachable"),
+            ("authentication failed", "authentication failed"),
+            ("permission denied", "authentication failed (permission denied)"),
+            ("host key verification failed", "host key verification failed"),
+        ]
+        for needle, label in causes:
+            if needle in low:
+                return label
+        # Generic train/ssh transport failure with no specific errno.
+        if (
+            "can't connect to 'ssh' backend" in low
+            or "ssh session could not be established" in low
+            or "[ssh] connection failed" in low
+        ):
+            return "SSH session could not be established"
+        return None
 
     @staticmethod
     def _extract_json(raw: str) -> dict | None:

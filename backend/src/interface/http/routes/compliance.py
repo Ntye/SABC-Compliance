@@ -51,10 +51,9 @@ async def node_compliance(id: str, principal: AuthPrincipal = Depends(get_curren
 async def collect_node_compliance(id: str, principal: AuthPrincipal = Depends(require_operator)):
     """
     Run a structured compliance scan (bundled CIS-aligned profile) against the node
-    over SSH from the controller, falling back to lightweight CIS shell checks
-    when the scan engine is unavailable, and read the Puppet last-run summary when the
-    Puppet agent is enrolled. Results are stored as compliance reports.
-    Requires the node to be Puppet- or Wazuh-enrolled.
+    over SSH from the controller, and read the Puppet last-run summary when the
+    Puppet agent is enrolled. Results are stored as compliance reports. There is no
+    shell fallback — a complete scan or a clear, actionable error.
     """
     try:
         return await _collect_uc.execute(id)
