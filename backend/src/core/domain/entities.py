@@ -13,6 +13,12 @@ FRAMEWORKS = [
 ]
 FRAMEWORK_IDS = tuple(f["id"] for f in FRAMEWORKS)
 
+# Well-known IDs of the two built-in referential profiles. The CIS Benchmark
+# profile is the immutable original; the internal referential is derived from it
+# and can be reverted back to it.
+CIS_BENCHMARK_PROFILE_ID = "cis-benchmark"
+INTERNAL_PROFILE_ID = "sabc-linux-baseline"
+
 
 @dataclass
 class Node:
@@ -329,10 +335,20 @@ class ProfileControl:
 
 @dataclass
 class Profile:
-    """A compliance referential — a named, editable collection of controls.
+    """A compliance referential — a named collection of controls.
 
-    The SABC Linux hardening referential ships as a built-in profile; operators
-    can edit its controls and create additional custom profiles.
+    Two referentials ship as built-in profiles and represent the two distinct
+    frameworks declared in ``FRAMEWORKS``:
+
+    * the **CIS Benchmark** (``framework="cis"``) is the pristine published
+      standard. It is immutable — read-only for every role, including admins —
+      and serves as the canonical "original" that the internal referential can
+      be reverted to.
+    * the **Internal Referential** (``framework="internal"``) is SABC's own
+      baseline, derived from the CIS Benchmark but free to evolve. Admins may
+      edit its controls and reset it back to the CIS original.
+
+    User-created profiles have ``framework=None`` and ``source="custom"``.
     """
     id: str
     name: str
@@ -340,9 +356,15 @@ class Profile:
     os_family: str = "linux"
     version: str = "1.0.0"
     source: str = "custom"        # "builtin" (seeded) | "custom" (user-created)
+    framework: str | None = None  # "cis" | "internal" | None (custom) — see FRAMEWORKS
     controls: list[ProfileControl] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    @property
+    def locked(self) -> bool:
+        """The CIS Benchmark is the immutable original — no one may edit it."""
+        return self.framework == "cis"
 
     @property
     def control_count(self) -> int:

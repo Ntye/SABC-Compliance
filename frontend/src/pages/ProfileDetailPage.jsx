@@ -8,7 +8,7 @@ import {
 import {
   getProfile, updateProfile, addProfileControl,
   updateProfileControl, deleteProfileControl, searchAllControls,
-  getControlHistory, importScanControls,
+  getControlHistory, importScanControls, revertProfile, getUserRole,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -528,12 +528,14 @@ export default function ProfileDetailPage() {
   const { id } = useParams()
   const t = useT()
   const toast = useToast()
+  const isAdmin = getUserRole() === 'admin'
   const { data: profile, loading, error, refetch } = useApi(() => getProfile(id), { deps: [id] })
 
   const [query,      setQuery]      = useState('')
   const [editing,    setEditing]    = useState(null)
   const [saving,     setSaving]     = useState(false)
   const [importing,  setImporting]  = useState(false)
+  const [reverting,  setReverting]  = useState(false)
 
   const tree = useMemo(
     () => buildTree(profile?.controls || [], query),
@@ -574,9 +576,28 @@ export default function ProfileDetailPage() {
     }
   }
 
+  async function handleRevert() {
+    if (!window.confirm(t('profiles.confirmRevert'))) return
+    setReverting(true)
+    try {
+      await revertProfile(id)
+      toast(t('profiles.reverted'), 'success')
+      refetch()
+    } catch (e) {
+      toast(e.message || t('profiles.revertFailed'), 'error')
+    } finally {
+      setReverting(false)
+    }
+  }
+
   if (loading) return <div className="py-16 flex justify-center"><Spinner /></div>
   if (error)   return <div className="p-6 text-[13px] text-red-600 bg-red-50 rounded-lg m-6">{error}</div>
   if (!profile) return null
+
+  // The CIS Benchmark is read-only for everyone; the internal referential and
+  // custom profiles are editable by admins only.
+  const readOnly = !isAdmin || !!profile.locked
+  const canRevert = isAdmin && profile.framework === 'internal'
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -590,9 +611,16 @@ export default function ProfileDetailPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-[17px] font-semibold text-gray-900">{profile.name}</h2>
-              {profile.source === 'builtin'
-                ? <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
-                : <span className={badge('gray')}>{t('profiles.custom')}</span>}
+              {profile.source === 'builtin' ? (
+                <>
+                  <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
+                  {profile.locked
+                    ? <span className={badge('gray')}>{t('profiles.readOnly')}</span>
+                    : <span className={badge('internal')}>{t('profiles.adminEditable')}</span>}
+                </>
+              ) : (
+                <span className={badge('gray')}>{t('profiles.custom')}</span>
+              )}
             </div>
             {profile.description && (
               <p className="text-[12px] text-gray-500 mt-1.5 max-w-2xl">{profile.description}</p>
@@ -609,7 +637,7 @@ export default function ProfileDetailPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
-            {profile.source === 'builtin' && (
+            {!readOnly && profile.source === 'builtin' && (
               <button
                 onClick={async () => {
                   setImporting(true)
@@ -628,20 +656,42 @@ export default function ProfileDetailPage() {
                 {importing ? t('profiles.importing') : t('profiles.importScanControls')}
               </button>
             )}
-            <button
-              onClick={() => openAdd({ kind: 'section' })}
-              className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"
-            >
-              <FolderPlus size={14} />{t('profiles.addSection')}
-            </button>
-            <button
-              onClick={() => openAdd()}
-              className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90"
-            >
-              <Plus size={14} />{t('profiles.addControl')}
-            </button>
+            {canRevert && (
+              <button
+                onClick={handleRevert}
+                disabled={reverting}
+                title={t('profiles.revertHint')}
+                className="flex items-center gap-1.5 border border-amber-300 bg-amber-50 text-amber-700 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-amber-100 disabled:opacity-50"
+              >
+                {reverting ? <Spinner size={12} /> : <RotateCcw size={13} />}
+                {reverting ? t('profiles.reverting') : t('profiles.revertToOriginal')}
+              </button>
+            )}
+            {!readOnly && (
+              <>
+                <button
+                  onClick={() => openAdd({ kind: 'section' })}
+                  className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"
+                >
+                  <FolderPlus size={14} />{t('profiles.addSection')}
+                </button>
+                <button
+                  onClick={() => openAdd()}
+                  className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90"
+                >
+                  <Plus size={14} />{t('profiles.addControl')}
+                </button>
+              </>
+            )}
           </div>
         </div>
+
+        {readOnly && (
+          <div className="mt-4 flex items-center gap-2 text-[12px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+            <Lock size={12} className="text-gray-400 flex-shrink-0" />
+            {profile.locked ? t('profiles.cisReadOnlyNotice') : t('profiles.adminOnlyNotice')}
+          </div>
+        )}
       </div>
 
       {/* Search */}
@@ -664,7 +714,7 @@ export default function ProfileDetailPage() {
             onEdit={setEditing}
             onDelete={handleDelete}
             onAdd={openAdd}
-            readOnly={false}
+            readOnly={readOnly}
             t={t}
           />
         ))}

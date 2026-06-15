@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal, Profile, ProfileControl
-from interface.http.routes.auth import get_current_principal, require_operator
+from interface.http.routes.auth import get_current_principal, require_admin
 from modules.profiles.usecases import ProfileUseCases, ValidationError
 
 router = APIRouter(prefix="/profiles", tags=["Profiles"])
@@ -89,6 +89,8 @@ def _profile_summary(p: Profile) -> dict:
         "os_family": p.os_family,
         "version": p.version,
         "source": p.source,
+        "framework": p.framework,
+        "locked": p.locked,
         "control_count": p.control_count,
         "section_count": p.section_count,
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -119,7 +121,7 @@ async def search_controls(
 
 
 @router.post("", summary="Create a custom compliance profile")
-async def create_profile(body: ProfileCreateRequest, principal: AuthPrincipal = Depends(require_operator)):
+async def create_profile(body: ProfileCreateRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         p = await _uc.create_profile(body.model_dump(exclude_unset=True))
         return _profile_detail(p)
@@ -136,7 +138,7 @@ async def get_profile(profile_id: str, principal: AuthPrincipal = Depends(get_cu
 
 
 @router.patch("/{profile_id}", summary="Update profile metadata")
-async def update_profile(profile_id: str, body: ProfileUpdateRequest, principal: AuthPrincipal = Depends(require_operator)):
+async def update_profile(profile_id: str, body: ProfileUpdateRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         p = await _uc.update_profile(profile_id, body.model_dump(exclude_unset=True))
         return _profile_detail(p)
@@ -144,8 +146,17 @@ async def update_profile(profile_id: str, body: ProfileUpdateRequest, principal:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.post("/{profile_id}/revert", summary="Reset the Internal Referential to the CIS Benchmark original")
+async def revert_profile(profile_id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        p = await _uc.revert_to_original(profile_id)
+        return _profile_detail(p)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.delete("/{profile_id}", summary="Delete a custom profile")
-async def delete_profile(profile_id: str, principal: AuthPrincipal = Depends(require_operator)):
+async def delete_profile(profile_id: str, principal: AuthPrincipal = Depends(require_admin)):
     try:
         await _uc.delete_profile(profile_id)
         return {"deleted": True}
@@ -154,7 +165,7 @@ async def delete_profile(profile_id: str, principal: AuthPrincipal = Depends(req
 
 
 @router.post("/{profile_id}/controls", summary="Add a control to a profile")
-async def add_control(profile_id: str, body: ControlRequest, principal: AuthPrincipal = Depends(require_operator)):
+async def add_control(profile_id: str, body: ControlRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         c = await _uc.add_control(profile_id, body.model_dump(exclude_unset=True))
         return _control_dict(c)
@@ -163,7 +174,7 @@ async def add_control(profile_id: str, body: ControlRequest, principal: AuthPrin
 
 
 @router.patch("/{profile_id}/controls/{control_id}", summary="Edit a control")
-async def update_control(profile_id: str, control_id: str, body: ControlRequest, principal: AuthPrincipal = Depends(require_operator)):
+async def update_control(profile_id: str, control_id: str, body: ControlRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
         c = await _uc.update_control(control_id, body.model_dump(exclude_unset=True))
         return _control_dict(c)
@@ -172,7 +183,7 @@ async def update_control(profile_id: str, control_id: str, body: ControlRequest,
 
 
 @router.delete("/{profile_id}/controls/{control_id}", summary="Remove a control")
-async def delete_control(profile_id: str, control_id: str, principal: AuthPrincipal = Depends(require_operator)):
+async def delete_control(profile_id: str, control_id: str, principal: AuthPrincipal = Depends(require_admin)):
     try:
         await _uc.delete_control(control_id)
         return {"deleted": True}
@@ -196,7 +207,7 @@ async def get_control_history(
 @router.post("/{profile_id}/import-scan-controls", summary="Populate check_command from bundled CIS profile")
 async def import_scan_commands(
     profile_id: str,
-    principal: AuthPrincipal = Depends(require_operator),
+    principal: AuthPrincipal = Depends(require_admin),
 ):
     """
     Reads the bundled CIS .rb control files and writes the matching check

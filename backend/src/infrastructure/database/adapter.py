@@ -173,6 +173,7 @@ profiles_table = Table(
     Column("os_family", Text, default="linux"),
     Column("version", Text, default="1.0.0"),
     Column("source", Text, default="custom"),
+    Column("framework", Text),            # "cis" | "internal" | NULL (custom)
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -328,6 +329,21 @@ async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
         try:
             await conn.execute(text("ALTER TABLE rules ADD COLUMN scan_blocks TEXT DEFAULT '{}'"))
             await conn.execute(text("UPDATE rules SET scan_blocks = inspec_blocks WHERE inspec_blocks IS NOT NULL AND (scan_blocks IS NULL OR scan_blocks = '{}')"))
+        except Exception:
+            pass
+
+        # Profiles — framework tag (cis | internal | NULL). Backfill the existing
+        # built-in SABC referential as the "internal" framework; the CIS Benchmark
+        # profile is seeded separately on startup.
+        try:
+            await conn.execute(text("ALTER TABLE profiles ADD COLUMN framework TEXT"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text(
+                "UPDATE profiles SET framework = 'internal' "
+                "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
+            ))
         except Exception:
             pass
 
@@ -945,6 +961,7 @@ class ProfileRepository(IProfileRepository):
             os_family=row.os_family or "linux",
             version=row.version or "1.0.0",
             source=row.source or "custom",
+            framework=getattr(row, "framework", None),
             controls=controls,
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -954,6 +971,7 @@ class ProfileRepository(IProfileRepository):
         return {
             "id": p.id, "name": p.name, "description": p.description,
             "os_family": p.os_family, "version": p.version, "source": p.source,
+            "framework": p.framework,
             "created_at": _ts(p.created_at), "updated_at": _ts(p.updated_at),
         }
 

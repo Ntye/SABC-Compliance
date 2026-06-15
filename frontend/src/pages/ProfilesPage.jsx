@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, X, FileCode, Layers, ListChecks, Lock, Trash2, Pencil } from 'lucide-react'
-import { listProfiles, createProfile, deleteProfile } from '../lib/api.js'
+import { listProfiles, createProfile, deleteProfile, getUserRole } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -29,6 +29,7 @@ export default function ProfilesPage() {
   const t = useT()
   const toast = useToast()
   const navigate = useNavigate()
+  const isAdmin = getUserRole() === 'admin'
   const { data: profiles, loading, error, refetch } = useApi(listProfiles)
 
   const [showCreate, setShowCreate] = useState(false)
@@ -76,13 +77,15 @@ export default function ProfilesPage() {
           <h2 className="text-[18px] font-semibold text-gray-900">{t('profiles.title')}</h2>
           <p className="text-[13px] text-gray-500 mt-0.5">{t('profiles.subtitle')}</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors flex-shrink-0"
-        >
-          <Plus size={14} />
-          {t('profiles.newProfile')}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors flex-shrink-0"
+          >
+            <Plus size={14} />
+            {t('profiles.newProfile')}
+          </button>
+        )}
       </div>
 
       {loading && <div className="py-16 flex justify-center"><Spinner /></div>}
@@ -118,9 +121,16 @@ export default function ProfilesPage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-gray-800">{p.name}</span>
-                            {p.source === 'builtin'
-                              ? <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
-                              : <span className={badge('gray')}>{t('profiles.custom')}</span>}
+                            {p.source === 'builtin' ? (
+                              <>
+                                <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
+                                {p.locked
+                                  ? <span className={badge('gray')}>{t('profiles.readOnly')}</span>
+                                  : <span className={badge('internal')}>{t('profiles.adminEditable')}</span>}
+                              </>
+                            ) : (
+                              <span className={badge('gray')}>{t('profiles.custom')}</span>
+                            )}
                           </div>
                           {p.description && (
                             <div className="text-[11px] text-gray-400 truncate max-w-[340px] mt-0.5">{p.description}</div>
@@ -144,7 +154,7 @@ export default function ProfilesPage() {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-end gap-1.5">
-                        {p.source !== 'builtin' && (
+                        {isAdmin && p.source !== 'builtin' && (
                           <button
                             onClick={(e) => handleDelete(p, e)}
                             className="p-1.5 text-gray-300 hover:text-red-500 rounded transition-colors"
@@ -157,8 +167,8 @@ export default function ProfilesPage() {
                           onClick={() => navigate(`/profiles/${p.id}`)}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-brand border border-brand/25 bg-brand/5 rounded-lg hover:bg-brand/10 transition-colors whitespace-nowrap"
                         >
-                          <Pencil size={11} />
-                          {t('profiles.viewControls')}
+                          {(isAdmin && !p.locked) ? <Pencil size={11} /> : null}
+                          {(isAdmin && !p.locked) ? t('profiles.viewControls') : t('profiles.view')}
                         </button>
                       </div>
                     </td>

@@ -390,6 +390,10 @@ export async function deleteProfile(id) {
   return request('DELETE', `/profiles/${id}`)
 }
 
+export async function revertProfile(id) {
+  return request('POST', `/profiles/${id}/revert`)
+}
+
 export async function addProfileControl(profileId, data) {
   return request('POST', `/profiles/${profileId}/controls`, data)
 }
