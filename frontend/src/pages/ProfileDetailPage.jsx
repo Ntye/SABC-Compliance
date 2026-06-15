@@ -8,7 +8,7 @@ import {
 import {
   getProfile, updateProfile, addProfileControl,
   updateProfileControl, deleteProfileControl, searchAllControls,
-  getControlHistory, importInspecCommands,
+  getControlHistory, importScanControls,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -614,7 +614,7 @@ export default function ProfileDetailPage() {
                 onClick={async () => {
                   setImporting(true)
                   try {
-                    const r = await importInspecCommands(id)
+                    const r = await importScanControls(id)
                     toast(t('profiles.importDone', { n: r.updated }), 'success')
                     refetch()
                   } catch (e) {
@@ -625,7 +625,7 @@ export default function ProfileDetailPage() {
                 className="flex items-center gap-1.5 border border-brand/30 bg-brand/5 text-brand text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-brand/10 disabled:opacity-50"
               >
                 {importing ? <Spinner size={12} /> : <History size={13} />}
-                {importing ? t('profiles.importing') : t('profiles.importInspec')}
+                {importing ? t('profiles.importing') : t('profiles.importScanControls')}
               </button>
             )}
             <button
