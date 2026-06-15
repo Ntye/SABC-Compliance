@@ -18,8 +18,13 @@ RUN npm run build
 # ── Stage 2: serve ────────────────────────────────────────────────────────────
 FROM nginx:1.27-alpine
 
+# openssl is used by the entrypoint to mint a self-signed cert on first launch
+RUN apk add --no-cache openssl
+
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY tls-entrypoint.sh /tls-entrypoint.sh
+RUN chmod +x /tls-entrypoint.sh
 
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 80 443
+ENTRYPOINT ["/tls-entrypoint.sh"]
