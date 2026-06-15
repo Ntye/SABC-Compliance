@@ -31,6 +31,7 @@ services:
       - ./backend/packages:/app/packages
       - ./backend/src:/app/src           # live — git pull reflects instantly
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
+      - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     networks:
