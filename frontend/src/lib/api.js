@@ -333,8 +333,8 @@ export async function getNodeCompliance(id) {
   return request('GET', `/compliance/nodes/${id}`)
 }
 
-export async function collectNodeCompliance(id) {
-  return request('POST', `/compliance/nodes/${id}/collect`)
+export async function collectNodeCompliance(id, profileId = null) {
+  return request('POST', `/compliance/nodes/${id}/collect`, profileId ? { profile_id: profileId } : undefined)
 }
 
 export async function triggerRemediation(id, description) {

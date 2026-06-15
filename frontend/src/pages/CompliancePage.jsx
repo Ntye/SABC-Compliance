@@ -171,9 +171,10 @@ export default function CompliancePage() {
   const t = useT()
   const toast = useToast()
   const { data, loading, refetch } = useApi(getComplianceSummary)
-  const [scanningAll, setScanningAll] = useState(false)
-  const [scanDone, setScanDone] = useState(0)
-  const [scanTotal, setScanTotal] = useState(0)
+  const [scanningAll,   setScanningAll]  = useState(false)
+  const [scanDone,      setScanDone]     = useState(0)
+  const [scanTotal,     setScanTotal]    = useState(0)
+  const [scanProfileId, setScanProfileId] = useState(null)
 
   const stats = useMemo(() => {
     const nodes = data || []
@@ -215,7 +216,7 @@ export default function CompliancePage() {
     try {
       let done = 0
       await Promise.allSettled(nodes.map(async (n) => {
-        try { await collectNodeCompliance(n.node_id) } catch { /* ignore individual failure */ }
+        try { await collectNodeCompliance(n.node_id, scanProfileId) } catch { /* ignore individual failure */ }
         done += 1
         setScanDone(done)
       }))
@@ -250,6 +251,24 @@ export default function CompliancePage() {
             {t('common.refresh') || 'Refresh'}
           </button>
           <ExportMenu nodes={stats.nodes} t={t} />
+          {/* Profile selector */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {[
+              { id: null,                  label: t('compliance.allProfiles') },
+              { id: 'cis-benchmark',       label: t('compliance.cisBenchmark') },
+              { id: 'sabc-linux-baseline', label: t('compliance.internalRef') },
+            ].map((p) => (
+              <button
+                key={String(p.id)}
+                onClick={() => setScanProfileId(p.id)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
+                  scanProfileId === p.id ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <button
             onClick={scanAll}
             disabled={scanningAll || !stats.nodes.length}

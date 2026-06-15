@@ -7,7 +7,10 @@ import shutil
 import uuid
 from datetime import datetime
 
-from core.domain.entities import ComplianceReport, Node, RemediationEvent
+from core.domain.entities import (
+    CIS_BENCHMARK_PROFILE_ID, INTERNAL_PROFILE_ID,
+    ComplianceReport, Node, RemediationEvent,
+)
 from core.domain.interfaces import (
     IComplianceRepository, INodeRepository, ISSHClient,
 )
@@ -139,7 +142,9 @@ class CollectNodeComplianceUseCase:
             os.path.isfile(self._scan_bin) or shutil.which("cinc-auditor")
         )
 
-    async def execute(self, id_or_hostname: str, auto_install: bool = True) -> dict:
+    async def execute(
+        self, id_or_hostname: str, auto_install: bool = True, profile_id: str | None = None
+    ) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
         # Ensure the scan engine is present on the controller; install on demand
@@ -165,6 +170,7 @@ class CollectNodeComplianceUseCase:
         if not scan_report:
             raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
 
+        self._apply_profile(scan_report, profile_id)
         await self._repo.save_report(scan_report)
         collected.append(self._summarise(scan_report))
         if not node.scan_ready:
@@ -193,6 +199,16 @@ class CollectNodeComplianceUseCase:
             "severity_counts": r.severity_counts,
             "collected_at": r.collected_at.isoformat(),
         }
+
+    @staticmethod
+    def _apply_profile(report: ComplianceReport, profile_id: str | None) -> None:
+        """Override report profile/framework labels based on the operator's selection."""
+        if profile_id == CIS_BENCHMARK_PROFILE_ID:
+            report.profile = "CIS Benchmark"
+            report.framework = "cis"
+        elif profile_id == INTERNAL_PROFILE_ID:
+            report.profile = "SABC Linux Baseline"
+            report.framework = "internal"
 
     # ── Compliance scan ────────────────────────────────────────────────────────
 

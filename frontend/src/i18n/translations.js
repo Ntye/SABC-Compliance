@@ -352,6 +352,12 @@ export const translations = {
       scanAll: 'Scan All', scanningAll: 'Scanning…', scanAllDone: '{{n}} node(s) scanned',
       scanningAllProgress: 'Scanning nodes — {{done}} / {{total}} complete',
       export: 'Export', exportJson: 'JSON', exportCsv: 'CSV', exportPdf: 'PDF',
+      // Profile selector
+      allProfiles: 'All Profiles', cisBenchmark: 'CIS Benchmark', internalRef: 'SABC Linux',
+      // Sort modes
+      sortBySection: 'By Section', sortByRisk: 'By Risk',
+      // Risk group labels
+      riskHigh: 'High Risk', riskMedium: 'Medium Risk', riskLow: 'Low Risk', riskInfo: 'Informational',
     },
     rules:      { title: 'Puppet Rules',comingSoon: 'Compliance rules library — coming in Feature 5.' },
     profiles: {
@@ -843,6 +849,12 @@ export const translations = {
       scanAll: 'Tout scanner', scanningAll: 'Scan en cours…', scanAllDone: '{{n}} nœud(s) scannés',
       scanningAllProgress: 'Scan en cours — {{done}} / {{total}} terminés',
       export: 'Exporter', exportJson: 'JSON', exportCsv: 'CSV', exportPdf: 'PDF',
+      // Sélecteur de profil
+      allProfiles: 'Tous les profils', cisBenchmark: 'CIS Benchmark', internalRef: 'SABC Linux',
+      // Modes de tri
+      sortBySection: 'Par section', sortByRisk: 'Par risque',
+      // Groupes de risque
+      riskHigh: 'Risque élevé', riskMedium: 'Risque moyen', riskLow: 'Risque faible', riskInfo: 'Informatif',
     },
     rules:      { title: 'Règles Puppet',     comingSoon: 'Bibliothèque de règles — disponible dans la fonctionnalité 5.' },
     profiles: {

@@ -133,6 +133,12 @@ const FRAMEWORKS = [
   { key: 'cis', label: 'CIS' },
 ]
 
+const PROFILE_OPTIONS = [
+  { id: null,                  labelKey: 'compliance.allProfiles' },
+  { id: 'cis-benchmark',       labelKey: 'compliance.cisBenchmark' },
+  { id: 'sabc-linux-baseline', labelKey: 'compliance.internalRef' },
+]
+
 function sectionOf(ctrl) {
   if (ctrl.section) return ctrl.section
   const cis = ctrl.frameworks?.cis || (/^\d/.test(ctrl.control_id || '') ? ctrl.control_id : '')
@@ -230,6 +236,23 @@ function buildComplianceTree(controls) {
 
   groups.sort((a, b) => (parseInt(a.name) || 999) - (parseInt(b.name) || 999))
   return groups
+}
+
+function buildRiskTree(controls) {
+  const SEVS = ['high', 'medium', 'low', 'info']
+  const groups = Object.fromEntries(SEVS.map((s) => [s, []]))
+  for (const ctrl of controls) {
+    const sev = ctrl.severity || 'info'
+    ;(groups[sev] ?? groups.info).push(ctrl)
+  }
+  const byStatus = (a, b) => {
+    const sa = a.status === 'fail' ? 0 : a.status === 'skip' ? 2 : 1
+    const sb = b.status === 'fail' ? 0 : b.status === 'skip' ? 2 : 1
+    return sa !== sb ? sa - sb : (a.control_id || '').localeCompare(b.control_id || '')
+  }
+  return SEVS
+    .filter((sev) => groups[sev].length > 0)
+    .map((sev) => ({ sev, controls: [...groups[sev]].sort(byStatus) }))
 }
 
 function primaryReport(reports) {
@@ -407,6 +430,43 @@ function ComplianceTopGroup({ group, t }) {
   )
 }
 
+function RiskGroup({ group, t }) {
+  const [open, setOpen] = useState(true)
+  const { passed, failed, total } = ctrlCounts(group.controls)
+  const scored = passed + failed
+  const pct = scored ? Math.round((passed / scored) * 100) : 0
+  const label = {
+    high:   t('compliance.riskHigh'),
+    medium: t('compliance.riskMedium'),
+    low:    t('compliance.riskLow'),
+    info:   t('compliance.riskInfo'),
+  }[group.sev] || group.sev
+
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-3 px-5 py-3 bg-gray-50/60 hover:bg-gray-50 text-left"
+      >
+        <ChevronDown size={15} className={`text-gray-400 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: SEV[group.sev] }} />
+        <span className="text-[12px] font-semibold text-gray-700 flex-1">{label}</span>
+        <span className="text-[11px] text-gray-400 tabular-nums mr-2">{group.controls.length}</span>
+        {failed > 0 && (
+          <span className="text-[11px] text-red-500 font-medium">
+            {failed} {t('compliance.failed').toLowerCase()}
+          </span>
+        )}
+        <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden ml-2">
+          <div className={`h-full rounded-full ${scoreBarColor(pct)}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[11px] text-gray-400 tabular-nums w-12 text-right">{passed}/{scored || total}</span>
+      </button>
+      {open && group.controls.map((c) => <ControlRow key={c.control_id} ctrl={c} t={t} />)}
+    </div>
+  )
+}
+
 export default function NodeCompliancePage() {
   const { id } = useParams()
   const t = useT()
@@ -436,10 +496,12 @@ export default function NodeCompliancePage() {
     }
     return () => clearInterval(scanTimerRef.current)
   }, [scanning])
-  const [installing, setInstalling] = useState(false)
-  const [remediating, setRemediating] = useState(false)
-  const [filter, setFilter] = useState('all')
-  const [fwFilter, setFwFilter] = useState('all')
+  const [installing,     setInstalling]    = useState(false)
+  const [remediating,    setRemediating]   = useState(false)
+  const [filter,         setFilter]        = useState('all')
+  const [fwFilter,       setFwFilter]      = useState('all')
+  const [sortMode,       setSortMode]      = useState('section')  // 'section' | 'risk'
+  const [scanProfileId,  setScanProfileId] = useState(null)       // null = all profiles
 
   const scanEngineInstalled = scanEngineStatus?.installed
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
@@ -480,22 +542,24 @@ export default function NodeCompliancePage() {
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
     else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
     if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
-    return buildComplianceTree(details)
-  }, [report, filter, fwFilter])
+    return sortMode === 'risk' ? buildRiskTree(details) : buildComplianceTree(details)
+  }, [report, filter, fwFilter, sortMode])
 
   const totalShown = useMemo(
     () =>
-      complianceTree.reduce(
-        (n, g) => n + g.sections.reduce((m, s) => m + s.subsections.reduce((k, ss) => k + ss.controls.length, 0), 0),
-        0,
-      ),
-    [complianceTree],
+      sortMode === 'risk'
+        ? complianceTree.reduce((n, g) => n + g.controls.length, 0)
+        : complianceTree.reduce(
+            (n, g) => n + g.sections.reduce((m, s) => m + s.subsections.reduce((k, ss) => k + ss.controls.length, 0), 0),
+            0,
+          ),
+    [complianceTree, sortMode],
   )
 
   async function runScan() {
     setScanning(true)
     try {
-      const res = await collectNodeCompliance(id)
+      const res = await collectNodeCompliance(id, scanProfileId)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
       await Promise.all([refetch(), refetchScanEngine()])
     } catch (err) {
@@ -546,8 +610,22 @@ export default function NodeCompliancePage() {
           <h2 className="text-[18px] font-semibold text-gray-900">{data?.hostname || id}</h2>
           {data && <p className="text-[12px] text-gray-400">{data.ip} · {data.os_family}</p>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {report && data && <ExportMenu nodeData={data} report={report} t={t} />}
+          {/* Profile selector */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {PROFILE_OPTIONS.map((p) => (
+              <button
+                key={String(p.id)}
+                onClick={() => setScanProfileId(p.id)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
+                  scanProfileId === p.id ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {t(p.labelKey)}
+              </button>
+            ))}
+          </div>
           <button
             onClick={runScan}
             disabled={scanning}
@@ -721,12 +799,23 @@ export default function NodeCompliancePage() {
                     </button>
                   ))}
                 </div>
+                <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                  {[['section', 'compliance.sortBySection'], ['risk', 'compliance.sortByRisk']].map(([mode, key]) => (
+                    <button
+                      key={mode}
+                      onClick={() => setSortMode(mode)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${sortMode === mode ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {t(key)}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             {complianceTree.length ? (
-              complianceTree.map((group) => (
-                <ComplianceTopGroup key={group.name} group={group} t={t} />
-              ))
+              sortMode === 'risk'
+                ? complianceTree.map((group) => <RiskGroup key={group.sev} group={group} t={t} />)
+                : complianceTree.map((group) => <ComplianceTopGroup key={group.name} group={group} t={t} />)
             ) : (
               <div className="p-8 text-center text-[12px] text-gray-400">{t('compliance.noControls')}</div>
             )}

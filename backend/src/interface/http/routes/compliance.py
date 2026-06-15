@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -9,6 +10,9 @@ from interface.http.routes.auth import get_current_principal, require_operator
 router = APIRouter(prefix="/compliance", tags=["Compliance"])
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
+
+class CollectRequest(BaseModel):
+    profile_id: str | None = None  # None/"all" → default; "cis-benchmark" or "sabc-linux-baseline"
 
 class RemediateRequest(BaseModel):
     description: str | None = None
@@ -48,15 +52,24 @@ async def node_compliance(id: str, principal: AuthPrincipal = Depends(get_curren
 
 
 @router.post("/nodes/{id}/collect", summary="Run a compliance scan on an enrolled node")
-async def collect_node_compliance(id: str, principal: AuthPrincipal = Depends(require_operator)):
+async def collect_node_compliance(
+    id: str,
+    body: Optional[CollectRequest] = None,
+    principal: AuthPrincipal = Depends(require_operator),
+):
     """
     Run a structured compliance scan (bundled CIS-aligned profile) against the node
     over SSH from the controller, and read the Puppet last-run summary when the
     Puppet agent is enrolled. Results are stored as compliance reports. There is no
     shell fallback — a complete scan or a clear, actionable error.
+
+    Optional body: ``{"profile_id": "cis-benchmark" | "sabc-linux-baseline"}``
+    to label the stored report with a specific compliance profile.
+    Omit (or pass ``null``) to use the default profile from the scan output.
     """
+    profile_id = body.profile_id if body else None
     try:
-        return await _collect_uc.execute(id)
+        return await _collect_uc.execute(id, profile_id=profile_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:
