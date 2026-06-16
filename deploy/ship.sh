@@ -204,7 +204,15 @@ deploy() {
   # because docker-compose.yml pins container_name) to free their published
   # ports from a stale sabc-frontend/sabc-backend left by an earlier run.
   # Only our named containers are touched — never any other app's container.
-  remote_docker "docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d"
+  #
+  # Use "sudo bash -s" with a heredoc so sudo covers ALL three commands:
+  # "sudo <compound>" only elevates up to the first semicolon; subsequent
+  # commands in the same string revert to the unprivileged user.
+  ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
+docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR down --remove-orphans 2>/dev/null || true
+docker rm -f sabc-frontend sabc-backend 2>/dev/null || true
+docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d
+DEPLOY_EOF
 
   ok "Platform deployed!"
   echo ""
