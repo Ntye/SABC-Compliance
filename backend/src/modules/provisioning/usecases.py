@@ -222,20 +222,23 @@ class InstallServiceUseCase:
     """
 
     _PLAYBOOKS = {
-        "puppet_master": "install_puppet_master.yml",
-        "wazuh_manager": "install_wazuh_manager.yml",
-        "puppet_agent":  "install_puppet_agent.yml",
-        "wazuh_agent":   "install_wazuh_agent.yml",
-        "check_health":  "check_node_health.yml",
+        "puppet_master":           "install_puppet_master.yml",
+        "wazuh_manager":           "install_wazuh_manager.yml",
+        "wazuh_manager_colocated": "install_wazuh_manager_colocated.yml",
+        "puppet_agent":            "install_puppet_agent.yml",
+        "wazuh_agent":             "install_wazuh_agent.yml",
+        "check_health":            "check_node_health.yml",
     }
     _CONFIG_KEYS = {
-        "puppet_master": "puppet_master_host",
-        "wazuh_manager": "wazuh_manager_host",
+        "puppet_master":           "puppet_master_host",
+        "wazuh_manager":           "wazuh_manager_host",
+        "wazuh_manager_colocated": "wazuh_manager_host",
     }
     _ENROLL_ATTRS = {
-        "puppet_agent":  "puppet_enrolled",
-        "wazuh_manager": "wazuh_enrolled",
-        "wazuh_agent":   "wazuh_enrolled",
+        "puppet_agent":            "puppet_enrolled",
+        "wazuh_manager":           "wazuh_enrolled",
+        "wazuh_manager_colocated": "wazuh_enrolled",
+        "wazuh_agent":             "wazuh_enrolled",
     }
 
     def __init__(

@@ -254,18 +254,20 @@ async def lifespan(app: FastAPI):
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)
 
-    install_puppet_master_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
-    install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
-    install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
-    install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
-    check_health_uc          = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
-    scan_engine_uc           = ScanEngineUseCase(node_repo, settings.ssh_key_path)
+    install_puppet_master_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
+    install_wazuh_manager_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
+    install_wazuh_manager_colocated_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager_colocated")
+    install_puppet_agent_uc            = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
+    install_wazuh_agent_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+    check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
+    scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
         set_master_uc=set_master_host_uc,
         install_puppet_master_uc=install_puppet_master_uc,
         install_wazuh_manager_uc=install_wazuh_manager_uc,
+        install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
         check_health_uc=check_health_uc,

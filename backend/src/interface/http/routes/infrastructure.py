@@ -45,6 +45,7 @@ _get_status_uc = None
 _set_master_uc = None
 _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
+_install_wazuh_manager_colocated_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
 _check_health_uc = None
@@ -64,9 +65,11 @@ def set_use_cases(
     scan_engine_uc=None,
     node_repo=None,
     packages_dir: str = "",
+    install_wazuh_manager_colocated_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
+    global _install_wazuh_manager_colocated_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir
@@ -74,6 +77,7 @@ def set_use_cases(
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
     _install_wazuh_manager_uc = install_wazuh_manager_uc
+    _install_wazuh_manager_colocated_uc = install_wazuh_manager_colocated_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
     _check_health_uc = check_health_uc
@@ -184,6 +188,25 @@ async def install_wazuh_manager(
     """Start an Ansible job to install Wazuh manager on the specified node."""
     try:
         job = await _install_wazuh_manager_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/install/wazuh-manager-colocated", response_model=JobRef, status_code=202, summary="Install Wazuh manager alongside an existing Puppet Primary Server")
+async def install_wazuh_manager_colocated(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Start a Puppet-safe Ansible job to install Wazuh on a node that already
+    runs Puppet Server or Puppet Enterprise.  The job verifies Puppet health
+    before and after installation and automatically resolves port conflicts
+    (e.g. Puppet Enterprise :443 vs Wazuh dashboard :443).
+    """
+    if _install_wazuh_manager_colocated_uc is None:
+        raise HTTPException(status_code=503, detail="Colocated Wazuh install use case not configured")
+    try:
+        job = await _install_wazuh_manager_colocated_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
