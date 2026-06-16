@@ -378,15 +378,20 @@ function Get-ComposeCmd {
 function Start-Containers {
     Info "Starting platform ..."
     $compose = Get-ComposeCmd
-    # Wrap both operations in a single bash -c so they run under one sudo
+    # Wrap all operations in a single bash -c so they run under one sudo
     # invocation.  docker-compose 1.29.2 crashes with a ContainerConfig KeyError
     # when it tries to recreate a container whose image was built with a newer
     # Docker version.  "docker-compose down" finds containers by their compose
     # project labels (not by name), so it removes them cleanly regardless of
     # whatever prefixed name docker-compose assigned on the previous run.
-    # A plain "docker stop/rm by name" does NOT work because the existing
-    # container may be named "<hash>_sabc-backend" instead of "sabc-backend".
-    $bashCmd = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir down 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
+    #
+    # However "down" only removes containers belonging to THIS compose project.
+    # A stale sabc-frontend/sabc-backend left by an earlier project context (or
+    # the dev compose) keeps holding ports 443/80/3000 and the new container
+    # then fails with "port is already allocated". Our compose files pin fixed
+    # container_name values, so we additionally force-remove them by name — this
+    # is reliable precisely because the names are fixed — plus --remove-orphans.
+    $bashCmd = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
 
     # Run compose; on failure print the backend log so the crash reason is
     # visible without needing a separate SSH session.

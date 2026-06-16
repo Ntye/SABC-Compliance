@@ -199,7 +199,11 @@ deploy() {
   remote_docker "docker load -i $REMOTE_DIR/sabc-images.tar.gz"
 
   info "Starting platform ..."
-  remote_docker "docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d"
+  # Tear down any previous stack first. "down" only clears THIS compose
+  # project, so we also force-remove the fixed-name containers (reliable
+  # because docker-compose.yml pins container_name) to free ports 443/80/3000
+  # from a stale sabc-frontend/sabc-backend left by an earlier run.
+  remote_docker "docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d"
 
   ok "Platform deployed!"
   echo ""
