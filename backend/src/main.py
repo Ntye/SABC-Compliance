@@ -293,7 +293,6 @@ async def lifespan(app: FastAPI):
             default_ssh_key_path=settings.ssh_key_path,
             profile_path=scan_profile_path,
             scan_ctrl=scan_engine_uc,
-            profile_repo=profile_repo,
         ),
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
     )
