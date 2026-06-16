@@ -218,6 +218,14 @@ docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR
 DEPLOY_EOF
 
   ok "Platform deployed!"
+
+  # Everything below is purely informational (URL banner). It must NEVER abort
+  # the script — under `set -euo pipefail` a no-match grep or a failed IP probe
+  # returns non-zero and would otherwise kill the run right before the URL is
+  # printed. Disable errexit for the remainder of the function (deploy() is the
+  # last thing the script does, so this never masks a later failure).
+  set +e
+
   echo ""
   echo "══════════════════════════════════════════════════════"
   echo "  SABC Compliance Platform is running on:"
@@ -250,7 +258,7 @@ if [ -z "$ip" ]; then
 fi
 printf "%s" "$ip"
 IPEOF
-  )
+  ) || pub_ip=""
 
   # Strip stray whitespace/newlines from the captured output
   pub_ip=$(printf "%s" "${pub_ip}" | tr -d '[:space:]')
@@ -264,7 +272,7 @@ IPEOF
   local https_port="8443"
   if [ -f "$PROJECT_DIR/.env" ]; then
     local p
-    p=$(grep -E '^HTTPS_PORT=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2 | tr -d '[:space:]')
+    p=$(grep -E '^HTTPS_PORT=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2 | tr -d '[:space:]' || true)
     [ -n "$p" ] && https_port="$p"
   fi
 
