@@ -6,7 +6,7 @@ import {
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
-import { getGatewayUrl, logout, setGatewayUrl } from '../../lib/api.js'
+import { logout } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
 import sabcLogo from '../../assets/bdc-logo.png'
 
@@ -150,34 +150,6 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-4 py-4 border-t border-white/5 space-y-2">
-        <div className="text-[10px] text-gray-600 font-mono truncate">
-          {editingUrl ? (
-            <input
-              autoFocus
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              onBlur={handleUrlSave}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleUrlSave() }}
-              className="w-full bg-white/10 text-gray-300 text-[10px] font-mono px-1 rounded outline-none border border-white/20"
-            />
-          ) : (
-            <button
-              onClick={() => setEditingUrl(true)}
-              className="font-mono text-[10px] text-gray-600 hover:text-gray-400 truncate text-left w-full"
-              title="Click to edit gateway URL"
-            >
-              {getGatewayUrl()}
-            </button>
-          )}
-        </div>
-        <a
-          href={`${getGatewayUrl()}/docs`}
-          target="_blank"
-          rel="noreferrer"
-          className="block text-[10px] text-gray-600 hover:text-brand transition-colors"
-        >
-          {t('nav.apiDocs')}
-        </a>
         <button
           onClick={handleLogout}
           className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-red-400 transition-colors"
