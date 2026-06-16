@@ -52,6 +52,7 @@ from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
     GetNodeComplianceUseCase, TriggerRemediationUseCase,
 )
+from modules.compliance.scheduler import AutoScanScheduler
 from modules.profiles.usecases import ProfileUseCases
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
@@ -285,17 +286,23 @@ async def lifespan(app: FastAPI):
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "scan-profiles", "sabc-linux-baseline",
     )
+    collect_uc = CollectNodeComplianceUseCase(
+        node_repo, compliance_repo, ssh_client,
+        default_ssh_key_path=settings.ssh_key_path,
+        profile_path=scan_profile_path,
+        scan_ctrl=scan_engine_uc,
+    )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
-        collect_uc=CollectNodeComplianceUseCase(
-            node_repo, compliance_repo, ssh_client,
-            default_ssh_key_path=settings.ssh_key_path,
-            profile_path=scan_profile_path,
-            scan_ctrl=scan_engine_uc,
-        ),
+        collect_uc=collect_uc,
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
+        config_repo=platform_config_repo,
     )
+
+    # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
+    auto_scan = AutoScanScheduler(collect_uc, node_repo, platform_config_repo)
+    auto_scan.start()
 
     # -- Compliance profiles (referentials) --
     profile_uc = ProfileUseCases(profile_repo)
@@ -343,6 +350,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    auto_scan.stop()
     await engine.dispose()
     logger.info("Shutdown complete")
 

@@ -1,11 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts'
-import { ShieldCheck, RefreshCw, ChevronRight, AlertTriangle, Play, Download, ChevronDown } from 'lucide-react'
-import { getComplianceSummary, collectNodeCompliance } from '../lib/api.js'
+import { ShieldCheck, RefreshCw, ChevronRight, AlertTriangle, Play, Download, ChevronDown, Clock, Settings } from 'lucide-react'
+import { getComplianceSummary, collectNodeCompliance, getAutoScanSchedule, setAutoScanSchedule, getUserRole } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
@@ -165,6 +165,161 @@ function ExportMenu({ nodes, t }) {
   )
 }
 
+// ── Auto-Scan schedule panel ──────────────────────────────────────────────────
+
+function fmtRelative(isoStr) {
+  if (!isoStr) return null
+  const diff = new Date(isoStr) - Date.now()
+  const abs = Math.abs(diff)
+  if (abs < 60000) return diff < 0 ? 'just now' : 'in a moment'
+  const mins = Math.round(abs / 60000)
+  if (mins < 60) return diff < 0 ? `${mins}m ago` : `in ${mins}m`
+  const hrs = Math.round(abs / 3600000)
+  if (hrs < 24) return diff < 0 ? `${hrs}h ago` : `in ${hrs}h`
+  return diff < 0 ? `${Math.round(abs / 86400000)}d ago` : `in ${Math.round(abs / 86400000)}d`
+}
+
+function AutoScanPanel({ t, toast, getUserRole }) {
+  const { data: sched, refetch: refetchSched } = useApi(getAutoScanSchedule)
+  const [open,     setOpen]     = useState(false)
+  const [saving,   setSaving]   = useState(false)
+  const [enabled,  setEnabled]  = useState(true)
+  const [interval, setInterval] = useState(30)
+  const [unit,     setUnit]     = useState('minutes')
+  const isAdmin = getUserRole() === 'admin'
+
+  // Populate form from loaded schedule
+  useEffect(() => {
+    if (!sched) return
+    setEnabled(sched.enabled)
+    setInterval(sched.interval ?? 30)
+    setUnit(sched.unit || 'minutes')
+  }, [sched])
+
+  // Refresh next-run display every minute
+  const [, forceRender] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => forceRender((n) => n + 1), 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await setAutoScanSchedule({ enabled, interval: Number(interval), unit })
+      await refetchSched()
+      toast(t('compliance.scheduleSaved'), 'success')
+      setOpen(false)
+    } catch (err) {
+      toast(err.message || t('compliance.scheduleFailed'), 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const isEnabled = sched?.enabled ?? true
+  const nextRun  = sched?.next_run
+  const lastRun  = sched?.last_run
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <Clock size={15} className="text-gray-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium text-gray-700">{t('compliance.autoScan')}</span>
+            <span className={`inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-medium ${isEnabled ? 'bg-green-600/10 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+              {isEnabled ? t('compliance.autoScanOn') : t('compliance.autoScanOff')}
+            </span>
+            {isEnabled && sched && (
+              <span className="text-[11px] text-gray-400">
+                {t('compliance.scanEvery')} {sched.interval} {t(`compliance.unit${sched.unit.charAt(0).toUpperCase() + sched.unit.slice(1)}`).toLowerCase()}
+              </span>
+            )}
+          </div>
+          {isEnabled && (
+            <div className="flex items-center gap-3 mt-0.5">
+              {lastRun && (
+                <span className="text-[11px] text-gray-400">
+                  {t('compliance.lastAutoScan')}: <b className="text-gray-600">{fmtRelative(lastRun)}</b>
+                </span>
+              )}
+              {nextRun && (
+                <span className="text-[11px] text-gray-400">
+                  {t('compliance.nextAutoScan')}: <b className="text-gray-600">{fmtRelative(nextRun)}</b>
+                </span>
+              )}
+              {!lastRun && (
+                <span className="text-[11px] text-gray-400 italic">{t('compliance.neverScannedAuto')}</span>
+              )}
+            </div>
+          )}
+        </div>
+        {isAdmin && (
+          <button
+            onClick={() => setOpen((o) => !o)}
+            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition flex-shrink-0"
+            title="Configure auto-scan schedule"
+          >
+            <Settings size={14} />
+          </button>
+        )}
+      </div>
+
+      {open && isAdmin && (
+        <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-3 flex-wrap">
+          {/* Enable toggle */}
+          <button
+            onClick={() => setEnabled((e) => !e)}
+            className={`px-3 py-1.5 rounded-lg text-[11px] font-medium border transition ${
+              enabled
+                ? 'bg-green-600/10 border-green-600/20 text-green-700 hover:bg-green-600/20'
+                : 'bg-gray-100 border-gray-200 text-gray-500 hover:bg-gray-200'
+            }`}
+          >
+            {enabled ? t('compliance.autoScanOn') : t('compliance.autoScanOff')}
+          </button>
+
+          {/* Interval */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-gray-500">{t('compliance.scanEvery')}</span>
+            <input
+              type="number"
+              min="1"
+              value={interval}
+              onChange={(e) => setInterval(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-[12px] text-gray-700 text-center focus:outline-none focus:ring-1 focus:ring-brand/40"
+            />
+            <select
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1 text-[12px] text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-brand/40"
+            >
+              <option value="seconds">{t('compliance.unitSeconds')}</option>
+              <option value="minutes">{t('compliance.unitMinutes')}</option>
+              <option value="days">{t('compliance.unitDays')}</option>
+            </select>
+          </div>
+
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-3 py-1.5 rounded-lg bg-brand text-white text-[11px] font-medium hover:bg-brand/90 disabled:opacity-50 transition"
+          >
+            {saving ? t('compliance.savingSchedule') : t('compliance.saveSchedule')}
+          </button>
+          <button
+            onClick={() => setOpen(false)}
+            className="px-3 py-1.5 rounded-lg border border-gray-200 text-[11px] text-gray-500 hover:bg-gray-50 transition"
+          >
+            {t('common.cancel') || 'Cancel'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CompliancePage() {
@@ -279,6 +434,9 @@ export default function CompliancePage() {
           </button>
         </div>
       </div>
+
+      {/* Auto-scan schedule panel */}
+      <AutoScanPanel t={t} toast={toast} getUserRole={getUserRole} />
 
       {/* Scan All progress bar */}
       {scanningAll && scanTotal > 0 && (

@@ -341,6 +341,14 @@ export async function triggerRemediation(id, description) {
   return request('POST', `/compliance/nodes/${id}/remediate`, { description })
 }
 
+export async function getAutoScanSchedule() {
+  return request('GET', '/compliance/schedule')
+}
+
+export async function setAutoScanSchedule({ enabled, interval, unit }) {
+  return request('PUT', '/compliance/schedule', { enabled, interval, unit })
+}
+
 // ── Rules ─────────────────────────────────────────────────────────────────────
 
 export async function listRules(filters = {}) {

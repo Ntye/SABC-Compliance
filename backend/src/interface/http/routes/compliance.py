@@ -1,11 +1,13 @@
 from __future__ import annotations
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.domain.entities import AuthPrincipal
 from core.errors import NotFoundError, ValidationError
-from interface.http.routes.auth import get_current_principal, require_operator
+from interface.http.routes.auth import get_current_principal, require_operator, require_admin
+from modules.compliance.scheduler import UNITS_TO_SECONDS
 
 router = APIRouter(prefix="/compliance", tags=["Compliance"])
 
@@ -17,6 +19,11 @@ class CollectRequest(BaseModel):
 class RemediateRequest(BaseModel):
     description: str | None = None
 
+class ScanScheduleRequest(BaseModel):
+    enabled: bool = True
+    interval: int = Field(default=30, ge=1)
+    unit: str = "minutes"  # "seconds" | "minutes" | "days"
+
 
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
@@ -24,14 +31,16 @@ _summary_uc = None
 _node_uc = None
 _collect_uc = None
 _remediate_uc = None
+_config_repo = None
 
 
-def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc) -> None:
-    global _summary_uc, _node_uc, _collect_uc, _remediate_uc
+def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=None) -> None:
+    global _summary_uc, _node_uc, _collect_uc, _remediate_uc, _config_repo
     _summary_uc = summary_uc
     _node_uc = node_uc
     _collect_uc = collect_uc
     _remediate_uc = remediate_uc
+    _config_repo = config_repo
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -83,3 +92,46 @@ async def remediate_node(id: str, body: RemediateRequest, principal: AuthPrincip
         return await _remediate_uc.execute(id, body.description)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/schedule", summary="Get the auto-scan schedule")
+async def get_scan_schedule(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Return the current auto-scan schedule and the estimated next-run timestamp."""
+    if not _config_repo:
+        return {"enabled": True, "interval": 30, "unit": "minutes", "last_run": None, "next_run": None}
+
+    enabled_raw = (await _config_repo.get("auto_scan_enabled")) or "true"
+    enabled = enabled_raw == "true"
+    interval = int((await _config_repo.get("auto_scan_interval")) or "30")
+    unit = (await _config_repo.get("auto_scan_unit")) or "minutes"
+    last_run = await _config_repo.get("auto_scan_last_run")
+
+    next_run: str | None = None
+    if enabled and last_run:
+        secs = interval * UNITS_TO_SECONDS.get(unit, 60)
+        next_run = (datetime.fromisoformat(last_run) + timedelta(seconds=secs)).isoformat()
+
+    return {
+        "enabled": enabled,
+        "interval": interval,
+        "unit": unit,
+        "last_run": last_run,
+        "next_run": next_run,
+    }
+
+
+@router.put("/schedule", summary="Update the auto-scan schedule (admin only)")
+async def update_scan_schedule(
+    body: ScanScheduleRequest,
+    principal: AuthPrincipal = Depends(require_admin),
+):
+    """Configure the automatic compliance scan schedule. Requires admin role."""
+    if body.unit not in UNITS_TO_SECONDS:
+        raise HTTPException(status_code=422, detail=f"unit must be one of: {', '.join(UNITS_TO_SECONDS)}")
+    if not _config_repo:
+        raise HTTPException(status_code=500, detail="Config repository not available")
+
+    await _config_repo.set("auto_scan_enabled", "true" if body.enabled else "false")
+    await _config_repo.set("auto_scan_interval", str(body.interval))
+    await _config_repo.set("auto_scan_unit", body.unit)
+    return {"ok": True, "enabled": body.enabled, "interval": body.interval, "unit": body.unit}

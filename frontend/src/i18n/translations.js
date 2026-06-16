@@ -358,6 +358,16 @@ export const translations = {
       sortBySection: 'By Section', sortByRisk: 'By Risk',
       // Risk group labels
       riskHigh: 'High Risk', riskMedium: 'Medium Risk', riskLow: 'Low Risk', riskInfo: 'Informational',
+      // Auto-scan schedule
+      autoScan: 'Auto-Scan',
+      autoScanOn: 'Enabled', autoScanOff: 'Disabled',
+      scanEvery: 'Scan every',
+      unitSeconds: 'Seconds', unitMinutes: 'Minutes', unitDays: 'Days',
+      lastAutoScan: 'Last auto-scan', nextAutoScan: 'Next scheduled',
+      neverScannedAuto: 'First scan pending…',
+      saveSchedule: 'Save', savingSchedule: 'Saving…',
+      scheduleSaved: 'Auto-scan schedule saved',
+      scheduleFailed: 'Failed to save schedule',
     },
     rules:      { title: 'Puppet Rules',comingSoon: 'Compliance rules library — coming in Feature 5.' },
     profiles: {
@@ -855,6 +865,16 @@ export const translations = {
       sortBySection: 'Par section', sortByRisk: 'Par risque',
       // Groupes de risque
       riskHigh: 'Risque élevé', riskMedium: 'Risque moyen', riskLow: 'Risque faible', riskInfo: 'Informatif',
+      // Planification automatique
+      autoScan: 'Scan auto',
+      autoScanOn: 'Activé', autoScanOff: 'Désactivé',
+      scanEvery: 'Scanner toutes les',
+      unitSeconds: 'Secondes', unitMinutes: 'Minutes', unitDays: 'Jours',
+      lastAutoScan: 'Dernier scan auto', nextAutoScan: 'Prochain scan',
+      neverScannedAuto: 'Premier scan en attente…',
+      saveSchedule: 'Enregistrer', savingSchedule: 'Enregistrement…',
+      scheduleSaved: 'Planification du scan auto enregistrée',
+      scheduleFailed: 'Échec de l\'enregistrement de la planification',
     },
     rules:      { title: 'Règles Puppet',     comingSoon: 'Bibliothèque de règles — disponible dans la fonctionnalité 5.' },
     profiles: {
