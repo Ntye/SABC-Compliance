@@ -7,6 +7,7 @@
 #   ./deploy/ship.sh user@ec2-ip                Build, transfer, and deploy
 #   ./deploy/ship.sh user@ec2-ip --setup        First time: install Docker + deploy
 #   ./deploy/ship.sh user@ec2-ip --update       Transfer and restart (skip build)
+#   ./deploy/ship.sh user@ec2-ip --deploy-only  Load + restart only (skip build & transfer)
 #   ./deploy/ship.sh --build-only               Build and save images locally
 #   ./deploy/ship.sh --bundle                   Build bundled image (with airgap packages)
 #
@@ -33,22 +34,24 @@ REMOTE_DIR="/opt/sabc-compliance"
 TARGET=""
 DO_SETUP=false
 DO_UPDATE=false
+DEPLOY_ONLY=false
 BUILD_ONLY=false
 BUNDLE=false
 
 for arg in "$@"; do
   case "$arg" in
-    --setup)     DO_SETUP=true ;;
-    --update)    DO_UPDATE=true ;;
-    --build-only) BUILD_ONLY=true ;;
-    --bundle)    BUNDLE=true ;;
-    -*)          echo "Unknown flag: $arg"; exit 1 ;;
-    *)           TARGET="$arg" ;;
+    --setup)       DO_SETUP=true ;;
+    --update)      DO_UPDATE=true ;;
+    --deploy-only) DEPLOY_ONLY=true ;;
+    --build-only)  BUILD_ONLY=true ;;
+    --bundle)      BUNDLE=true ;;
+    -*)            echo "Unknown flag: $arg"; exit 1 ;;
+    *)             TARGET="$arg" ;;
   esac
 done
 
 if [[ -z "$TARGET" && "$BUILD_ONLY" == false && "$BUNDLE" == false ]]; then
-  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--build-only|--bundle]"
+  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--build-only|--bundle]"
   exit 1
 fi
 
@@ -283,6 +286,17 @@ if [[ "$BUILD_ONLY" == true || "$BUNDLE" == true ]]; then
   echo ""
   info "Archive at: $ARCHIVE"
   info "Transfer manually:  scp $ARCHIVE user@ec2-ip:$REMOTE_DIR/"
+  exit 0
+fi
+
+if [[ "$DEPLOY_ONLY" == true ]]; then
+  # Files already on the remote — skip build AND transfer, just load + restart.
+  # Verify the archive and compose file are actually present remotely first so
+  # we fail with a clear message instead of a confusing docker error.
+  if ! remote "test -f $REMOTE_DIR/sabc-images.tar.gz && test -f $REMOTE_DIR/docker-compose.yml"; then
+    fail "Remote files missing in $REMOTE_DIR (need sabc-images.tar.gz + docker-compose.yml) — run --update first to transfer them"
+  fi
+  deploy
   exit 0
 fi
 
