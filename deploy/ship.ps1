@@ -308,10 +308,10 @@ function Transfer-Files {
         Send-File $envFile "$RemoteDir/.env"
     } else {
         # Write a minimal default .env locally, ship it, then delete the temp
-        Warn "No .env found -- writing default on server (HTTP_PORT=8443)"
+        Warn "No .env found -- writing default on server (HTTPS_PORT=8443)"
         $tmpEnv = [System.IO.Path]::GetTempFileName()
         @(
-            "HTTP_PORT=8443",
+            "HTTPS_PORT=8443",
             "BACKEND_PORT=3000",
             "HOST_IP=",
             "HOST_ADMIN_USER="
@@ -328,19 +328,19 @@ function Transfer-Files {
 # -- Helpers: display the URL after any successful deploy ---------------------
 function Show-URLs {
     if ($Target -match "@") { $displayHost = $Target.Split("@")[1] } else { $displayHost = $Target }
-    $httpPort = "8443"
+    $httpsPort = "8443"
     $envFile = Join-Path $ProjectDir ".env"
     if (Test-Path $envFile) {
-        $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTP_PORT=" }
-        if ($portLine) { $httpPort = $portLine.Split("=")[1].Trim() }
+        $portLine = Get-Content $envFile | Where-Object { $_ -match "^HTTPS_PORT=" }
+        if ($portLine) { $httpsPort = $portLine.Split("=")[1].Trim() }
     }
     Ok "Platform running!"
     Write-Host ""
     Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host "  SABC Compliance Platform" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  UI:      http://${displayHost}:${httpPort}" -ForegroundColor White
-    Write-Host "  API:     http://${displayHost}:${httpPort}/api" -ForegroundColor White
+    Write-Host "  UI:      https://${displayHost}:${httpsPort}" -ForegroundColor White
+    Write-Host "  API:     https://${displayHost}:${httpsPort}/api" -ForegroundColor White
     Write-Host "  Swagger: http://${displayHost}:3000/docs" -ForegroundColor White
     Write-Host ""
     Write-Host "  Logs: ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml logs -f" -ForegroundColor DarkGray
@@ -387,10 +387,11 @@ function Start-Containers {
     #
     # However "down" only removes containers belonging to THIS compose project.
     # A stale sabc-frontend/sabc-backend left by an earlier project context (or
-    # the dev compose) keeps holding ports 443/80/3000 and the new container
+    # the dev compose) keeps holding its published ports and the new container
     # then fails with "port is already allocated". Our compose files pin fixed
-    # container_name values, so we additionally force-remove them by name — this
-    # is reliable precisely because the names are fixed — plus --remove-orphans.
+    # container_name values, so we additionally force-remove THEM by name — this
+    # is reliable precisely because the names are fixed, and only ever touches
+    # our own containers, never another app's — plus --remove-orphans.
     $bashCmd = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
 
     # Run compose; on failure print the backend log so the crash reason is

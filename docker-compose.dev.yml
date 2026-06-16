@@ -68,7 +68,9 @@ services:
     # when /certs/server.crt exists), then start the dev server.
     command: sh /app/dev-entrypoint.sh
     ports:
-      - "${HTTPS_PORT:-443}:5173"
+      # Defaults to 8443 so it never collides with a standard :443 service on
+      # the host. Override via HTTPS_PORT in .env.
+      - "${HTTPS_PORT:-8443}:5173"
     depends_on:
       backend:
         condition: service_healthy

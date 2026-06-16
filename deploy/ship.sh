@@ -180,7 +180,7 @@ transfer() {
   else
     info "No .env found locally — creating default on EC2 ..."
     remote "cat > $REMOTE_DIR/.env" << 'ENV_EOF'
-HTTP_PORT=80
+HTTPS_PORT=8443
 BACKEND_PORT=3000
 # Set to the EC2 private IP so the bootstrap curl command works
 # HOST_IP=10.0.x.x
@@ -200,9 +200,10 @@ deploy() {
 
   info "Starting platform ..."
   # Tear down any previous stack first. "down" only clears THIS compose
-  # project, so we also force-remove the fixed-name containers (reliable
-  # because docker-compose.yml pins container_name) to free ports 443/80/3000
-  # from a stale sabc-frontend/sabc-backend left by an earlier run.
+  # project, so we also force-remove our own fixed-name containers (reliable
+  # because docker-compose.yml pins container_name) to free their published
+  # ports from a stale sabc-frontend/sabc-backend left by an earlier run.
+  # Only our named containers are touched — never any other app's container.
   remote_docker "docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d"
 
   ok "Platform deployed!"
@@ -248,8 +249,16 @@ IPEOF
     pub_ip="${TARGET#*@}"
   fi
 
-  echo "  UI:      http://${pub_ip}"
-  echo "  API:     http://${pub_ip}/api"
+  # Published HTTPS host port (defaults to 8443; read from local .env if set).
+  local https_port="8443"
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local p
+    p=$(grep -E '^HTTPS_PORT=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2 | tr -d '[:space:]')
+    [ -n "$p" ] && https_port="$p"
+  fi
+
+  echo "  UI:      https://${pub_ip}:${https_port}"
+  echo "  API:     https://${pub_ip}:${https_port}/api"
   echo "  Swagger: http://${pub_ip}:3000/docs"
   echo ""
   echo "  Logs:    ssh $TARGET 'cd $REMOTE_DIR && docker compose logs -f'"
