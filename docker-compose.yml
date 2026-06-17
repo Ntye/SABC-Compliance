@@ -22,6 +22,12 @@ services:
       # Set to e.g. ubuntu, debian, or your personal user if that's how
       # you SSH into this machine.
       HOST_ADMIN_USER: "${HOST_ADMIN_USER:-}"
+      # Address + port nodes use to reach the platform over HTTPS. Baked into
+      # the node bootstrap script's cert-trust step so registered nodes trust
+      # the platform's TLS cert (HTTPS without -k). When PLATFORM_PUBLIC_HOST
+      # is unset the bootstrap endpoint falls back to the request Host header.
+      PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
+      HTTPS_PORT:          "${HTTPS_PORT:-8443}"
     extra_hosts:
       # Makes host.docker.internal resolve to the Docker host on Linux.
       # Used for auto-detecting the platform host IP.
@@ -57,6 +63,13 @@ services:
     image: sabc-compliance-frontend
     container_name: sabc-frontend
     restart: unless-stopped
+    environment:
+      # Extra subjectAltName hosts for the auto-generated self-signed cert, so
+      # HTTPS is valid for the address nodes use (e.g. the public IP) — not just
+      # localhost. Comma/space separated. The self-signed cert is regenerated
+      # if it doesn't already cover these hosts (a CA-signed cert you drop in is
+      # left untouched). See frontend/tls-entrypoint.sh.
+      TLS_SAN: "${PLATFORM_PUBLIC_HOST:-}"
     ports:
       # HTTPS (primary, and the only published port). A self-signed cert is
       # generated on first launch. Defaults to 8443 so it never collides with a

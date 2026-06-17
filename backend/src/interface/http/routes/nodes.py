@@ -4,7 +4,7 @@ import socket
 import subprocess
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -232,12 +232,52 @@ async def get_host_info(
     return {"host_ip": host_ip, "hostname": hostname, "admin_user": admin_user}
 
 
+def _resolve_cert_host(explicit: str | None, request: Request | None) -> str:
+    """Determine the platform host a node should trust for HTTPS.
+
+    Priority: explicit ?host= query → request Host header (the address the
+    node actually used to fetch this script) → PLATFORM_PUBLIC_HOST env →
+    HOST_IP env. Returns "" if nothing is resolvable (trust step is skipped).
+    """
+    if explicit and explicit.strip():
+        return explicit.strip()
+    if request is not None and request.url.hostname:
+        return request.url.hostname
+    for env_key in ("PLATFORM_PUBLIC_HOST", "HOST_IP"):
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _resolve_https_port(explicit: int | None) -> int:
+    """HTTPS port the platform is published on (for cert trust)."""
+    if explicit:
+        return explicit
+    try:
+        return int(os.environ.get("HTTPS_PORT", "8443") or "8443")
+    except ValueError:
+        return 8443
+
+
+def _render_bootstrap_script(cert_host: str, https_port: int) -> str:
+    """Fill the bootstrap template with the SSH key + cert-trust target."""
+    return (
+        _SETUP_SCRIPT_TEMPLATE
+        .replace("__PLATFORM_PUBLIC_KEY__", _read_platform_public_key())
+        .replace("__PLATFORM_HOST__", cert_host)
+        .replace("__PLATFORM_HTTPS_PORT__", str(https_port))
+    )
+
+
 @router.get(
     "/setup-script",
     summary="Download the node bootstrap script",
     response_class=PlainTextResponse,
 )
 async def get_setup_script(
+    host: str | None = Query(None, description="Platform host to trust for HTTPS (defaults to PLATFORM_PUBLIC_HOST / HOST_IP)"),
+    https_port: int | None = Query(None, description="Platform HTTPS port (defaults to HTTPS_PORT or 8443)"),
     principal: AuthPrincipal = Depends(get_current_principal),
 ):
     """
@@ -246,8 +286,9 @@ async def get_setup_script(
 
     Transfer to the target server, then run:  sudo bash setup-node.sh
     """
-    platform_key = _read_platform_public_key()
-    script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
+    script = _render_bootstrap_script(
+        _resolve_cert_host(host, None), _resolve_https_port(https_port),
+    )
     return PlainTextResponse(
         content=script,
         headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
@@ -260,15 +301,22 @@ async def get_setup_script(
     summary="Bootstrap script for curl | sudo bash",
     response_class=PlainTextResponse,
 )
-async def get_bootstrap_script():
+async def get_bootstrap_script(
+    request: Request,
+    host: str | None = Query(None, description="Platform host to trust for HTTPS (defaults to the Host header, then PLATFORM_PUBLIC_HOST / HOST_IP)"),
+    https_port: int | None = Query(None, description="Platform HTTPS port (defaults to HTTPS_PORT or 8443)"),
+):
     """
     Unauthenticated endpoint returning the bootstrap script for piping:
-        curl -sSL http://<platform>/api/nodes/bootstrap | sudo bash
+        curl -sSL http://<platform>:3000/nodes/bootstrap | sudo bash
 
-    Only exposes the platform's public key (not the private key).
+    The cert-trust target defaults to the host the node used to fetch this
+    script, so no extra typing is needed. Only exposes the platform's public
+    key (not the private key).
     """
-    platform_key = _read_platform_public_key()
-    script = _SETUP_SCRIPT_TEMPLATE.replace("__PLATFORM_PUBLIC_KEY__", platform_key)
+    script = _render_bootstrap_script(
+        _resolve_cert_host(host, request), _resolve_https_port(https_port),
+    )
     return PlainTextResponse(content=script, media_type="text/x-sh; charset=utf-8")
 
 
@@ -453,12 +501,14 @@ _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
 #   sudo bash setup-node.sh
 #
 # Or via curl from the platform:
-#   curl -sSL http://<platform-url>/api/nodes/bootstrap | sudo bash
+#   curl -sSL http://<platform-url>:3000/nodes/bootstrap | sudo bash
 #
 # What this script does:
 #   1. Creates the 'ansible' OS user
 #   2. Installs the platform's SSH public key for passwordless access
 #   3. Grants the ansible user full passwordless sudo
+#   4. Trusts the platform's TLS certificate so this node can talk to the
+#      platform over HTTPS (e.g. https://<platform>:8443) without -k
 #
 # After running, register this server in the platform's Node Registry.
 
@@ -466,6 +516,8 @@ set -euo pipefail
 
 SSH_USER="ansible"
 PLATFORM_KEY="__PLATFORM_PUBLIC_KEY__"
+PLATFORM_HOST="__PLATFORM_HOST__"
+PLATFORM_HTTPS_PORT="__PLATFORM_HTTPS_PORT__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -475,11 +527,11 @@ echo "════════════════════════�
 echo ""
 
 # ── 1. Create ansible user ──────────────────────────────────────────────────
-echo "[1/3] Creating '${SSH_USER}' user ..."
+echo "[1/4] Creating '${SSH_USER}' user ..."
 useradd -m -s /bin/bash "${SSH_USER}" 2>/dev/null || true
 
 # ── 2. Install platform SSH key ─────────────────────────────────────────────
-echo "[2/3] Installing platform SSH key ..."
+echo "[2/4] Installing platform SSH key ..."
 mkdir -p /home/"${SSH_USER}"/.ssh
 chmod 700 /home/"${SSH_USER}"/.ssh
 
@@ -490,9 +542,44 @@ chmod 600 /home/"${SSH_USER}"/.ssh/authorized_keys
 chown -R "${SSH_USER}":"${SSH_USER}" /home/"${SSH_USER}"/.ssh
 
 # ── 3. Grant passwordless sudo ──────────────────────────────────────────────
-echo "[3/3] Granting passwordless sudo ..."
+echo "[3/4] Granting passwordless sudo ..."
 echo "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"${SSH_USER}"
 chmod 440 /etc/sudoers.d/"${SSH_USER}"
+
+# ── 4. Trust the platform's TLS certificate ─────────────────────────────────
+# Fetches the leaf certificate the platform presents over HTTPS and installs it
+# into the OS trust store. After this, `curl https://${PLATFORM_HOST}:${PLATFORM_HTTPS_PORT}/...`
+# works WITHOUT -k. This step is best-effort — a failure here never aborts the
+# bootstrap (the SSH key + sudo above are what the platform actually needs).
+echo "[4/4] Trusting platform TLS certificate (${PLATFORM_HOST}:${PLATFORM_HTTPS_PORT}) ..."
+if [ -z "${PLATFORM_HOST}" ]; then
+  echo "      ⚠ Platform host unknown — skipping (HTTPS calls will need -k)."
+elif ! command -v openssl >/dev/null 2>&1; then
+  echo "      ⚠ openssl not installed — skipping (HTTPS calls will need -k)."
+else
+  _tmp_cert="$(mktemp)"
+  if openssl s_client -connect "${PLATFORM_HOST}:${PLATFORM_HTTPS_PORT}" \
+        -servername "${PLATFORM_HOST}" </dev/null 2>/dev/null \
+        | openssl x509 -outform PEM > "${_tmp_cert}" 2>/dev/null \
+     && [ -s "${_tmp_cert}" ]; then
+    if command -v update-ca-certificates >/dev/null 2>&1; then
+      # Debian / Ubuntu
+      install -m 0644 "${_tmp_cert}" /usr/local/share/ca-certificates/sabc-platform.crt
+      update-ca-certificates >/dev/null 2>&1 || true
+      echo "      ✓ Certificate trusted (Debian/Ubuntu trust store)."
+    elif command -v update-ca-trust >/dev/null 2>&1; then
+      # RHEL / Rocky / CentOS / Amazon Linux
+      install -m 0644 "${_tmp_cert}" /etc/pki/ca-trust/source/anchors/sabc-platform.crt
+      update-ca-trust extract >/dev/null 2>&1 || true
+      echo "      ✓ Certificate trusted (RHEL/Rocky trust store)."
+    else
+      echo "      ⚠ Unrecognised trust store — certificate not installed (HTTPS needs -k)."
+    fi
+  else
+    echo "      ⚠ Could not fetch cert from ${PLATFORM_HOST}:${PLATFORM_HTTPS_PORT} — skipping (HTTPS needs -k)."
+  fi
+  rm -f "${_tmp_cert}"
+fi
 
 echo ""
 echo "══════════════════════════════════════════════════════"
