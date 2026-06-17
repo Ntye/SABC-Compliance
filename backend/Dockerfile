@@ -35,6 +35,9 @@ COPY src/              src/
 COPY ansible/          ansible/
 COPY scan-profiles/    scan-profiles/
 
+# One-shot SQLite → PostgreSQL migration helper (invoked by deploy/ship.sh).
+COPY migrate_to_postgres.py .
+
 # Persistent directories (overridden by volumes at runtime)
 RUN mkdir -p data keys \
     packages/puppet-master packages/puppet-agent \

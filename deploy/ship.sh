@@ -16,6 +16,8 @@
 #   2. Saves them to deploy/sabc-images.tar.gz (~200MB compressed)
 #   3. Transfers the archive + compose file + .env to the EC2 instance
 #   4. Loads images and starts the platform with docker compose
+#   5. Auto-migrates a legacy SQLite database to PostgreSQL on first deploy
+#      (runs once, before the backend boots; a marker file skips it thereafter)
 #
 # Prerequisites:
 #   - Docker + Docker Compose on your local machine
@@ -245,20 +247,56 @@ deploy() {
   info "Loading Docker images on $TARGET ..."
   remote_docker "docker load -i $REMOTE_DIR/sabc-images.tar.gz"
 
-  info "Starting platform ..."
+  info "Starting platform (PostgreSQL first, auto-migrating if needed) ..."
   # Tear down any previous stack first. "down" only clears THIS compose
   # project, so we also force-remove our own fixed-name containers (reliable
   # because docker-compose.yml pins container_name) to free their published
   # ports from a stale sabc-frontend/sabc-backend left by an earlier run.
   # Only our named containers are touched — never any other app's container.
   #
-  # Use "sudo bash -s" with a heredoc so sudo covers ALL three commands:
+  # Use "sudo bash -s" with a heredoc so sudo covers EVERY command:
   # "sudo <compound>" only elevates up to the first semicolon; subsequent
   # commands in the same string revert to the unprivileged user.
+  #
+  # The start sequence brings PostgreSQL up on its own, runs the one-shot
+  # SQLite → PostgreSQL migration BEFORE the backend boots (the backend seeds
+  # default users/groups into an empty DB on first start, which would make the
+  # idempotent migration skip those tables and strand the real SQLite data),
+  # then starts the full stack. A marker file makes the migration a no-op on
+  # every later deploy.  $REMOTE_DIR expands locally; \$ is evaluated remotely.
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
-docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR down --remove-orphans 2>/dev/null || true
+set -e
+COMPOSE="docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
+
+\$COMPOSE down --remove-orphans 2>/dev/null || true
 docker rm -f sabc-frontend sabc-backend 2>/dev/null || true
-docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR up -d
+
+# 1) PostgreSQL alone, wait until healthy (~60s max).
+\$COMPOSE up -d postgres
+echo "[ship.sh] Waiting for PostgreSQL to become healthy ..."
+for i in \$(seq 1 30); do
+  s=\$(docker inspect -f '{{.State.Health.Status}}' sabc-postgres 2>/dev/null || echo starting)
+  [ "\$s" = "healthy" ] && break
+  sleep 2
+done
+
+# 2) Migrate once, in a one-off backend container sharing the backend-data
+#    volume so it can see any legacy platform.db. (No \$ in this block, so the
+#    unquoted heredoc leaves it intact.)
+\$COMPOSE run --rm --no-deps -T backend sh -c '
+  if [ -f /app/data/.migrated-to-postgres ]; then
+    echo "[ship.sh] Database already migrated to PostgreSQL — skipping."
+  elif [ -f /app/data/platform.db ]; then
+    echo "[ship.sh] Existing SQLite database found — migrating to PostgreSQL ..."
+    python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres
+  else
+    echo "[ship.sh] Fresh install (no SQLite database) — no migration needed."
+    touch /app/data/.migrated-to-postgres
+  fi
+'
+
+# 3) Full stack — backend now connects to a populated PostgreSQL.
+\$COMPOSE up -d
 DEPLOY_EOF
 
   ok "Platform deployed!"
