@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
     # Storage
     db_path: str = "./data/platform.db"
+    # Full async DSN — overrides db_path when set.
+    # SQLite (default):   leave blank
+    # PostgreSQL:         postgresql+asyncpg://sabc:secret@postgres:5432/sabc
+    database_url: str = ""
     ssh_key_path: str = "./keys/ansible_id_rsa"
     ansible_dir: str = "./ansible"
     packages_dir: str = "./packages"

@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
 
     # -- Database --
     os.makedirs(os.path.dirname(settings.db_path) if os.path.dirname(settings.db_path) else "data", exist_ok=True)
-    engine, session_factory = await create_db(settings.db_path)
+    engine, session_factory = await create_db(settings.db_path, settings.database_url)
 
     # -- Repositories --
     node_repo = NodeRepository(session_factory)

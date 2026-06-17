@@ -269,83 +269,97 @@ def _ts(val: datetime | None) -> str | None:
     return val.isoformat()
 
 
-async def create_db(db_path: str) -> tuple[AsyncEngine, async_sessionmaker]:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, async_sessionmaker]:
+    """Create (or connect to) the database and ensure the schema is up to date.
+
+    When *database_url* is provided it is used as-is (e.g. a PostgreSQL DSN);
+    otherwise a local SQLite file at *db_path* is used. SQLite-specific
+    ``ALTER TABLE`` migrations are only applied on the SQLite path — on
+    PostgreSQL ``metadata.create_all`` always builds the current schema from
+    scratch so no column-level patches are needed.
+    """
+    url = database_url if database_url else f"sqlite+aiosqlite:///{db_path}"
+    is_sqlite = url.startswith("sqlite")
+
+    if is_sqlite:
+        engine = create_async_engine(url, echo=False)
+    else:
+        # asyncpg connection pool; pool_pre_ping re-validates stale connections
+        # so the app recovers transparently if Postgres restarts.
+        engine = create_async_engine(
+            url,
+            echo=False,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+        )
+
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
-        # Idempotent column migrations for older DB schemas
-        for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
-            try:
-                await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
-            except Exception:
-                pass  # column already exists
-        try:
-            await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
-        except Exception:
-            pass  # column already exists
-        try:
-            await conn.execute(text("ALTER TABLE profile_controls ADD COLUMN check_command TEXT"))
-        except Exception:
-            pass  # column already exists
-        # jobs.logs was a JSON blob that suffered a write-race; now replaced by
-        # the job_logs table.  Drop the old column if it exists (SQLite workaround:
-        # we just leave it — SQLite ignored unused columns and doesn't support
-        # DROP COLUMN before 3.35, so we simply stop writing/reading it).
 
-        # User groups — migrations for new columns
-        for col, typ in [("description", "TEXT"), ("role", "TEXT"),
-                         ("permissions", "TEXT"), ("is_default", "INTEGER")]:
+        if is_sqlite:
+            # ── SQLite-only idempotent column migrations ──────────────────────
+            # PostgreSQL gets a clean schema from create_all; only SQLite
+            # deployments upgrading from an older platform.db need these patches.
+            for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
             try:
-                await conn.execute(text(f"ALTER TABLE user_groups ADD COLUMN {col} {typ}"))
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
             except Exception:
                 pass
-
-        # Node groups — migrations for Puppet-style classification columns
-        for col, typ in [("parent", "TEXT"), ("environment", "TEXT"),
-                         ("is_environment_group", "INTEGER"),
-                         ("match_type", "TEXT"), ("rules", "TEXT")]:
             try:
-                await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
+                await conn.execute(text("ALTER TABLE profile_controls ADD COLUMN check_command TEXT"))
             except Exception:
                 pass
-
-        # Compliance reports — migrations for structured scan output
-        for col, typ in [("profile", "TEXT"), ("duration", "TEXT"),
-                         ("skipped_checks", "INTEGER")]:
+            for col, typ in [("description", "TEXT"), ("role", "TEXT"),
+                             ("permissions", "TEXT"), ("is_default", "INTEGER")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE user_groups ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+            for col, typ in [("parent", "TEXT"), ("environment", "TEXT"),
+                             ("is_environment_group", "INTEGER"),
+                             ("match_type", "TEXT"), ("rules", "TEXT")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+            for col, typ in [("profile", "TEXT"), ("duration", "TEXT"),
+                             ("skipped_checks", "INTEGER")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
             try:
-                await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
+                await conn.execute(text("ALTER TABLE nodes ADD COLUMN scan_ready INTEGER DEFAULT 0"))
+                await conn.execute(text(
+                    "UPDATE nodes SET scan_ready = inspec_installed "
+                    "WHERE inspec_installed IS NOT NULL AND scan_ready = 0"
+                ))
             except Exception:
                 pass
-
-        # Column renames: inspec_installed → scan_ready, inspec_blocks → scan_blocks
-        # SQLite does not support RENAME COLUMN before 3.25, so we ADD the new column
-        # and leave the old one (data is migrated via getattr fallback in _to_entity).
-        try:
-            await conn.execute(text("ALTER TABLE nodes ADD COLUMN scan_ready INTEGER DEFAULT 0"))
-            # Backfill from old column if it exists
-            await conn.execute(text("UPDATE nodes SET scan_ready = inspec_installed WHERE inspec_installed IS NOT NULL AND scan_ready = 0"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text("ALTER TABLE rules ADD COLUMN scan_blocks TEXT DEFAULT '{}'"))
-            await conn.execute(text("UPDATE rules SET scan_blocks = inspec_blocks WHERE inspec_blocks IS NOT NULL AND (scan_blocks IS NULL OR scan_blocks = '{}')"))
-        except Exception:
-            pass
-
-        # Profiles — framework tag (cis | internal | NULL). Backfill the existing
-        # built-in SABC referential as the "internal" framework; the CIS Benchmark
-        # profile is seeded separately on startup.
-        try:
-            await conn.execute(text("ALTER TABLE profiles ADD COLUMN framework TEXT"))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text(
-                "UPDATE profiles SET framework = 'internal' "
-                "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
-            ))
-        except Exception:
-            pass
+            try:
+                await conn.execute(text("ALTER TABLE rules ADD COLUMN scan_blocks TEXT DEFAULT '{}'"))
+                await conn.execute(text(
+                    "UPDATE rules SET scan_blocks = inspec_blocks "
+                    "WHERE inspec_blocks IS NOT NULL AND (scan_blocks IS NULL OR scan_blocks = '{}')"
+                ))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE profiles ADD COLUMN framework TEXT"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text(
+                    "UPDATE profiles SET framework = 'internal' "
+                    "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
+                ))
+            except Exception:
+                pass
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory

@@ -12,6 +12,26 @@
 
 services:
 
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: sabc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       "${POSTGRES_DB:-sabc}"
+      POSTGRES_USER:     "${POSTGRES_USER:-sabc}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sabc-change-me}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - sabc-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sabc} -d ${POSTGRES_DB:-sabc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   # ── Backend: FastAPI + Ansible ─────────────────────────────────────────────
   backend:
     build: ./backend          # built once — deps cached; rebuild only when
@@ -25,20 +45,21 @@ services:
       SSH_KEY_PATH:  /app/keys/ansible_id_rsa
       ANSIBLE_DIR:   /app/ansible
       PACKAGES_DIR:  /app/packages
-      # Address + port nodes use to reach the platform over HTTPS — baked into
-      # the bootstrap script's cert-trust step (falls back to request Host).
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sabc}:${POSTGRES_PASSWORD:-sabc-change-me}@postgres:5432/${POSTGRES_DB:-sabc}"
       PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
       HTTPS_PORT:          "${HTTPS_PORT:-8443}"
-      # Frontend TLS cert dir, shared via frontend-certs (see docker-compose.yml).
       TLS_CERTS_DIR:       /app/certs
     volumes:
       - backend-data:/app/data
       - backend-keys:/app/keys
       - ./backend/packages:/app/packages
-      - frontend-certs:/app/certs        # shared with frontend so UI cert upload works
+      - frontend-certs:/app/certs
       - ./backend/src:/app/src           # live — git pull reflects instantly
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
       - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     networks:
@@ -66,35 +87,26 @@ services:
     container_name: sabc-frontend
     working_dir: /app
     environment:
-      # Extra subjectAltName hosts for the dev self-signed cert (comma/space
-      # separated) so HTTPS is valid for the public IP, not just localhost.
       TLS_SAN: "${PLATFORM_PUBLIC_HOST:-}"
     volumes:
       - ./frontend:/app
-      - frontend-node-modules:/app/node_modules   # kept inside container so
-                                                  # host & container binaries
-                                                  # don't conflict (ARM/x86)
-      - frontend-certs:/certs                      # self-signed TLS cert (persisted)
-    # Generate a self-signed cert on first launch (vite.config.js serves HTTPS
-    # when /certs/server.crt exists), then start the dev server.
+      - frontend-node-modules:/app/node_modules
+      - frontend-certs:/certs
     command: sh /app/dev-entrypoint.sh
     ports:
-      # Defaults to 8443 so it never collides with a standard :443 service on
-      # the host. Override via HTTPS_PORT in .env.
       - "${HTTPS_PORT:-8443}:5173"
     depends_on:
       backend:
         condition: service_healthy
     networks:
       - sabc-net
-    # Vite proxies /api → backend:3000 (configured in vite.config.js),
-    # including WebSocket job-log streaming — same behaviour as Nginx in prod.
 
 volumes:
+  postgres-data:
   backend-data:
   backend-keys:
-  frontend-node-modules:    # isolated node_modules volume (not on the host)
-  frontend-certs:           # self-signed TLS cert (persisted across restarts)
+  frontend-node-modules:
+  frontend-certs:
 
 networks:
   sabc-net:
