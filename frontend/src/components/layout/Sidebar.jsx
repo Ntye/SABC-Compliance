@@ -53,19 +53,12 @@ function NavItem({ path, label, icon: Icon, indent = false }) {
 
 export default function Sidebar() {
   const t = useT()
-  const [editingUrl, setEditingUrl] = useState(false)
-  const [urlInput, setUrlInput] = useState(getGatewayUrl())
   const navigate = useNavigate()
 
   const [reportingOpen, setReportingOpen] = useState(true)
   const [manageOpen, setManageOpen] = useState(true)
   const [nodesOpen, setNodesOpen] = useState(true)
   const [adminOpen, setAdminOpen] = useState(true)
-
-  function handleUrlSave() {
-    setGatewayUrl(urlInput.trim() || getGatewayUrl())
-    setEditingUrl(false)
-  }
 
   function handleLogout() {
     logout()
