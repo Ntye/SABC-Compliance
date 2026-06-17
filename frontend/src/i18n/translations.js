@@ -29,6 +29,7 @@ export const translations = {
       iamGroups: 'User Groups',
       iamKeys: 'API Keys',
       iamPermissions: 'Permissions',
+      tlsCertificate: 'TLS Certificate',
       nodeGroups: 'Node Groups',
     },
     login: {
@@ -537,6 +538,7 @@ export const translations = {
       iamGroups: 'Groupes',
       iamKeys: 'Clés API',
       iamPermissions: 'Permissions',
+      tlsCertificate: 'Certificat TLS',
       nodeGroups: 'Groupes de nœuds',
     },
     login: {

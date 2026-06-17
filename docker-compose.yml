@@ -28,6 +28,10 @@ services:
       # is unset the bootstrap endpoint falls back to the request Host header.
       PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
       HTTPS_PORT:          "${HTTPS_PORT:-8443}"
+      # Directory of the frontend's TLS cert/key, shared via the frontend-certs
+      # volume. Lets an admin install a CA-signed cert from the UI; the frontend
+      # watches this dir and reloads nginx automatically. See routes/settings.py.
+      TLS_CERTS_DIR:       /app/certs
     extra_hosts:
       # Makes host.docker.internal resolve to the Docker host on Linux.
       # Used for auto-detecting the platform host IP.
@@ -39,6 +43,9 @@ services:
       - backend-keys:/app/keys
       # Airgap packages — bind-mount so you can drop files in without rebuild
       - ./backend/packages:/app/packages
+      # Frontend TLS cert/key — same named volume the frontend serves from, so
+      # a cert uploaded via the UI lands where nginx reads it.
+      - frontend-certs:/app/certs
     networks:
       - sabc-net
     healthcheck:

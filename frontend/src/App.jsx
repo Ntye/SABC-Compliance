@@ -18,6 +18,7 @@ import UsersPage from './pages/UsersPage.jsx'
 import UserGroupsPage from './pages/UserGroupsPage.jsx'
 import PermissionsPage from './pages/PermissionsPage.jsx'
 import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
+import TlsCertificatePage from './pages/TlsCertificatePage.jsx'
 
 export default function App() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="/iam/groups" element={<UserGroupsPage />} />
             <Route path="/iam/keys" element={<ApiKeysPage />} />
             <Route path="/iam/permissions" element={<PermissionsPage />} />
+            <Route path="/settings/tls" element={<TlsCertificatePage />} />
             {/* Node Groups */}
             <Route path="/node-groups" element={<NodeGroupsPage />} />
           </Route>

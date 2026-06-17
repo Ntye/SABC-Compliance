@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     ssh_key_path: str = "./keys/ansible_id_rsa"
     ansible_dir: str = "./ansible"
     packages_dir: str = "./packages"
+    # Directory holding the frontend's TLS cert/key (server.crt / server.key).
+    # Shared with the frontend container via the frontend-certs Docker volume so
+    # an operator can install a CA-signed certificate through the UI. The
+    # frontend's entrypoint watches this directory and reloads nginx on change.
+    tls_certs_dir: str = "/app/certs"
 
     # JWT (username/password auth)
     jwt_secret: str = "change-me-in-production-use-random-32-chars"

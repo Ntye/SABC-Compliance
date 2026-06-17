@@ -432,6 +432,41 @@ export async function getAuditLog(limit = 100) {
   return request('GET', `/audit?limit=${limit}`)
 }
 
+// ── Settings: TLS certificate ───────────────────────────────────────────────
+
+export async function getTlsCertificate() {
+  return request('GET', '/settings/tls/certificate')
+}
+
+export async function uploadTlsCertificate(certFile, keyFile) {
+  // multipart/form-data — do NOT set Content-Type so the browser adds the
+  // multipart boundary itself. Mirrors the auth headers used by request().
+  const base = getGatewayUrl()
+  const headers = {}
+  const apiKey = getStoredApiKey()
+  const jwt = getJwt()
+  if (apiKey) headers['X-API-Key'] = apiKey
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+  const form = new FormData()
+  form.append('certificate', certFile)
+  form.append('private_key', keyFile)
+
+  const res = await fetch(`${base}/settings/tls/certificate`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  let data
+  try { data = await res.json() } catch { data = {} }
+  if (!res.ok) {
+    const msg = data?.detail || data?.error || `HTTP ${res.status}`
+    if (res.status === 401) logout()
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+  return data
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 export async function getHealth() {

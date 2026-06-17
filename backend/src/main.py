@@ -54,6 +54,7 @@ from modules.compliance.usecases import (
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.profiles.usecases import ProfileUseCases
+from modules.settings.usecases import TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
@@ -61,6 +62,7 @@ from interface.http.routes import jobs as jobs_routes
 from interface.http.routes import compliance as compliance_routes
 from interface.http.routes import node_groups as node_groups_routes
 from interface.http.routes import profiles as profiles_routes
+from interface.http.routes import settings as settings_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -310,6 +312,10 @@ async def lifespan(app: FastAPI):
     profile_uc = ProfileUseCases(profile_repo)
     profiles_routes.set_use_cases(profile_uc)
 
+    # -- Platform settings (TLS certificate management) --
+    tls_cert_uc = TlsCertificateUseCase(settings.tls_certs_dir)
+    settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc)
+
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
@@ -391,6 +397,7 @@ Two methods accepted on all protected endpoints:
             {"name": "Rules", "description": "Puppet compliance rules library"},
             {"name": "Audit", "description": "HTTP audit log"},
             {"name": "Webhooks", "description": "Internal webhook endpoints"},
+            {"name": "Settings", "description": "Platform settings — TLS certificate management"},
         ],
     )
 
@@ -426,6 +433,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(jobs_routes.router)
     app.include_router(compliance_routes.router)
     app.include_router(profiles_routes.router)
+    app.include_router(settings_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

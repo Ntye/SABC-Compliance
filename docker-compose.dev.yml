@@ -29,10 +29,13 @@ services:
       # the bootstrap script's cert-trust step (falls back to request Host).
       PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
       HTTPS_PORT:          "${HTTPS_PORT:-8443}"
+      # Frontend TLS cert dir, shared via frontend-certs (see docker-compose.yml).
+      TLS_CERTS_DIR:       /app/certs
     volumes:
       - backend-data:/app/data
       - backend-keys:/app/keys
       - ./backend/packages:/app/packages
+      - frontend-certs:/app/certs        # shared with frontend so UI cert upload works
       - ./backend/src:/app/src           # live — git pull reflects instantly
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
       - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Cpu, Download, FileCode, Key, LayoutDashboard, Layers, Lock,
+  Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
@@ -137,6 +137,7 @@ export default function Sidebar() {
             <NavItem path="/iam/groups"      label={t('nav.iamGroups')}      icon={UsersRound} />
             <NavItem path="/iam/keys"        label={t('nav.iamKeys')}        icon={Key}        />
             <NavItem path="/iam/permissions" label={t('nav.iamPermissions')} icon={Lock}       />
+            <NavItem path="/settings/tls"    label={t('nav.tlsCertificate')} icon={FileKey}    />
           </>
         )}
       </nav>

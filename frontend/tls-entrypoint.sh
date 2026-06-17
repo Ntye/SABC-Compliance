@@ -103,4 +103,28 @@ else
     echo "[tls-entrypoint] Existing certificate is valid for the required hosts — leaving it untouched."
 fi
 
+# ── Hot-reload watcher ───────────────────────────────────────────────────────
+# The backend can install a CA-signed cert into this shared volume from the UI
+# (POST /api/settings/tls/certificate). Poll the cert file and reload nginx when
+# it changes so the new certificate takes effect without a container restart.
+# `nginx -t` gates the reload: a bad cert is never loaded, so the running server
+# keeps serving the previous (working) certificate.
+watch_cert_and_reload() {
+    last="$(md5sum "$CERT" 2>/dev/null | awk '{print $1}')"
+    while true; do
+        sleep 5
+        [ -f "$CERT" ] || continue
+        cur="$(md5sum "$CERT" 2>/dev/null | awk '{print $1}')"
+        if [ -n "$cur" ] && [ "$cur" != "$last" ]; then
+            last="$cur"
+            if nginx -t >/dev/null 2>&1; then
+                nginx -s reload && echo "[tls-entrypoint] Certificate changed — nginx reloaded with the new cert."
+            else
+                echo "[tls-entrypoint] Certificate changed but failed nginx -t — keeping the previous cert."
+            fi
+        fi
+    done
+}
+watch_cert_and_reload &
+
 exec nginx -g 'daemon off;'
