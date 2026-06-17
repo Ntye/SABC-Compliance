@@ -193,6 +193,50 @@ ENV_EOF
   # Create packages directory (bind mount target)
   remote "sudo mkdir -p $REMOTE_DIR/backend/packages && sudo chown -R \$(whoami):\$(whoami) $REMOTE_DIR"
 
+  # Auto-detect the server's public IP and write PLATFORM_PUBLIC_HOST into the
+  # remote .env so docker compose picks it up automatically — no manual editing
+  # required. Only writes/updates the value when it is currently unset; an
+  # existing non-empty value (e.g. a domain name) is always left untouched.
+  info "Auto-detecting server public IP for PLATFORM_PUBLIC_HOST ..."
+  remote "bash -s -- '$REMOTE_DIR'" << 'PUBIP_EOF'
+rd="$1"
+ip=""
+# IMDSv2 (preferred on instances with metadata token enforcement)
+token=$(curl -sf --connect-timeout 2 -X PUT \
+    "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 10" 2>/dev/null || true)
+if [ -n "$token" ]; then
+    ip=$(curl -sf --connect-timeout 2 \
+        -H "X-aws-ec2-metadata-token: $token" \
+        "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+fi
+# IMDSv1 fallback
+if [ -z "$ip" ]; then
+    ip=$(curl -sf --connect-timeout 2 \
+        "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+fi
+# hostname -I fallback (non-EC2 hosts)
+if [ -z "$ip" ]; then
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+fi
+envfile="$rd/.env"
+if [ -n "$ip" ]; then
+    existing=$(grep "^PLATFORM_PUBLIC_HOST=" "$envfile" 2>/dev/null | cut -d= -f2 | head -1 | tr -d '[:space:]')
+    if [ -z "$existing" ]; then
+        if grep -q "^PLATFORM_PUBLIC_HOST=" "$envfile" 2>/dev/null; then
+            sed -i "s|^PLATFORM_PUBLIC_HOST=.*|PLATFORM_PUBLIC_HOST=$ip|" "$envfile"
+        else
+            printf '\nPLATFORM_PUBLIC_HOST=%s\n' "$ip" >> "$envfile"
+        fi
+        echo "[ship.sh] PLATFORM_PUBLIC_HOST=$ip → $envfile"
+    else
+        echo "[ship.sh] PLATFORM_PUBLIC_HOST already set to '$existing' — leaving it unchanged"
+    fi
+else
+    echo "[ship.sh] Warning: could not detect public IP — PLATFORM_PUBLIC_HOST not set"
+fi
+PUBIP_EOF
+
   ok "Files transferred"
 }
 

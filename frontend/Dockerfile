@@ -18,8 +18,8 @@ RUN npm run build
 # ── Stage 2: serve ────────────────────────────────────────────────────────────
 FROM nginx:1.27-alpine
 
-# openssl is used by the entrypoint to mint a self-signed cert on first launch
-RUN apk add --no-cache openssl
+# openssl: cert generation; curl: public-IP auto-detection via EC2 IMDS
+RUN apk add --no-cache openssl curl
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf

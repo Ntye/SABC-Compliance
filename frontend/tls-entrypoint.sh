@@ -13,6 +13,37 @@ CN="${TLS_CN:-sabc-compliance}"
 
 mkdir -p "$CERT_DIR"
 
+# ── Auto-detect public IP when TLS_SAN was not supplied ──────────────────────
+# Covers the common case where PLATFORM_PUBLIC_HOST is not set in .env: the
+# platform's public IP is discovered automatically so https://<ip>:<port> works
+# without any manual configuration.
+# Precedence: EC2 IMDSv2 → IMDSv1 → hostname -I (first non-loopback address).
+if [ -z "${TLS_SAN:-}" ]; then
+    _auto_ip=""
+    # IMDSv2 (required on instances with IMDSv2 enforced)
+    _token=$(curl -sf --connect-timeout 2 -X PUT \
+        "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 10" 2>/dev/null || true)
+    if [ -n "$_token" ]; then
+        _auto_ip=$(curl -sf --connect-timeout 2 \
+            -H "X-aws-ec2-metadata-token: $_token" \
+            "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+    fi
+    # IMDSv1 fallback
+    if [ -z "$_auto_ip" ]; then
+        _auto_ip=$(curl -sf --connect-timeout 2 \
+            "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true)
+    fi
+    # Non-EC2 fallback: first address reported by hostname -I
+    if [ -z "$_auto_ip" ]; then
+        _auto_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+    fi
+    if [ -n "$_auto_ip" ]; then
+        TLS_SAN="$_auto_ip"
+        echo "[tls-entrypoint] Auto-detected host IP: $_auto_ip (added to cert SAN)"
+    fi
+fi
+
 # Build the subjectAltName list. Always include localhost + the CN + loopback.
 # TLS_SAN carries additional hosts (e.g. the platform's public IP or DNS name)
 # as a comma- or space-separated list, so the self-signed cert is valid for the
