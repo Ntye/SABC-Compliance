@@ -12,6 +12,9 @@
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Restart      # Skip build/transfer/load: just docker compose up -d
 #   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
+# On first deploy a legacy SQLite database is auto-migrated to PostgreSQL
+# (runs once, before the backend boots; a marker file skips it thereafter).
+#
 # Authentication (choose one):
 #   SSH key (recommended): -SshKey .\path\to\private_key.pem
 #   Password auth:         omit -SshKey -- you will be prompted per step
@@ -376,31 +379,80 @@ function Get-ComposeCmd {
 
 # -- Step 5a: Start containers (compose up only -- images already loaded) -----
 function Start-Containers {
-    Info "Starting platform ..."
+    Info "Starting platform (PostgreSQL first, auto-migrating if needed) ..."
     $compose = Get-ComposeCmd
-    # Wrap all operations in a single bash -c so they run under one sudo
-    # invocation.  docker-compose 1.29.2 crashes with a ContainerConfig KeyError
-    # when it tries to recreate a container whose image was built with a newer
-    # Docker version.  "docker-compose down" finds containers by their compose
-    # project labels (not by name), so it removes them cleanly regardless of
-    # whatever prefixed name docker-compose assigned on the previous run.
-    #
-    # However "down" only removes containers belonging to THIS compose project.
-    # A stale sabc-frontend/sabc-backend left by an earlier project context (or
-    # the dev compose) keeps holding its published ports and the new container
-    # then fails with "port is already allocated". Our compose files pin fixed
-    # container_name values, so we additionally force-remove THEM by name — this
-    # is reliable precisely because the names are fixed, and only ever touches
-    # our own containers, never another app's — plus --remove-orphans.
-    $bashCmd = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir down --remove-orphans 2>/dev/null || true; docker rm -f sabc-frontend sabc-backend 2>/dev/null || true; $compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir up -d --no-build"
 
-    # Run compose; on failure print the backend log so the crash reason is
-    # visible without needing a separate SSH session.
-    Invoke-Sudo "bash -c '$bashCmd'" -AllowFail
-    if ($LASTEXITCODE -ne 0) {
-        Warn "docker-compose up failed -- showing backend logs for diagnosis:"
+    # The start sequence is written to a temp .sh and piped over SSH under ONE
+    # sudo invocation (same proven pattern as Setup-Server). We use a script
+    # file rather than inlining bash -c '...' because the migration step needs
+    # its own nested single quotes, which would collide with PowerShell/SSH
+    # quoting if inlined.
+    #
+    # "down" removes this compose project's containers by their project labels
+    # (reliable even when docker-compose 1.29.2 assigned a prefixed name), and
+    # we also force-remove our fixed-name sabc-frontend/sabc-backend so a stale
+    # container from an earlier run can't keep holding its published ports.
+    # Only our own named containers are ever touched.
+    #
+    # Order matters: PostgreSQL comes up ALONE and the one-shot SQLite ->
+    # PostgreSQL migration runs BEFORE the backend boots. The backend seeds
+    # default users/groups into an empty DB on first start, which would
+    # otherwise make the idempotent migration skip those tables and strand the
+    # real SQLite data. A marker file makes the migration a no-op on later runs.
+    $composePrefix = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir"
+    $lines = @(
+        'set -e',
+        "COMPOSE=`"$composePrefix`"",
+        '$COMPOSE down --remove-orphans 2>/dev/null || true',
+        'docker rm -f sabc-frontend sabc-backend 2>/dev/null || true',
+        '# 1) PostgreSQL alone, wait until healthy (~60s max).',
+        '$COMPOSE up -d --no-build postgres',
+        'echo "Waiting for PostgreSQL to become healthy ..."',
+        'for i in $(seq 1 30); do',
+        '  s=$(docker inspect -f "{{.State.Health.Status}}" sabc-postgres 2>/dev/null || echo starting)',
+        '  [ "$s" = "healthy" ] && break',
+        '  sleep 2',
+        'done',
+        '# 2) One-shot SQLite -> PostgreSQL migration before the backend boots.',
+        "`$COMPOSE run --rm --no-deps -T backend sh -c 'if [ -f /app/data/.migrated-to-postgres ]; then echo ship: already migrated to postgres; elif [ -f /app/data/platform.db ]; then echo ship: migrating SQLite to PostgreSQL; python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres; else echo ship: fresh install, no migration needed; touch /app/data/.migrated-to-postgres; fi'",
+        '# 3) Full stack -- backend now connects to a populated PostgreSQL.',
+        '$COMPOSE up -d --no-build'
+    )
+
+    # Pipe the script to the server. When a sudo password is set, prepend it as
+    # the first stdin line: "sudo -S" consumes exactly that line for auth and
+    # leaves the rest for "bash -s". ASCII avoids a UTF-8 BOM corrupting line 1.
+    $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
+    if ($SudoPassword -ne "") {
+        $sudoStart = "sudo -S bash -s"
+        @($SudoPassword) + $lines | Set-Content -Path $tmpScript -Encoding ASCII
+    } else {
+        $sudoStart = "sudo bash -s"
+        $lines | Set-Content -Path $tmpScript -Encoding ASCII
+    }
+
+    if ($UsePlink) {
+        if ($SshKey) {
+            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoStart
+        } else {
+            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoStart
+        }
+    } else {
+        if ($SshKey) {
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoStart
+        } else {
+            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoStart
+        }
+    }
+    $startExit = $LASTEXITCODE
+    Remove-Item $tmpScript -ErrorAction SilentlyContinue
+
+    # On failure print the backend log so the crash reason is visible without a
+    # separate SSH session.
+    if ($startExit -ne 0) {
+        Warn "Startup/migration failed -- showing backend logs for diagnosis:"
         Invoke-Sudo "docker logs --tail 60 sabc-backend 2>&1 || true" -AllowFail
-        Fail "Containers failed to start (see backend logs above)"
+        Fail "Containers failed to start (see output above)"
     }
 
     Show-URLs
