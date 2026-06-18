@@ -480,8 +480,11 @@ function Show-URLs {
     Write-Host "  API:     https://${displayHost}:${httpsPort}/api" -ForegroundColor White
     Write-Host "  Swagger: http://${displayHost}:3000/docs" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Logs: ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml logs -f" -ForegroundColor DarkGray
-    Write-Host "  Stop: ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml down" -ForegroundColor DarkGray
+    Write-Host "  Status: ssh $Target sudo docker ps" -ForegroundColor DarkGray
+    Write-Host "  Logs:   ssh $Target sudo docker logs -f sabc-backend   (or sabc-frontend)" -ForegroundColor DarkGray
+    Write-Host "  Stop:   ssh $Target sudo docker-compose -f $RemoteDir/docker-compose.yml down" -ForegroundColor DarkGray
+    Write-Host "  Note:   'docker-compose logs -f' may print a harmless KeyError: 'id' on v1;" -ForegroundColor DarkGray
+    Write-Host "          per-container 'docker logs' above avoids it." -ForegroundColor DarkGray
     Write-Host "======================================================" -ForegroundColor Cyan
     Write-Host ""
 }
@@ -539,6 +542,19 @@ function Start-Containers {
     $lines = @(
         'set -e',
         "COMPOSE=`"$composePrefix`"",
+        "COMPOSE_FILE=`"$RemoteDir/docker-compose.yml`"",
+        '# Guard: docker-compose v1 mis-handles image-only services when the file',
+        '# still declares build: contexts -- it silently skips them and STILL exits 0,',
+        '# so the deploy looks successful while only postgres actually starts.',
+        '# Abort early with an actionable message instead of a false success.',
+        'if grep -qE "^[[:space:]]*build:" "$COMPOSE_FILE"; then',
+        '  echo "[ship] FATAL: $COMPOSE_FILE still contains build: directives."',
+        '  echo "[ship] This server runs docker-compose v1, which cannot start the"',
+        '  echo "[ship] pre-built image services from a file that has build: contexts."',
+        '  echo "[ship] Re-run with -Update (Windows) / --update (Linux) so the"',
+        '  echo "[ship] corrected docker-compose.yml is transferred to the server."',
+        '  exit 2',
+        'fi',
         '$COMPOSE down --remove-orphans 2>/dev/null || true',
         'docker rm -f sabc-frontend sabc-backend 2>/dev/null || true',
         '# 1) PostgreSQL alone, wait until healthy (~60s max).',
@@ -552,7 +568,27 @@ function Start-Containers {
         '# 2) One-shot SQLite -> PostgreSQL migration before the backend boots.',
         "`$COMPOSE run --rm --no-deps -T backend sh -c 'if [ -f /app/data/.migrated-to-postgres ]; then echo ship: already migrated to postgres; elif [ -f /app/data/platform.db ]; then echo ship: migrating SQLite to PostgreSQL; python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres; else echo ship: fresh install, no migration needed; touch /app/data/.migrated-to-postgres; fi'",
         '# 3) Full stack -- backend now connects to a populated PostgreSQL.',
-        '$COMPOSE up -d --no-build'
+        '$COMPOSE up -d --no-build',
+        '# 4) Verify the stack is REALLY up. docker-compose v1 can return 0 without',
+        '#    creating a service, so check real container state, not the exit code.',
+        'sleep 4',
+        'missing=""',
+        'for c in sabc-postgres sabc-backend sabc-frontend; do',
+        '  st=$(docker inspect -f "{{.State.Status}}" "$c" 2>/dev/null || echo absent)',
+        '  echo "[ship] container $c: $st"',
+        '  [ "$st" = "running" ] || missing="$missing $c"',
+        'done',
+        'if [ -n "$missing" ]; then',
+        '  echo "[ship] ERROR: these containers are not running:$missing"',
+        '  echo "[ship] ---------- docker ps -a ----------"',
+        '  docker ps -a',
+        '  for c in $missing; do',
+        '    echo "[ship] ---------- last 40 log lines: $c ----------"',
+        '    docker logs --tail 40 "$c" 2>&1 || echo "[ship] (container $c was never created)"',
+        '  done',
+        '  exit 1',
+        'fi',
+        'echo "[ship] All containers running: postgres, backend, frontend."'
     )
 
     # Pipe the script to the server. When a sudo password is set, prepend it as

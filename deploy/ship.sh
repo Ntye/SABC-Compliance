@@ -371,6 +371,19 @@ deploy() {
 set -e
 if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
 COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
+COMPOSE_FILE="$REMOTE_DIR/docker-compose.yml"
+
+# Guard: docker-compose v1 mis-handles image-only services when the file still
+# declares build: contexts -- it silently skips them and STILL exits 0, so the
+# deploy looks successful while only postgres actually starts. Abort early.
+if grep -qE "^[[:space:]]*build:" "\$COMPOSE_FILE"; then
+  echo "[ship.sh] FATAL: \$COMPOSE_FILE still contains build: directives."
+  echo "[ship.sh] This server runs docker-compose v1, which cannot start the"
+  echo "[ship.sh] pre-built image services from a file that has build: contexts."
+  echo "[ship.sh] Re-run with --update so the corrected docker-compose.yml is"
+  echo "[ship.sh] transferred to the server."
+  exit 2
+fi
 
 \$COMPOSE down --remove-orphans 2>/dev/null || true
 docker rm -f sabc-frontend sabc-backend 2>/dev/null || true
@@ -402,6 +415,27 @@ done
 # 3) Full stack — backend now connects to a populated PostgreSQL.
 #    --no-build: images are pre-loaded; no build context exists on the server.
 \$COMPOSE up -d --no-build
+
+# 4) Verify the stack is REALLY up. docker-compose v1 can return 0 without
+#    creating a service, so check real container state, not the exit code.
+sleep 4
+missing=""
+for c in sabc-postgres sabc-backend sabc-frontend; do
+  st=\$(docker inspect -f '{{.State.Status}}' "\$c" 2>/dev/null || echo absent)
+  echo "[ship.sh] container \$c: \$st"
+  [ "\$st" = "running" ] || missing="\$missing \$c"
+done
+if [ -n "\$missing" ]; then
+  echo "[ship.sh] ERROR: these containers are not running:\$missing"
+  echo "[ship.sh] ---------- docker ps -a ----------"
+  docker ps -a
+  for c in \$missing; do
+    echo "[ship.sh] ---------- last 40 log lines: \$c ----------"
+    docker logs --tail 40 "\$c" 2>&1 || echo "[ship.sh] (container \$c was never created)"
+  done
+  exit 1
+fi
+echo "[ship.sh] All containers running: postgres, backend, frontend."
 DEPLOY_EOF
   _deploy_rc=$?
   set -e
@@ -475,8 +509,11 @@ IPEOF
   echo "  API:     https://${pub_ip}:${https_port}/api"
   echo "  Swagger: http://${pub_ip}:3000/docs"
   echo ""
-  echo "  Logs:    ssh $TARGET 'cd $REMOTE_DIR && docker compose logs -f'"
+  echo "  Status:  ssh $TARGET sudo docker ps"
+  echo "  Logs:    ssh $TARGET sudo docker logs -f sabc-backend   (or sabc-frontend)"
   echo "  Stop:    ssh $TARGET 'cd $REMOTE_DIR && docker compose down'"
+  echo "  Note:    'docker-compose logs -f' may print a harmless KeyError: 'id' on v1;"
+  echo "           per-container 'docker logs' above avoids it."
   echo "══════════════════════════════════════════════════════"
   echo ""
 }
