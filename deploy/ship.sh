@@ -296,8 +296,12 @@ do_rollback() {
 set -e
 rd="$REMOTE_DIR"
 
+# Detect compose binary (v1 standalone vs v2 plugin)
+if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
+COMPOSE="\$_bin -f \$rd/docker-compose.yml --project-directory \$rd"
+
 # Stop the current (possibly broken) stack
-docker compose -f "\$rd/docker-compose.yml" --project-directory "\$rd" down --remove-orphans 2>/dev/null || true
+\$COMPOSE down --remove-orphans 2>/dev/null || true
 docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true
 
 # Restore backed-up compose and env
@@ -327,8 +331,7 @@ if [ "\$rolled" -eq 0 ]; then
   exit 1
 fi
 
-COMPOSE="docker compose -f \$rd/docker-compose.yml --project-directory \$rd"
-\$COMPOSE up -d
+\$COMPOSE up -d --no-build
 echo "[rollback] Previous deployment successfully restored."
 ROLLBACK_EOF
 
@@ -366,7 +369,8 @@ deploy() {
   set +e
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
 set -e
-COMPOSE="docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
+if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
+COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
 
 \$COMPOSE down --remove-orphans 2>/dev/null || true
 docker rm -f sabc-frontend sabc-backend 2>/dev/null || true

@@ -373,7 +373,8 @@ function Invoke-Rollback {
     $lines = @(
         'set -e',
         "rd=`"$RemoteDir`"",
-        'COMPOSE="docker compose -f $rd/docker-compose.yml --project-directory $rd"',
+        'if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi',
+        'COMPOSE="$_bin -f $rd/docker-compose.yml --project-directory $rd"',
         '$COMPOSE down --remove-orphans 2>/dev/null || true',
         'docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true',
         'if [ -f "$rd/docker-compose.yml.rollback" ]; then',
@@ -398,8 +399,7 @@ function Invoke-Rollback {
         '  echo "[rollback] ERROR: no rollback images found -- cannot restore previous version."',
         '  exit 1',
         'fi',
-        'COMPOSE="docker compose -f $rd/docker-compose.yml --project-directory $rd"',
-        '$COMPOSE up -d',
+        '$COMPOSE up -d --no-build',
         'echo "[rollback] Previous deployment successfully restored."'
     )
     $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
