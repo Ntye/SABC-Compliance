@@ -488,17 +488,22 @@ function Show-URLs {
 
 # Detect whether the server has the compose plugin (docker compose) or the
 # standalone binary (docker-compose) and return the right invocation.
-# Probe by running "docker compose version" and checking the exit code --
-# avoids && / || in string arguments, which confuses the PS 5.1 parser on
-# systems where the file is read with a non-UTF-8 default encoding.
+# Run "docker compose version" and check $LASTEXITCODE (0 = plugin).
+# ErrorActionPreference is set to Stop globally, so we suppress it here:
+# a non-zero exit from the probe is expected when only v1 is installed.
 function Get-ComposeCmd {
-    $null = if ($UsePlink) {
-        if ($SshKey) { & $PlinkExe -ssh -i $SshKey -batch $Target "docker compose version" 2>&1 }
-        else         { & $PlinkExe -ssh -pw $SshPassword -batch $Target "docker compose version" 2>&1 }
-    } else {
-        if ($SshKey) { & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "docker compose version" 2>&1 }
-        else         { & ssh -o StrictHostKeyChecking=no $Target "docker compose version" 2>&1 }
-    }
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    try {
+        $null = if ($UsePlink) {
+            if ($SshKey) { & $PlinkExe -ssh -i $SshKey -batch $Target "docker compose version" 2>&1 }
+            else         { & $PlinkExe -ssh -pw $SshPassword -batch $Target "docker compose version" 2>&1 }
+        } else {
+            if ($SshKey) { & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "docker compose version" 2>&1 }
+            else         { & ssh -o StrictHostKeyChecking=no $Target "docker compose version" 2>&1 }
+        }
+    } catch { }
+    $ErrorActionPreference = $savedEap
     if ($LASTEXITCODE -eq 0) {
         Ok "Docker Compose: plugin (docker compose)"
         return "docker compose"
