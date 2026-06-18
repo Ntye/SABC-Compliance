@@ -54,7 +54,7 @@ from modules.compliance.usecases import (
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.profiles.usecases import ProfileUseCases
-from modules.settings.usecases import TlsCertificateUseCase
+from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
@@ -314,7 +314,14 @@ async def lifespan(app: FastAPI):
 
     # -- Platform settings (TLS certificate management) --
     tls_cert_uc = TlsCertificateUseCase(settings.tls_certs_dir)
-    settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc)
+    distribute_cert_uc = DistributeCertificateUseCase(
+        node_repo=node_repo,
+        job_repo=job_repo,
+        ws_manager=ws_manager,
+        certs_dir=settings.tls_certs_dir,
+        ssh_key_path=settings.ssh_key_path,
+    )
+    settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
 
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo

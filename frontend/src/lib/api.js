@@ -438,6 +438,10 @@ export async function getTlsCertificate() {
   return request('GET', '/settings/tls/certificate')
 }
 
+export async function propagateTlsCertificate() {
+  return request('POST', '/settings/tls/certificate/propagate')
+}
+
 export async function uploadTlsCertificate(certFile, keyFile) {
   // multipart/form-data — do NOT set Content-Type so the browser adds the
   // multipart boundary itself. Mirrors the auth headers used by request().

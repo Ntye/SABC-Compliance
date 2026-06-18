@@ -1,6 +1,9 @@
 from __future__ import annotations
+import asyncio
+import base64
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -175,3 +178,176 @@ class TlsCertificateUseCase:
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)  # atomic on the same filesystem
+
+
+class DistributeCertificateUseCase:
+    """Push the platform's server.crt to every registered node's OS trust store.
+
+    Each node receives the certificate over SSH (as the ansible user with sudo)
+    and the appropriate trust-store tool (update-ca-certificates on Debian/Ubuntu,
+    update-ca-trust on RHEL/Rocky) installs it. Progress is streamed to a Job
+    so the operator can watch it in real time via WebSocket.
+    """
+
+    def __init__(
+        self,
+        node_repo,
+        job_repo,
+        ws_manager,
+        certs_dir: str,
+        ssh_key_path: str,
+    ) -> None:
+        self._node_repo = node_repo
+        self._job_repo = job_repo
+        self._ws = ws_manager
+        self._certs_dir = certs_dir
+        self._ssh_key_path = ssh_key_path
+
+    async def execute(self):
+        """Create a cert_propagation Job, fire the background task, return the Job."""
+        from core.domain.entities import Job as _Job
+        now = datetime.utcnow()
+        job = _Job(
+            id=str(uuid.uuid4()),
+            type="cert_propagation",
+            status="pending",
+            node_id=None,
+            target_group="all",
+            playbook="cert_propagation",
+            created_at=now,
+            updated_at=now,
+        )
+        await self._job_repo.save(job)
+        asyncio.create_task(self._run(job))
+        return job
+
+    async def _run(self, job) -> None:
+        from core.domain.entities import Job as _Job  # noqa: F401 (type hint)
+
+        async def on_line(msg: str, level: str = "info") -> None:
+            entry = {"ts": datetime.utcnow().isoformat(), "level": level, "line": msg}
+            await self._job_repo.append_log(job.id, entry)
+            await self._ws.broadcast(job.id, entry)
+
+        job.start()
+        await self._job_repo.update(job)
+
+        # Read the certificate
+        crt_path = os.path.join(self._certs_dir, "server.crt")
+        try:
+            with open(crt_path, "r") as fh:
+                cert_pem = fh.read()
+        except FileNotFoundError:
+            await on_line(f"ERROR: Certificate not found at {crt_path}", "error")
+            job.fail(1)
+            job.updated_at = datetime.utcnow()
+            await self._job_repo.update(job)
+            done_entry = {
+                "ts": datetime.utcnow().isoformat(),
+                "level": "system",
+                "line": f"── Job {job.status.upper()} (exit {job.exit_code}) ──",
+            }
+            await self._job_repo.append_log(job.id, done_entry)
+            await self._ws.broadcast(job.id, done_entry)
+            return
+
+        # List nodes
+        nodes = await self._node_repo.find_all({})
+        await on_line(f"Propagating certificate to {len(nodes)} node(s) ...")
+
+        if not nodes:
+            await on_line("No registered nodes — nothing to do.")
+            job.succeed(0)
+            job.updated_at = datetime.utcnow()
+            await self._job_repo.update(job)
+            done_entry = {
+                "ts": datetime.utcnow().isoformat(),
+                "level": "system",
+                "line": f"── Job {job.status.upper()} (exit {job.exit_code}) ──",
+            }
+            await self._job_repo.append_log(job.id, done_entry)
+            await self._ws.broadcast(job.id, done_entry)
+            return
+
+        any_failed = False
+        for node in nodes:
+            ok = await self._push_to_node(node, cert_pem, on_line)
+            tag = "[OK]" if ok else "[FAIL]"
+            level = "info" if ok else "error"
+            await on_line(f"{tag} {node.hostname} ({node.ip})", level)
+            if not ok:
+                any_failed = True
+
+        if any_failed:
+            job.fail(1)
+        else:
+            job.succeed(0)
+
+        job.updated_at = datetime.utcnow()
+        await self._job_repo.update(job)
+
+        done_entry = {
+            "ts": datetime.utcnow().isoformat(),
+            "level": "system",
+            "line": f"── Job {job.status.upper()} (exit {job.exit_code}) ──",
+        }
+        await self._job_repo.append_log(job.id, done_entry)
+        await self._ws.broadcast(job.id, done_entry)
+
+    async def _push_to_node(self, node, cert_pem: str, on_line) -> bool:
+        """SSH into node and install the certificate into its OS trust store."""
+        ssh_key = node.ssh_key_path or self._ssh_key_path
+
+        # Base64-encode the cert to avoid heredoc quoting issues
+        cert_b64 = base64.b64encode(cert_pem.encode()).decode()
+
+        script = f"""#!/bin/bash
+set -e
+echo '{cert_b64}' | base64 -d > /tmp/sabc-platform.crt
+if command -v update-ca-certificates >/dev/null 2>&1; then
+  install -m 0644 /tmp/sabc-platform.crt /usr/local/share/ca-certificates/sabc-platform.crt
+  update-ca-certificates
+elif command -v update-ca-trust >/dev/null 2>&1; then
+  install -m 0644 /tmp/sabc-platform.crt /etc/pki/ca-trust/source/anchors/sabc-platform.crt
+  update-ca-trust extract
+else
+  rm -f /tmp/sabc-platform.crt
+  echo "Unrecognised trust store" >&2
+  exit 1
+fi
+rm -f /tmp/sabc-platform.crt
+"""
+        script_bytes = script.encode()
+
+        cmd = [
+            "ssh",
+            "-i", ssh_key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=15",
+            "-o", "BatchMode=yes",
+            "-p", str(node.ssh_port),
+            f"{node.ssh_user}@{node.ip}",
+            "sudo bash -s",
+        ]
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(script_bytes), timeout=30.0)
+            output = stdout.decode(errors="replace") if stdout else ""
+            for line in output.splitlines():
+                if line.strip():
+                    await on_line(f"  {node.hostname}: {line}")
+            return proc.returncode == 0
+        except asyncio.TimeoutError:
+            logger.error("Timeout pushing cert to node %s (%s)", node.hostname, node.ip)
+            await on_line(f"  {node.hostname}: timed out after 30s", "error")
+            return False
+        except Exception as exc:
+            logger.error("Error pushing cert to node %s: %s", node.hostname, exc)
+            await on_line(f"  {node.hostname}: {exc}", "error")
+            return False

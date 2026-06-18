@@ -501,7 +501,8 @@ _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
 #   sudo bash setup-node.sh
 #
 # Or via curl from the platform:
-#   curl -sSL http://<platform-url>:3000/nodes/bootstrap | sudo bash
+#   curl -k -sSL https://<platform-url>:8443/api/nodes/bootstrap | sudo bash
+#   (-k trusts the platform cert; step 4 below installs it so future calls work without -k)
 #
 # What this script does:
 #   1. Creates the 'ansible' OS user

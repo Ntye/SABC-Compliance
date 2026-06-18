@@ -117,7 +117,7 @@ export default function AddVmPage() {
     setDetectDone(false)
   }
 
-  const curlCmd = `curl -sSL ${platformUrl}/api/nodes/bootstrap | sudo bash`
+  const curlCmd = `curl -k -sSL ${platformUrl}/api/nodes/bootstrap | sudo bash`
   const airgapCmd = 'sudo bash setup-node.sh'
 
   return (

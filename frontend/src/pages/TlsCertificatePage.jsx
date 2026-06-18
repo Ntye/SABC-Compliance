@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { ShieldCheck, Upload, Lock, AlertTriangle, CheckCircle2 } from 'lucide-react'
-import { getTlsCertificate, uploadTlsCertificate } from '../lib/api.js'
+import { ShieldCheck, Upload, Lock, AlertTriangle, CheckCircle2, Share2 } from 'lucide-react'
+import { getTlsCertificate, uploadTlsCertificate, propagateTlsCertificate } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import Spinner from '../components/common/Spinner.jsx'
@@ -71,6 +71,8 @@ export default function TlsCertificatePage() {
   const [certFile, setCertFile] = useState(null)
   const [keyFile, setKeyFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [propagating, setPropagating] = useState(false)
+  const [propagationJobId, setPropagationJobId] = useState(null)
 
   async function handleUpload(e) {
     e.preventDefault()
@@ -80,18 +82,35 @@ export default function TlsCertificatePage() {
     }
     setUploading(true)
     try {
-      await uploadTlsCertificate(certFile, keyFile)
+      const result = await uploadTlsCertificate(certFile, keyFile)
       setCertFile(null)
       setKeyFile(null)
       // reset the native file inputs
       document.getElementById('tls-cert-input').value = ''
       document.getElementById('tls-key-input').value = ''
       refetch()
-      toast('Certificate installed — the platform reloads HTTPS within a few seconds.', 'success')
+      if (result && result.propagation_job_id) {
+        toast(`Certificate installed and cert propagation job started — job ${result.propagation_job_id}`, 'success')
+      } else {
+        toast('Certificate installed — the platform reloads HTTPS within a few seconds.', 'success')
+      }
     } catch (err) {
       toast(err.message, 'error')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handlePropagate() {
+    setPropagating(true)
+    setPropagationJobId(null)
+    try {
+      const result = await propagateTlsCertificate()
+      setPropagationJobId(result.job_id)
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setPropagating(false)
     }
   }
 
@@ -115,7 +134,7 @@ export default function TlsCertificatePage() {
       </div>
 
       {/* Upload form */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5">
+      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-6">
         <h3 className="text-[13px] font-semibold text-gray-700 mb-1">Install a new certificate</h3>
         <p className="text-[12px] text-gray-500 mb-4">
           Upload the PEM certificate and its private key. If your CA provided intermediate
@@ -165,6 +184,37 @@ export default function TlsCertificatePage() {
             {uploading ? 'Installing…' : 'Install certificate'}
           </button>
         </form>
+      </div>
+
+      {/* Propagate to nodes */}
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Share2 size={15} className="text-brand" />
+          <h3 className="text-[13px] font-semibold text-gray-700">Propagate to registered nodes</h3>
+        </div>
+        <p className="text-[12px] text-gray-500 mb-4">
+          Push the platform's current TLS certificate to every registered node's OS trust store.
+          Run this after installing a new certificate so nodes can call the platform over HTTPS without -k.
+        </p>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            disabled={propagating}
+            onClick={handlePropagate}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-brand text-white text-[13px] font-medium rounded-lg hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {propagating ? <Spinner size={13} /> : <Share2 size={13} />}
+            {propagating ? 'Starting…' : 'Push to all nodes'}
+          </button>
+          {propagationJobId && (
+            <a
+              href={`/jobs/${propagationJobId}`}
+              className="text-[12px] text-brand underline hover:text-brand/80"
+            >
+              View job logs
+            </a>
+          )}
+        </div>
       </div>
     </div>
   )

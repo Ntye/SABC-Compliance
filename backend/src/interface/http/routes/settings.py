@@ -21,16 +21,19 @@ class CertificateInfo(BaseModel):
     expired: bool | None = None
     sans: list[str] = []
     parse_error: str | None = None
+    propagation_job_id: str | None = None
 
 
 # ── Dependency injection ──────────────────────────────────────────────────────
 
 _tls_cert_uc = None
+_distribute_cert_uc = None
 
 
-def set_use_cases(tls_cert_uc=None) -> None:
-    global _tls_cert_uc
+def set_use_cases(tls_cert_uc=None, distribute_cert_uc=None) -> None:
+    global _tls_cert_uc, _distribute_cert_uc
     _tls_cert_uc = tls_cert_uc
+    _distribute_cert_uc = distribute_cert_uc
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -64,6 +67,20 @@ async def install_tls_certificate(
     if not cert_pem or not key_pem:
         raise HTTPException(status_code=422, detail="Both a certificate and a private key file are required")
     try:
-        return CertificateInfo(**(await _tls_cert_uc.install(cert_pem, key_pem)))
+        info = await _tls_cert_uc.install(cert_pem, key_pem)
+        if _distribute_cert_uc is not None:
+            job = await _distribute_cert_uc.execute()
+            info["propagation_job_id"] = job.id
+        return CertificateInfo(**info)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/tls/certificate/propagate", summary="Push the platform certificate to all registered nodes")
+async def propagate_tls_certificate(principal: AuthPrincipal = Depends(require_admin)):
+    """Manually trigger propagation of the currently installed platform TLS certificate
+    to every registered node's OS trust store. Returns a job ID for log streaming."""
+    if _distribute_cert_uc is None:
+        raise HTTPException(status_code=503, detail="Certificate distribution not available")
+    job = await _distribute_cert_uc.execute()
+    return {"job_id": job.id}
