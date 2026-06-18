@@ -287,7 +287,7 @@ function Setup-Server {
     # for authentication and leaves the remainder of stdin for "bash -s" to
     # execute.
     #
-    # WriteAllText with explicit LF (\n) separators writes a LF-only file —
+    # WriteAllText with explicit LF (\n) separators writes a LF-only file --
     # Set-Content -Encoding ASCII on Windows produces CRLF which bash rejects
     # with "set: -" / "syntax error near unexpected token 'do\r'".
     # Get-Content -Raw reads the whole file as ONE string so PowerShell does NOT
@@ -421,10 +421,10 @@ function Invoke-Rollback {
     $rbExit = $LASTEXITCODE
     Remove-Item $tmpScript -ErrorAction SilentlyContinue
     if ($rbExit -ne 0) {
-        if (-not $AllowFail) { Fail "Rollback failed — manual intervention required (check docker logs on $Target)" }
-        Warn "Rollback failed — manual intervention may be required."
+        if (-not $AllowFail) { Fail "Rollback failed -- manual intervention required (check docker logs on $Target)" }
+        Warn "Rollback failed -- manual intervention may be required."
     } else {
-        Ok "Rollback complete — previous version is running."
+        Ok "Rollback complete -- previous version is running."
     }
 }
 
@@ -488,21 +488,18 @@ function Show-URLs {
 
 # Detect whether the server has the compose plugin (docker compose) or the
 # standalone binary (docker-compose) and return the right invocation.
+# Probe by running "docker compose version" and checking the exit code --
+# avoids && / || in string arguments, which confuses the PS 5.1 parser on
+# systems where the file is read with a non-UTF-8 default encoding.
 function Get-ComposeCmd {
-    if ($UsePlink) {
-        if ($SshKey) {
-            $out = & $PlinkExe -ssh -i $SshKey -batch $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE" 2>&1
-        } else {
-            $out = & $PlinkExe -ssh -pw $SshPassword -batch $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE" 2>&1
-        }
+    $null = if ($UsePlink) {
+        if ($SshKey) { & $PlinkExe -ssh -i $SshKey -batch $Target "docker compose version" 2>&1 }
+        else         { & $PlinkExe -ssh -pw $SshPassword -batch $Target "docker compose version" 2>&1 }
     } else {
-        if ($SshKey) {
-            $out = & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE"
-        } else {
-            $out = & ssh -o StrictHostKeyChecking=no $Target "docker compose version >/dev/null 2>&1 && echo PLUGIN || echo STANDALONE"
-        }
+        if ($SshKey) { & ssh -o StrictHostKeyChecking=no -i $SshKey $Target "docker compose version" 2>&1 }
+        else         { & ssh -o StrictHostKeyChecking=no $Target "docker compose version" 2>&1 }
     }
-    if ("$out" -match "PLUGIN") {
+    if ($LASTEXITCODE -eq 0) {
         Ok "Docker Compose: plugin (docker compose)"
         return "docker compose"
     } else {
@@ -557,7 +554,7 @@ function Start-Containers {
     # the first stdin line: "sudo -S" consumes exactly that line for auth and
     # leaves the rest for "bash -s".
     #
-    # WriteAllText with explicit LF (\n) separators writes a LF-only file —
+    # WriteAllText with explicit LF (\n) separators writes a LF-only file --
     # Set-Content -Encoding ASCII on Windows produces CRLF which bash rejects
     # with "set: -" / "syntax error near unexpected token 'do\r'".
     # Get-Content -Raw reads the whole file as ONE string so PowerShell does NOT
