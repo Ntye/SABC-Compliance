@@ -267,26 +267,32 @@ function Setup-Server {
     # Feed the script to the remote over stdin. When a sudo password is set we
     # prepend it as the very first line: "sudo -S" reads exactly that one line
     # for authentication and leaves the remainder of stdin for "bash -s" to
-    # execute. (Encoding is ASCII so PowerShell does not emit a UTF-8 BOM, which
-    # would otherwise corrupt the first line of the script.)
+    # execute.
+    #
+    # WriteAllText with explicit LF (\n) separators writes a LF-only file —
+    # Set-Content -Encoding ASCII on Windows produces CRLF which bash rejects
+    # with "set: -" / "syntax error near unexpected token 'do\r'".
+    # Get-Content -Raw reads the whole file as ONE string so PowerShell does NOT
+    # re-add \r\n between lines when writing to the SSH stdin pipe.
     if ($SudoPassword -ne "") {
         $sudoSetup = "sudo -S bash -s"
-        @($SudoPassword) + $lines | Set-Content -Path $tmpScript -Encoding ASCII
+        $scriptContent = ((@($SudoPassword) + $lines) -join "`n") + "`n"
     } else {
         $sudoSetup = "sudo bash -s"
-        $lines | Set-Content -Path $tmpScript -Encoding ASCII
+        $scriptContent = ($lines -join "`n") + "`n"
     }
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
     if ($UsePlink) {
         if ($SshKey) {
-            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoSetup
+            Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoSetup
         } else {
-            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoSetup
+            Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoSetup
         }
     } else {
         if ($SshKey) {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoSetup
+            Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoSetup
         } else {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoSetup
+            Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoSetup
         }
     }
     Remove-Item $tmpScript -ErrorAction SilentlyContinue
@@ -421,27 +427,34 @@ function Start-Containers {
 
     # Pipe the script to the server. When a sudo password is set, prepend it as
     # the first stdin line: "sudo -S" consumes exactly that line for auth and
-    # leaves the rest for "bash -s". ASCII avoids a UTF-8 BOM corrupting line 1.
+    # leaves the rest for "bash -s".
+    #
+    # WriteAllText with explicit LF (\n) separators writes a LF-only file —
+    # Set-Content -Encoding ASCII on Windows produces CRLF which bash rejects
+    # with "set: -" / "syntax error near unexpected token 'do\r'".
+    # Get-Content -Raw reads the whole file as ONE string so PowerShell does NOT
+    # re-add \r\n between lines when writing to the SSH stdin pipe.
     $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
     if ($SudoPassword -ne "") {
         $sudoStart = "sudo -S bash -s"
-        @($SudoPassword) + $lines | Set-Content -Path $tmpScript -Encoding ASCII
+        $scriptContent = ((@($SudoPassword) + $lines) -join "`n") + "`n"
     } else {
         $sudoStart = "sudo bash -s"
-        $lines | Set-Content -Path $tmpScript -Encoding ASCII
+        $scriptContent = ($lines -join "`n") + "`n"
     }
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
 
     if ($UsePlink) {
         if ($SshKey) {
-            Get-Content $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoStart
+            Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoStart
         } else {
-            Get-Content $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoStart
+            Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoStart
         }
     } else {
         if ($SshKey) {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoStart
+            Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoStart
         } else {
-            Get-Content $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoStart
+            Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoStart
         }
     }
     $startExit = $LASTEXITCODE
