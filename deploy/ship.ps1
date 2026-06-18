@@ -201,20 +201,28 @@ function Build-Images {
             & docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
         }
+
+        # postgres is not built from a Dockerfile so compose build skips it.
+        # Pull it explicitly for linux/amd64 so it is available for docker save.
+        Info "Pulling postgres:16-alpine for linux/amd64 ..."
+        & docker pull postgres:16-alpine
+        if ($LASTEXITCODE -ne 0) { Fail "docker pull postgres:16-alpine failed" }
     } finally {
         Remove-Item Env:DOCKER_DEFAULT_PLATFORM -ErrorAction SilentlyContinue
         Pop-Location
     }
-    Ok "Images built (linux/amd64)"
+    Ok "Images built and pulled (linux/amd64)"
 }
 
 # -- Step 2: Save images to tar -----------------------------------------------
 function Save-Images {
     Info "Saving images to $Archive ..."
+    # postgres:16-alpine is included so the server never needs outbound Docker Hub
+    # access -- the image is loaded from the archive alongside backend and frontend.
     if ($Bundle) {
-        $images = @("sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest")
+        $images = @("sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest", "postgres:16-alpine")
     } else {
-        $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest")
+        $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
     }
     & docker save -o $Archive $images
     if ($LASTEXITCODE -ne 0) { Fail "docker save failed" }
