@@ -79,7 +79,14 @@ remote_docker() {
 build_images() {
   info "Building Docker images for linux/amd64 ..."
   cd "$PROJECT_DIR"
-  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build
+
+  # Build directly — docker-compose.yml has no build: contexts (they belong
+  # only in docker-compose.dev.yml for local dev), so we use docker build.
+  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
+    -t sabc-compliance-backend ./backend
+
+  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
+    -t sabc-compliance-frontend --build-arg VITE_API_BASE=/api ./frontend
 
   if [[ "$BUNDLE" == true ]]; then
     info "Building bundled image (with airgap packages) ..."
@@ -87,8 +94,8 @@ build_images() {
       -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
   fi
 
-  # postgres is not built from a Dockerfile so compose build skips it.
-  # Pull it explicitly for linux/amd64 so it is available for docker save.
+  # postgres is not built from a Dockerfile — pull it for linux/amd64 so
+  # it is included in the archive and never needs to be pulled on the server.
   info "Pulling postgres:16-alpine for linux/amd64 ..."
   DOCKER_DEFAULT_PLATFORM=linux/amd64 docker pull postgres:16-alpine
 
@@ -389,7 +396,8 @@ done
 '
 
 # 3) Full stack — backend now connects to a populated PostgreSQL.
-\$COMPOSE up -d
+#    --no-build: images are pre-loaded; no build context exists on the server.
+\$COMPOSE up -d --no-build
 DEPLOY_EOF
   _deploy_rc=$?
   set -e

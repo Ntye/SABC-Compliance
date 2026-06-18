@@ -195,8 +195,16 @@ function Build-Images {
     Push-Location $ProjectDir
     try {
         $env:DOCKER_DEFAULT_PLATFORM = "linux/amd64"
-        & docker compose build
-        if ($LASTEXITCODE -ne 0) { Fail "docker compose build failed" }
+
+        # Build directly -- docker-compose.yml has no build: contexts (they belong
+        # only in docker-compose.dev.yml for local dev), so we use docker build.
+        Info "Building backend image ..."
+        & docker build -t sabc-compliance-backend ./backend
+        if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
+
+        Info "Building frontend image ..."
+        & docker build -t sabc-compliance-frontend --build-arg "VITE_API_BASE=/api" ./frontend
+        if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
 
         if ($Bundle) {
             Info "Building bundled image (airgap packages) ..."
@@ -204,8 +212,8 @@ function Build-Images {
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
         }
 
-        # postgres is not built from a Dockerfile so compose build skips it.
-        # Pull it explicitly for linux/amd64 so it is available for docker save.
+        # postgres is not built from a Dockerfile -- pull it for linux/amd64 so
+        # it is included in the archive and never needs to be pulled on the server.
         Info "Pulling postgres:16-alpine for linux/amd64 ..."
         & docker pull postgres:16-alpine
         if ($LASTEXITCODE -ne 0) { Fail "docker pull postgres:16-alpine failed" }
