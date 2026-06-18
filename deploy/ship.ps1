@@ -10,6 +10,7 @@
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update       # Skip rebuild: transfer existing archive + load + start
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Start        # Skip build/transfer: load already-transferred archive + start
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Restart      # Skip build/transfer/load: just docker compose up -d
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Rollback     # Roll back to the previous deployment
 #   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
 # On first deploy a legacy SQLite database is auto-migrated to PostgreSQL
@@ -43,7 +44,8 @@ param(
     [switch]$Start,          # Skip build/transfer: load already-transferred archive + start
     [switch]$Restart,        # Skip build/transfer/load: just docker compose up -d
     [switch]$BuildOnly,      # Build and save images locally, no transfer
-    [switch]$Bundle          # Use Dockerfile.bundle (airgap packages)
+    [switch]$Bundle,         # Use Dockerfile.bundle (airgap packages)
+    [switch]$Rollback        # Roll back to the previous deployment
 )
 
 Set-StrictMode -Version Latest
@@ -308,6 +310,116 @@ function Setup-Server {
     Ok "Docker ready on $Target"
 }
 
+# -- Step 3b: Snapshot current deployment for rollback -----------------------
+# Tags existing backend/frontend images as :rollback and backs up the remote
+# compose + .env files before new files are transferred.  No-op on first deploy.
+function Invoke-Snapshot {
+    Info "Snapshotting current deployment for rollback ..."
+    $lines = @(
+        'set -e',
+        "rd=`"$RemoteDir`"",
+        'snapped=0',
+        'for img in sabc-compliance-backend:latest sabc-compliance-frontend:latest; do',
+        '  name="${img%%:*}"',
+        '  if docker image inspect "$img" >/dev/null 2>&1; then',
+        '    docker tag "$img" "${name}:rollback"',
+        '    echo "[snapshot] $img -> ${name}:rollback"',
+        '    snapped=$((snapped + 1))',
+        '  fi',
+        'done',
+        '[ -f "$rd/docker-compose.yml" ] && cp -f "$rd/docker-compose.yml" "$rd/docker-compose.yml.rollback"',
+        '[ -f "$rd/.env" ]               && cp -f "$rd/.env"               "$rd/.env.rollback"',
+        'if [ "$snapped" -gt 0 ]; then',
+        '  echo "[snapshot] Rollback snapshot ready (${snapped} image(s) tagged)."',
+        'else',
+        '  echo "[snapshot] No previous images found -- rollback will not be available after this deploy."',
+        'fi'
+    )
+    $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
+    if ($SudoPassword -ne "") {
+        $sudoCmd = "sudo -S bash -s"
+        $scriptContent = ((@($SudoPassword) + $lines) -join "`n") + "`n"
+    } else {
+        $sudoCmd = "sudo bash -s"
+        $scriptContent = ($lines -join "`n") + "`n"
+    }
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    if ($UsePlink) {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoCmd }
+    } else {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoCmd }
+    }
+    Remove-Item $tmpScript -ErrorAction SilentlyContinue
+    # Snapshot failures are non-fatal: the deploy can proceed without a rollback baseline.
+    if ($LASTEXITCODE -ne 0) { Warn "Snapshot step returned non-zero -- rollback may not be available." }
+}
+
+# -- Step 3c: Rollback to previous snapshot -----------------------------------
+# Restores :rollback images and the backed-up compose/.env, then restarts.
+# Pass -AllowFail to suppress the terminal Fail call (used inside Start-Containers).
+function Invoke-Rollback {
+    param([switch]$AllowFail)
+    Warn "Rolling back to previous deployment ..."
+    $lines = @(
+        'set -e',
+        "rd=`"$RemoteDir`"",
+        'COMPOSE="docker compose -f $rd/docker-compose.yml --project-directory $rd"',
+        '$COMPOSE down --remove-orphans 2>/dev/null || true',
+        'docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true',
+        'if [ -f "$rd/docker-compose.yml.rollback" ]; then',
+        '  cp -f "$rd/docker-compose.yml.rollback" "$rd/docker-compose.yml"',
+        '  echo "[rollback] docker-compose.yml restored"',
+        'else',
+        '  echo "[rollback] WARNING: no docker-compose.yml.rollback -- using current file"',
+        'fi',
+        'if [ -f "$rd/.env.rollback" ]; then',
+        '  cp -f "$rd/.env.rollback" "$rd/.env"',
+        '  echo "[rollback] .env restored"',
+        'fi',
+        'rolled=0',
+        'for name in sabc-compliance-backend sabc-compliance-frontend; do',
+        '  if docker image inspect "${name}:rollback" >/dev/null 2>&1; then',
+        '    docker tag "${name}:rollback" "${name}:latest"',
+        '    echo "[rollback] Restored ${name}:latest from :rollback"',
+        '    rolled=$((rolled + 1))',
+        '  fi',
+        'done',
+        'if [ "$rolled" -eq 0 ]; then',
+        '  echo "[rollback] ERROR: no rollback images found -- cannot restore previous version."',
+        '  exit 1',
+        'fi',
+        'COMPOSE="docker compose -f $rd/docker-compose.yml --project-directory $rd"',
+        '$COMPOSE up -d',
+        'echo "[rollback] Previous deployment successfully restored."'
+    )
+    $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
+    if ($SudoPassword -ne "") {
+        $sudoCmd = "sudo -S bash -s"
+        $scriptContent = ((@($SudoPassword) + $lines) -join "`n") + "`n"
+    } else {
+        $sudoCmd = "sudo bash -s"
+        $scriptContent = ($lines -join "`n") + "`n"
+    }
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    if ($UsePlink) {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoCmd }
+    } else {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoCmd }
+    }
+    $rbExit = $LASTEXITCODE
+    Remove-Item $tmpScript -ErrorAction SilentlyContinue
+    if ($rbExit -ne 0) {
+        if (-not $AllowFail) { Fail "Rollback failed — manual intervention required (check docker logs on $Target)" }
+        Warn "Rollback failed — manual intervention may be required."
+    } else {
+        Ok "Rollback complete — previous version is running."
+    }
+}
+
 # -- Step 4: Transfer files ---------------------------------------------------
 function Transfer-Files {
     Info "Creating remote directory $RemoteDir ..."
@@ -468,12 +580,13 @@ function Start-Containers {
     $startExit = $LASTEXITCODE
     Remove-Item $tmpScript -ErrorAction SilentlyContinue
 
-    # On failure print the backend log so the crash reason is visible without a
-    # separate SSH session.
+    # On failure print the backend log, then roll back automatically.
     if ($startExit -ne 0) {
         Warn "Startup/migration failed -- showing backend logs for diagnosis:"
         Invoke-Sudo "docker logs --tail 60 sabc-backend 2>&1 || true" -AllowFail
-        Fail "Containers failed to start (see output above)"
+        Warn "Initiating automatic rollback to previous version ..."
+        Invoke-Rollback -AllowFail
+        Fail "Deployment failed -- automatically rolled back to previous version (see logs above)"
     }
 
     Show-URLs
@@ -482,7 +595,12 @@ function Start-Containers {
 # -- Step 5b: Load images then start ------------------------------------------
 function Deploy-Platform {
     Info "Loading Docker images on $Target ..."
-    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar"
+    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar" -AllowFail
+    if ($LASTEXITCODE -ne 0) {
+        Warn "Image load failed -- initiating automatic rollback ..."
+        Invoke-Rollback -AllowFail
+        Fail "Deployment failed during image load -- automatically rolled back to previous version"
+    }
     Start-Containers
 }
 
@@ -507,14 +625,21 @@ if ($BuildOnly -or $Bundle) {
     exit 0
 }
 
+if ($Rollback) {
+    Invoke-Rollback
+    exit 0
+}
+
 if ($Restart) {
     Info "Restarting containers on $Target (images already loaded) ..."
+    Invoke-Snapshot
     Start-Containers
     exit 0
 }
 
 if ($Start) {
     Info "Loading and starting on $Target (files already transferred) ..."
+    Invoke-Snapshot
     Deploy-Platform
     exit 0
 }
@@ -523,6 +648,7 @@ if ($Update) {
     if (-not (Test-Path $Archive)) {
         Fail "No archive at $Archive -- run without -Update first to build."
     }
+    Invoke-Snapshot
     Transfer-Files
     Deploy-Platform
     exit 0
@@ -532,5 +658,6 @@ if ($Update) {
 if ($Setup) { Setup-Server }
 Build-Images
 Save-Images
+Invoke-Snapshot
 Transfer-Files
 Deploy-Platform

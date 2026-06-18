@@ -8,6 +8,7 @@
 #   ./deploy/ship.sh user@ec2-ip --setup        First time: install Docker + deploy
 #   ./deploy/ship.sh user@ec2-ip --update       Transfer and restart (skip build)
 #   ./deploy/ship.sh user@ec2-ip --deploy-only  Load + restart only (skip build & transfer)
+#   ./deploy/ship.sh user@ec2-ip --rollback     Roll back to the previous deployment
 #   ./deploy/ship.sh --build-only               Build and save images locally
 #   ./deploy/ship.sh --bundle                   Build bundled image (with airgap packages)
 #
@@ -39,6 +40,7 @@ DO_UPDATE=false
 DEPLOY_ONLY=false
 BUILD_ONLY=false
 BUNDLE=false
+DO_ROLLBACK=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -47,19 +49,21 @@ for arg in "$@"; do
     --deploy-only) DEPLOY_ONLY=true ;;
     --build-only)  BUILD_ONLY=true ;;
     --bundle)      BUNDLE=true ;;
+    --rollback)    DO_ROLLBACK=true ;;
     -*)            echo "Unknown flag: $arg"; exit 1 ;;
     *)             TARGET="$arg" ;;
   esac
 done
 
 if [[ -z "$TARGET" && "$BUILD_ONLY" == false && "$BUNDLE" == false ]]; then
-  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--build-only|--bundle]"
+  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--rollback|--build-only|--bundle]"
   exit 1
 fi
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 info()  { echo -e "\033[1;34m▸\033[0m $*"; }
 ok()    { echo -e "\033[1;32m✓\033[0m $*"; }
+warn()  { echo -e "\033[1;33m⚠\033[0m $*"; }
 fail()  { echo -e "\033[1;31m✗\033[0m $*"; exit 1; }
 
 remote() {
@@ -249,10 +253,89 @@ PUBIP_EOF
   ok "Files transferred"
 }
 
-# ── Step 5: Load images and start ────────────────────────────────────────────
+# ── Step 5: Snapshot current deployment for rollback ────────────────────────
+# Called before transferring new files so the previous compose, .env, and
+# built images are preserved.  A no-op when nothing is deployed yet.
+snapshot_for_rollback() {
+  info "Snapshotting current deployment for rollback ..."
+  ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << SNAP_EOF
+set -e
+rd="$REMOTE_DIR"
+snapped=0
+for img in sabc-compliance-backend:latest sabc-compliance-frontend:latest; do
+  name="\${img%%:*}"
+  if docker image inspect "\$img" >/dev/null 2>&1; then
+    docker tag "\$img" "\${name}:rollback"
+    echo "[snapshot] \$img → \${name}:rollback"
+    snapped=\$((snapped + 1))
+  fi
+done
+[ -f "\$rd/docker-compose.yml" ] && cp -f "\$rd/docker-compose.yml" "\$rd/docker-compose.yml.rollback"
+[ -f "\$rd/.env" ]               && cp -f "\$rd/.env"               "\$rd/.env.rollback"
+if [ "\$snapped" -gt 0 ]; then
+  echo "[snapshot] Rollback snapshot ready (\${snapped} image(s) tagged)."
+else
+  echo "[snapshot] No previous images found — rollback will not be available after this deploy."
+fi
+SNAP_EOF
+}
+
+# ── Rollback to previous snapshot ───────────────────────────────────────────
+# Restores :rollback images and the backed-up compose/.env, then restarts.
+# Also exposed as --rollback for manual use after a bad deploy.
+do_rollback() {
+  warn "Rolling back to previous deployment ..."
+  ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << ROLLBACK_EOF
+set -e
+rd="$REMOTE_DIR"
+
+# Stop the current (possibly broken) stack
+docker compose -f "\$rd/docker-compose.yml" --project-directory "\$rd" down --remove-orphans 2>/dev/null || true
+docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true
+
+# Restore backed-up compose and env
+if [ -f "\$rd/docker-compose.yml.rollback" ]; then
+  cp -f "\$rd/docker-compose.yml.rollback" "\$rd/docker-compose.yml"
+  echo "[rollback] docker-compose.yml restored"
+else
+  echo "[rollback] WARNING: no docker-compose.yml.rollback — using current file"
+fi
+if [ -f "\$rd/.env.rollback" ]; then
+  cp -f "\$rd/.env.rollback" "\$rd/.env"
+  echo "[rollback] .env restored"
+fi
+
+# Promote :rollback images back to :latest
+rolled=0
+for name in sabc-compliance-backend sabc-compliance-frontend; do
+  if docker image inspect "\${name}:rollback" >/dev/null 2>&1; then
+    docker tag "\${name}:rollback" "\${name}:latest"
+    echo "[rollback] Restored \${name}:latest from :rollback"
+    rolled=\$((rolled + 1))
+  fi
+done
+
+if [ "\$rolled" -eq 0 ]; then
+  echo "[rollback] ERROR: no rollback images found — cannot restore previous version."
+  exit 1
+fi
+
+COMPOSE="docker compose -f \$rd/docker-compose.yml --project-directory \$rd"
+\$COMPOSE up -d
+echo "[rollback] Previous deployment successfully restored."
+ROLLBACK_EOF
+
+  ok "Rollback complete — previous version is running."
+}
+
+# ── Step 6: Load images and start ────────────────────────────────────────────
 deploy() {
   info "Loading Docker images on $TARGET ..."
-  remote_docker "docker load -i $REMOTE_DIR/sabc-images.tar.gz"
+  if ! remote_docker "docker load -i $REMOTE_DIR/sabc-images.tar.gz"; then
+    warn "Image load failed — initiating automatic rollback ..."
+    do_rollback || true
+    fail "Deployment failed during image load — automatically rolled back to previous version"
+  fi
 
   info "Starting platform (PostgreSQL first, auto-migrating if needed) ..."
   # Tear down any previous stack first. "down" only clears THIS compose
@@ -271,6 +354,9 @@ deploy() {
   # idempotent migration skip those tables and strand the real SQLite data),
   # then starts the full stack. A marker file makes the migration a no-op on
   # every later deploy.  $REMOTE_DIR expands locally; \$ is evaluated remotely.
+  # Disable errexit so we can capture the exit code and trigger rollback instead
+  # of just aborting.  Re-enabled immediately after the heredoc.
+  set +e
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
 set -e
 COMPOSE="docker compose -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
@@ -305,6 +391,14 @@ done
 # 3) Full stack — backend now connects to a populated PostgreSQL.
 \$COMPOSE up -d
 DEPLOY_EOF
+  _deploy_rc=$?
+  set -e
+
+  if [[ $_deploy_rc -ne 0 ]]; then
+    warn "Deploy sequence failed (exit $_deploy_rc) — initiating automatic rollback ..."
+    do_rollback || true
+    fail "Deployment failed — automatically rolled back to previous version"
+  fi
 
   ok "Platform deployed!"
 
@@ -386,6 +480,11 @@ if [[ "$BUILD_ONLY" == true || "$BUNDLE" == true ]]; then
   exit 0
 fi
 
+if [[ "$DO_ROLLBACK" == true ]]; then
+  do_rollback
+  exit 0
+fi
+
 if [[ "$DEPLOY_ONLY" == true ]]; then
   # Files already on the remote — skip build AND transfer, just load + restart.
   # Verify the archive and compose file are actually present remotely first so
@@ -393,6 +492,7 @@ if [[ "$DEPLOY_ONLY" == true ]]; then
   if ! remote "test -f $REMOTE_DIR/sabc-images.tar.gz && test -f $REMOTE_DIR/docker-compose.yml"; then
     fail "Remote files missing in $REMOTE_DIR (need sabc-images.tar.gz + docker-compose.yml) — run --update first to transfer them"
   fi
+  snapshot_for_rollback
   deploy
   exit 0
 fi
@@ -402,6 +502,7 @@ if [[ "$DO_UPDATE" == true ]]; then
   if [ ! -f "$ARCHIVE" ]; then
     fail "No archive found at $ARCHIVE — run without --update first, or run --build-only"
   fi
+  snapshot_for_rollback
   transfer
   deploy
   exit 0
@@ -414,5 +515,6 @@ fi
 
 build_images
 save_images
+snapshot_for_rollback
 transfer
 deploy
