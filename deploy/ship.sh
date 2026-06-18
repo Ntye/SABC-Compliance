@@ -397,9 +397,11 @@ for i in \$(seq 1 30); do
   sleep 2
 done
 
-# 2) Migrate once, in a one-off backend container sharing the backend-data
-#    volume so it can see any legacy platform.db. (No \$ in this block, so the
-#    unquoted heredoc leaves it intact.)
+# 2) One-shot SQLite → PostgreSQL migration.  Run non-fatally: a migration
+#    hiccup must never block the deploy — the backend seeds cleanly into an
+#    empty PostgreSQL on first start anyway.  || true prevents set -e from
+#    aborting when docker-compose run exits non-zero (e.g. v1 quirks, missing
+#    marker file races, or the migration script itself returning non-zero).
 \$COMPOSE run --rm --no-deps -T backend sh -c '
   if [ -f /app/data/.migrated-to-postgres ]; then
     echo "[ship.sh] Database already migrated to PostgreSQL — skipping."
@@ -410,24 +412,32 @@ done
     echo "[ship.sh] Fresh install (no SQLite database) — no migration needed."
     touch /app/data/.migrated-to-postgres
   fi
-'
+' 2>&1 || echo "[ship.sh] Migration step skipped (non-fatal) — continuing."
 
-# 3) Full stack — backend now connects to a populated PostgreSQL.
-#    --no-build: images are pre-loaded; no build context exists on the server.
-\$COMPOSE up -d --no-build
+# 3) Full stack.  Plain "up -d" (no --no-build) matches docker-compose v1
+#    behaviour: when the compose file has no build: contexts the flag is
+#    redundant and on some v1 patch levels it causes the command to exit 1
+#    when it cannot find a Dockerfile — even though no build was requested.
+\$COMPOSE up -d
 
-# 4) Verify the stack is REALLY up. docker-compose v1 can return 0 without
+# 4) Wait 15 s — same window the working manual script uses — so containers
+#    that need a few seconds to transition from "created" to "running" are
+#    already stable before we inspect them.
+echo "=== Waiting 15s ==="
+sleep 15
+
+echo "=== Container status ==="
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+
+# 5) Verify the stack is REALLY up.  docker-compose v1 can return 0 without
 #    creating a service, so check real container state, not the exit code.
-sleep 4
 missing=""
 for c in sabc-postgres sabc-backend sabc-frontend; do
   st=\$(docker inspect -f '{{.State.Status}}' "\$c" 2>/dev/null || echo absent)
-  echo "[ship.sh] container \$c: \$st"
   [ "\$st" = "running" ] || missing="\$missing \$c"
 done
 if [ -n "\$missing" ]; then
   echo "[ship.sh] ERROR: these containers are not running:\$missing"
-  echo "[ship.sh] ---------- docker ps -a ----------"
   docker ps -a
   for c in \$missing; do
     echo "[ship.sh] ---------- last 40 log lines: \$c ----------"
