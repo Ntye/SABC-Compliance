@@ -276,6 +276,7 @@ async def lifespan(app: FastAPI):
         scan_engine_uc=scan_engine_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,
+        ssh_client=ssh_client,
     )
     jobs_routes.set_use_cases(
         list_uc=list_jobs_uc,

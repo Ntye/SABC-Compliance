@@ -6,7 +6,7 @@ import {
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
-  checkPuppetAgentPlatform,
+  checkPuppetAgentPlatform, probeWazuhDashboardPort,
   getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
   checkNodeHealth,
 } from '../lib/api.js'
@@ -196,6 +196,9 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   const [starting, setStarting]         = useState(false)
   const [platformCheck, setPlatformCheck]     = useState(null)
   const [checkingPlatform, setCheckingPlatform] = useState(false)
+  const [dashboardPort, setDashboardPort] = useState(443)
+  const [portProbe, setPortProbe]         = useState(null)   // { suggested_port, occupied_candidates }
+  const [probingPort, setProbingPort]     = useState(false)
   const toast = useToast()
 
   const serviceLabels = {
@@ -207,20 +210,40 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   async function handleNodeChange(nodeId) {
     setSelectedNode(nodeId)
     setPlatformCheck(null)
+    setPortProbe(null)
+    setDashboardPort(443)
     if (!nodeId) return
+
+    // Always run the platform check
     setCheckingPlatform(true)
     try {
       const result = await checkPuppetAgentPlatform(nodeId)
       setPlatformCheck(result)
     } catch (_) {}
     finally { setCheckingPlatform(false) }
+
+    // For Wazuh Manager: probe for a free dashboard port
+    if (service === 'wazuh-manager') {
+      setProbingPort(true)
+      try {
+        const probe = await probeWazuhDashboardPort(nodeId)
+        setPortProbe(probe)
+        setDashboardPort(probe.suggested_port)
+      } catch (_) {
+        setPortProbe({ suggested_port: 443, occupied_candidates: [] })
+        setDashboardPort(443)
+      } finally {
+        setProbingPort(false)
+      }
+    }
   }
 
   async function handleStart() {
     if (!selectedNode) return
     setStarting(true)
     try {
-      const job = await installService(service, selectedNode)
+      const options = service === 'wazuh-manager' ? { dashboard_port: dashboardPort } : {}
+      const job = await installService(service, selectedNode, options)
       onJobStarted(job)
       onClose()
     } catch (err) {
@@ -255,6 +278,45 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
               ))}
             </select>
           </div>
+          {service === 'wazuh-manager' && selectedNode && (
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
+                Wazuh dashboard port (HTTPS)
+              </label>
+              {probingPort ? (
+                <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                  <Spinner size={11} /> Scanning ports on node…
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={dashboardPort}
+                      onChange={(e) => setDashboardPort(Number(e.target.value))}
+                      className="w-32 px-3 py-2 text-[13px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    />
+                    {portProbe && portProbe.occupied_candidates.length === 0 && (
+                      <span className="text-[11px] text-green-700 bg-green-50 px-2 py-1 rounded-lg">
+                        Port {dashboardPort} is free
+                      </span>
+                    )}
+                  </div>
+                  {portProbe && portProbe.occupied_candidates.length > 0 && (
+                    <p className="mt-1.5 text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                      Port{portProbe.occupied_candidates.length > 1 ? 's' : ''}{' '}
+                      <span className="font-mono font-semibold">{portProbe.occupied_candidates.join(', ')}</span>{' '}
+                      {portProbe.occupied_candidates.length > 1 ? 'are' : 'is'} already in use on this node.
+                      Using <span className="font-mono font-semibold">{portProbe.suggested_port}</span> instead.
+                      Change if needed.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {nodes.length === 0 && (
             <p className="text-[11px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
               {t('infra.noNodes')}

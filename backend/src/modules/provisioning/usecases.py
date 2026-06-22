@@ -255,7 +255,7 @@ class InstallServiceUseCase:
         self._node_repo = node_repo
         self._service = service
 
-    async def execute(self, node_id: str) -> Job:
+    async def execute(self, node_id: str, dashboard_port: int | None = None) -> Job:
         node = await self._node_repo.find_by_id(node_id)
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
@@ -281,6 +281,9 @@ class InstallServiceUseCase:
             host = await self._config.get("puppet_master_host")
             if host:
                 extra_vars["puppet_master_host"] = host
+        elif self._service in ("wazuh_manager", "wazuh_manager_colocated"):
+            if dashboard_port is not None:
+                extra_vars["wazuh_dashboard_port"] = dashboard_port
         elif self._service == "wazuh_agent":
             host = await self._config.get("wazuh_manager_host")
             if host:

@@ -290,9 +290,13 @@ export async function setWazuhManagerHost(host) {
   return request('POST', '/infrastructure/wazuh-manager', { host })
 }
 
-export async function installService(service, nodeId) {
+export async function probeWazuhDashboardPort(nodeId) {
+  return request('GET', `/infrastructure/probe-dashboard-port?node_id=${encodeURIComponent(nodeId)}`)
+}
+
+export async function installService(service, nodeId, options = {}) {
   // service: 'puppet-master' | 'wazuh-manager' | 'puppet-agent' | 'wazuh-agent'
-  return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId })
+  return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId, ...options })
 }
 
 export async function checkPuppetAgentPlatform(nodeId) {

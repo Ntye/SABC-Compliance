@@ -32,6 +32,10 @@ class InstallRequest(BaseModel):
     node_id: str
 
 
+class WazuhInstallRequest(InstallRequest):
+    dashboard_port: int | None = None
+
+
 class JobRef(BaseModel):
     id: str
     type: str
@@ -52,6 +56,7 @@ _check_health_uc = None
 _scan_engine_uc = None
 _node_repo = None
 _packages_dir: str = ""
+_ssh_client = None
 
 
 def set_use_cases(
@@ -66,13 +71,14 @@ def set_use_cases(
     node_repo=None,
     packages_dir: str = "",
     install_wazuh_manager_colocated_uc=None,
+    ssh_client=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_wazuh_manager_colocated_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
-    global _node_repo, _packages_dir
+    global _node_repo, _packages_dir, _ssh_client
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -84,6 +90,7 @@ def set_use_cases(
     _scan_engine_uc = scan_engine_uc
     _node_repo = node_repo
     _packages_dir = packages_dir
+    _ssh_client = ssh_client
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -180,14 +187,58 @@ async def install_puppet_master(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/probe-dashboard-port", summary="Find the first available dashboard port on a node")
+async def probe_dashboard_port(
+    node_id: str = Query(...),
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """
+    SSH to the node, list listening ports, and return the first free port
+    from the candidate list [443, 8443, 8444, 9443, 10443].
+    Always returns a result — never raises if SSH fails.
+    """
+    if _node_repo is None or _ssh_client is None:
+        return {"suggested_port": 443, "occupied_ports": [], "occupied_candidates": []}
+
+    node = await _node_repo.find_by_id(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
+
+    used_ports: set[int] = set()
+    try:
+        stdout, _, _ = await _ssh_client.run_command(
+            node.ip,
+            node.ssh_port,
+            node.ssh_user,
+            node.ssh_key_path,
+            "ss -tlnp 2>/dev/null | awk 'NR>1{print $4}' | grep -oE '[0-9]+$' | sort -nu || true"
+        )
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                used_ports.add(int(line))
+    except Exception:
+        pass  # SSH unreachable — return defaults
+
+    candidates = [443, 8443, 8444, 9443, 10443]
+    suggested = next((p for p in candidates if p not in used_ports), 8443)
+    occupied_candidates = [p for p in candidates if p in used_ports]
+
+    return {
+        "suggested_port": suggested,
+        "occupied_ports": sorted(used_ports),
+        "occupied_candidates": occupied_candidates,
+    }
+
+
 @router.post("/install/wazuh-manager", response_model=JobRef, status_code=202, summary="Install Wazuh manager on a node")
 async def install_wazuh_manager(
-    body: InstallRequest,
+    body: WazuhInstallRequest,
     principal: AuthPrincipal = Depends(require_operator),
 ):
     """Start an Ansible job to install Wazuh manager on the specified node."""
     try:
-        job = await _install_wazuh_manager_uc.execute(body.node_id)
+        job = await _install_wazuh_manager_uc.execute(body.node_id, dashboard_port=body.dashboard_port)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -195,7 +246,7 @@ async def install_wazuh_manager(
 
 @router.post("/install/wazuh-manager-colocated", response_model=JobRef, status_code=202, summary="Install Wazuh manager alongside an existing Puppet Primary Server")
 async def install_wazuh_manager_colocated(
-    body: InstallRequest,
+    body: WazuhInstallRequest,
     principal: AuthPrincipal = Depends(require_operator),
 ):
     """Start a Puppet-safe Ansible job to install Wazuh on a node that already
@@ -206,7 +257,7 @@ async def install_wazuh_manager_colocated(
     if _install_wazuh_manager_colocated_uc is None:
         raise HTTPException(status_code=503, detail="Colocated Wazuh install use case not configured")
     try:
-        job = await _install_wazuh_manager_colocated_uc.execute(body.node_id)
+        job = await _install_wazuh_manager_colocated_uc.execute(body.node_id, dashboard_port=body.dashboard_port)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
