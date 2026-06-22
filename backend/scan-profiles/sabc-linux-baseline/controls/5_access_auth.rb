@@ -247,6 +247,48 @@ control 'cis-5.3.4-password-hash-sha512' do
   end
 end
 
+# 5.3.5 — Re-authentication for privilege escalation (NOPASSWD sudo)
+#
+# CIS requires that sudo does NOT grant passwordless privilege escalation, so
+# that every escalation re-authenticates the operator (no `NOPASSWD`, no
+# `!authenticate`).
+#
+# The SABC platform's automation account — "ansible" — is an INTENTIONAL,
+# documented exception to this control. It is a key-only, non-interactive
+# account the platform uses to run Ansible, Puppet and CINC over SSH; it has
+# no usable password (the bootstrap locks the shadow field) and is reachable
+# only with the platform's private key. Granting it passwordless sudo is an
+# accepted operational risk recorded in the SABC referential.
+#
+# This control therefore treats the ansible account as compliant and FAILS the
+# moment ANY OTHER user or group is granted passwordless sudo — that other
+# account is the real finding worth surfacing.
+control 'sabc-5.3.5-sudo-nopasswd-restricted' do
+  impact 0.7
+  title 'Ensure no account other than the platform automation user has passwordless sudo'
+  desc <<~DESC
+    CIS 5.3.x requires re-authentication for privilege escalation: sudoers must
+    not contain NOPASSWD entries. The "ansible" automation account is an
+    approved exception (key-only, non-interactive, used exclusively by the SABC
+    platform). Any OTHER account or group holding NOPASSWD is reported as a
+    finding and should be removed.
+  DESC
+  tag cis: '5.3.5'
+  tag sabc_exception: 'ansible-automation-account'
+
+  # Collect every NOPASSWD user-spec across the sudoers files, drop comment
+  # lines and the approved "ansible" account (matched as the first user-spec
+  # field followed by whitespace, so "ansible_x" or "ansible,other" are NOT
+  # exempted). Anything left is a passwordless-sudo grant on another account.
+  describe command(
+    "grep -rhE 'NOPASSWD' /etc/sudoers /etc/sudoers.d/ 2>/dev/null " \
+    "| grep -vE '^[[:space:]]*#' " \
+    "| grep -vE '^[[:space:]]*ansible[[:space:]]'"
+  ) do
+    its('stdout.strip') { should eq '' }
+  end
+end
+
 # 5.4 User accounts and environment
 control 'cis-5.4.1.1-pass-max-days' do
   impact 0.5
