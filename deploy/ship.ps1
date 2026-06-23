@@ -282,7 +282,8 @@ function Setup-Server {
         "esac",
         "systemctl enable docker",
         "systemctl start docker",
-        "echo `"Done: `$(docker --version) / `$(docker compose version)`""
+        "echo `"Done: `$(docker --version) / `$(docker compose version)`"",
+        'exit 0'
     )
     # Feed the script to the remote over stdin. When a sudo password is set we
     # prepend it as the very first line: "sudo -S" reads exactly that one line
@@ -343,7 +344,8 @@ function Invoke-Snapshot {
         '  echo "[snapshot] Rollback snapshot ready (${snapped} image(s) tagged)."',
         'else',
         '  echo "[snapshot] No previous images found -- rollback will not be available after this deploy."',
-        'fi'
+        'fi',
+        'exit 0'
     )
     $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
     if ($SudoPassword -ne "") {
@@ -402,7 +404,8 @@ function Invoke-Rollback {
         '  exit 1',
         'fi',
         '$COMPOSE up -d --no-build',
-        'echo "[rollback] Previous deployment successfully restored."'
+        'echo "[rollback] Previous deployment successfully restored."',
+        'exit 0'
     )
     $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
     if ($SudoPassword -ne "") {
@@ -570,14 +573,7 @@ function Start-Containers {
         '  [ "$s" = "healthy" ] && break',
         '  sleep 2',
         'done',
-        '# 3) One-shot SQLite -> PostgreSQL migration as a follow-up via docker exec',
-        '#    (reliable on every compose version). Marker-guarded and non-fatal; the',
-        '#    script skips any table that already has rows so it never overwrites',
-        '#    data. NOTE: the backend boots and seeds defaults before this runs, so',
-        '#    a genuine SQLite upgrade would skip already-seeded tables -- relevant',
-        '#    only when importing a legacy SQLite db, not for fresh installs.',
-        "docker exec sabc-backend sh -c 'if [ -f /app/data/.migrated-to-postgres ]; then echo ship: already migrated to postgres; elif [ -f /app/data/platform.db ]; then echo ship: migrating SQLite to PostgreSQL; python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres; else echo ship: fresh install, no migration needed; touch /app/data/.migrated-to-postgres; fi' 2>&1 || echo '[ship] Migration step skipped (non-fatal) -- continuing.'",
-        '# 4) Verify the stack is REALLY up. docker-compose v1 can return 0 without',
+        '# 3) Verify the stack is REALLY up. docker-compose v1 can return 0 without',
         '#    creating a service, so check real container state, not the exit code.',
         'sleep 15',
         'missing=""',
@@ -596,7 +592,8 @@ function Start-Containers {
         '  done',
         '  exit 1',
         'fi',
-        'echo "[ship] All containers running: postgres, backend, frontend."'
+        'echo "[ship] All containers running: postgres, backend, frontend."',
+        'exit 0'
     )
 
     # Pipe the script to the server. When a sudo password is set, prepend it as
