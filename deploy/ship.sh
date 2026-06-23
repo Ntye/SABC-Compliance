@@ -82,15 +82,21 @@ build_images() {
 
   # Build directly — docker-compose.yml has no build: contexts (they belong
   # only in docker-compose.dev.yml for local dev), so we use docker build.
-  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
+  # Use `docker buildx build --platform linux/amd64 --load` rather than
+  # `DOCKER_DEFAULT_PLATFORM=… docker build` so the finished image is
+  # explicitly loaded into the classic Docker daemon store that `docker save`
+  # reads from.  Without --load, BuildKit on macOS stores layers only in its
+  # own content store and docker save fails with "NotFound: content digest".
+  docker buildx build --platform linux/amd64 --load \
     -t sabc-compliance-backend ./backend
 
-  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
-    -t sabc-compliance-frontend --build-arg VITE_API_BASE=/api ./frontend
+  docker buildx build --platform linux/amd64 --load \
+    --build-arg VITE_API_BASE=/api \
+    -t sabc-compliance-frontend ./frontend
 
   if [[ "$BUNDLE" == true ]]; then
     info "Building bundled image (with airgap packages) ..."
-    DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
+    docker buildx build --platform linux/amd64 --load \
       -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
     # docker-compose.yml references sabc-compliance-backend:latest, so tag the
     # bundled image as :latest too — otherwise the loaded image never matches

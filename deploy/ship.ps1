@@ -198,17 +198,20 @@ function Build-Images {
 
         # Build directly -- docker-compose.yml has no build: contexts (they belong
         # only in docker-compose.dev.yml for local dev), so we use docker build.
+        # Use buildx --load so layers are written into the classic Docker daemon
+        # store that docker save reads from (avoids "NotFound: content digest"
+        # on macOS where BuildKit keeps layers only in its own content store).
         Info "Building backend image ..."
-        & docker build -t sabc-compliance-backend ./backend
+        & docker buildx build --platform linux/amd64 --load -t sabc-compliance-backend ./backend
         if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
 
         Info "Building frontend image ..."
-        & docker build -t sabc-compliance-frontend --build-arg "VITE_API_BASE=/api" ./frontend
+        & docker buildx build --platform linux/amd64 --load --build-arg "VITE_API_BASE=/api" -t sabc-compliance-frontend ./frontend
         if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
 
         if ($Bundle) {
             Info "Building bundled image (airgap packages) ..."
-            & docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
+            & docker buildx build --platform linux/amd64 --load -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
             # docker-compose.yml references :latest, so re-tag the bundled image so
             # the archive matches the compose file when loaded on the server.
