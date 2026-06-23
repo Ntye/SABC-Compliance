@@ -210,6 +210,11 @@ function Build-Images {
             Info "Building bundled image (airgap packages) ..."
             & docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
+            # docker-compose.yml references sabc-compliance-backend:latest -- tag the
+            # bundled image as :latest too so the loaded image matches the compose
+            # file, otherwise the backend fails to start with "image not found".
+            & docker tag sabc-compliance-backend:bundled sabc-compliance-backend:latest
+            if ($LASTEXITCODE -ne 0) { Fail "Bundle tag failed" }
         }
 
         # postgres is not built from a Dockerfile -- pull it for linux/amd64 so
@@ -229,11 +234,9 @@ function Save-Images {
     Info "Saving images to $Archive ..."
     # postgres:16-alpine is included so the server never needs outbound Docker Hub
     # access -- the image is loaded from the archive alongside backend and frontend.
-    if ($Bundle) {
-        $images = @("sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest", "postgres:16-alpine")
-    } else {
-        $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
-    }
+    # Always save :latest -- bundle builds also tag the bundled image :latest, so
+    # the archive matches the compose file (which references :latest) either way.
+    $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
     & docker save -o $Archive $images
     if ($LASTEXITCODE -ne 0) { Fail "docker save failed" }
 
@@ -556,7 +559,12 @@ function Start-Containers {
         '  exit 2',
         'fi',
         '$COMPOSE down --remove-orphans 2>/dev/null || true',
-        'docker rm -f sabc-frontend sabc-backend 2>/dev/null || true',
+        '# Force-remove ALL three fixed-name containers (incl. sabc-postgres) so a',
+        '# stale container from an earlier run -- even one under a different compose',
+        '# project name -- cannot block recreation with "name already in use". The',
+        '# postgres DATA lives in the postgres-data named volume which "rm -f" never',
+        '# touches, so this is safe and non-destructive. Only our containers are hit.',
+        'docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true',
         '# 1) PostgreSQL alone, wait until healthy (~60s max).',
         '$COMPOSE up -d --no-build postgres',
         'echo "Waiting for PostgreSQL to become healthy ..."',
