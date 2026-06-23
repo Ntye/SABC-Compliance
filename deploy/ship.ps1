@@ -301,7 +301,7 @@ function Setup-Server {
         $sudoSetup = "sudo bash -s"
         $scriptContent = ($lines -join "`n") + "`n"
     }
-    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent.Replace([char]13, ''), [System.Text.Encoding]::ASCII)
     if ($UsePlink) {
         if ($SshKey) {
             Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoSetup
@@ -353,7 +353,7 @@ function Invoke-Snapshot {
         $sudoCmd = "sudo bash -s"
         $scriptContent = ($lines -join "`n") + "`n"
     }
-    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent.Replace([char]13, ''), [System.Text.Encoding]::ASCII)
     if ($UsePlink) {
         if ($SshKey) { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoCmd }
         else         { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoCmd }
@@ -412,7 +412,7 @@ function Invoke-Rollback {
         $sudoCmd = "sudo bash -s"
         $scriptContent = ($lines -join "`n") + "`n"
     }
-    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent.Replace([char]13, ''), [System.Text.Encoding]::ASCII)
     if ($UsePlink) {
         if ($SshKey) { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoCmd }
         else         { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoCmd }
@@ -616,7 +616,7 @@ function Start-Containers {
         $sudoStart = "sudo bash -s"
         $scriptContent = ($lines -join "`n") + "`n"
     }
-    [System.IO.File]::WriteAllText($tmpScript, $scriptContent, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent.Replace([char]13, ''), [System.Text.Encoding]::ASCII)
 
     if ($UsePlink) {
         if ($SshKey) {
