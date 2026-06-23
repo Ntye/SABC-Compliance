@@ -194,56 +194,69 @@ function Build-Images {
     Info "Building Docker images for linux/amd64 ..."
     Push-Location $ProjectDir
     try {
-        $env:DOCKER_DEFAULT_PLATFORM = "linux/amd64"
-
-        # Build directly -- docker-compose.yml has no build: contexts (they belong
-        # only in docker-compose.dev.yml for local dev), so we use docker build.
-        # Use buildx --load so layers are written into the classic Docker daemon
-        # store that docker save reads from (avoids "NotFound: content digest"
-        # on macOS where BuildKit keeps layers only in its own content store).
-        Info "Building backend image ..."
-        & docker buildx build --platform linux/amd64 --load -t sabc-compliance-backend ./backend
-        if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
-
-        Info "Building frontend image ..."
-        & docker buildx build --platform linux/amd64 --load --build-arg "VITE_API_BASE=/api" -t sabc-compliance-frontend ./frontend
-        if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
+        # Write each image straight to a docker-archive tar with
+        # `docker buildx build --output type=docker,dest=...` instead of building
+        # into the local image store and then running `docker save`.
+        #
+        # Why: on Docker Desktop the containerd image store keeps the layers of a
+        # buildx cross-platform (--platform linux/amd64) build out of the classic
+        # store, so `docker save` -- and even `--load` followed by `docker save` --
+        # fails with:
+        #   unable to create manifests file: NotFound: content digest sha256:...: not found
+        # --output type=docker,dest=FILE exports the finished image as a fully
+        # self-contained, `docker load`-able archive directly from the build, so we
+        # never touch the broken save path at all.  docker-compose.yml has no build:
+        # contexts (those live only in docker-compose.dev.yml for local dev).
+        $stage = Join-Path $ScriptDir ".images"
+        if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+        New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
         if ($Bundle) {
-            Info "Building bundled image (airgap packages) ..."
-            & docker buildx build --platform linux/amd64 --load -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
+            # docker-compose.yml references :latest, so tag the bundled (airgap-
+            # packages) image :latest -- otherwise the loaded image never matches
+            # the compose file and the backend fails with "image not found".
+            Info "Building bundled backend image (airgap packages) ..."
+            & docker buildx build --platform linux/amd64 -f backend/Dockerfile.bundle -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
-            # docker-compose.yml references :latest, so re-tag the bundled image so
-            # the archive matches the compose file when loaded on the server.
-            & docker tag sabc-compliance-backend:bundled sabc-compliance-backend:latest
-            if ($LASTEXITCODE -ne 0) { Fail "Bundle re-tag failed" }
+        } else {
+            Info "Building backend image ..."
+            & docker buildx build --platform linux/amd64 -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" ./backend
+            if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
         }
 
-        # postgres is not built from a Dockerfile -- pull it for linux/amd64 so
-        # it is included in the archive and never needs to be pulled on the server.
-        # Remove the tag first to avoid the stale multi-arch manifest issue that
-        # causes `docker save` to fail with "NotFound: content digest sha256:...".
-        Info "Pulling postgres:16-alpine for linux/amd64 ..."
-        & docker image rm postgres:16-alpine 2>$null
-        & docker pull --platform linux/amd64 postgres:16-alpine
-        if ($LASTEXITCODE -ne 0) { Fail "docker pull postgres:16-alpine failed" }
+        Info "Building frontend image ..."
+        & docker buildx build --platform linux/amd64 --build-arg "VITE_API_BASE=/api" -t sabc-compliance-frontend:latest --output "type=docker,dest=$stage\frontend.tar" ./frontend
+        if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
+
+        # postgres is not built from a Dockerfile, but we still export it through
+        # buildx (a one-line passthrough Dockerfile) rather than `docker pull` +
+        # `docker save`, for the same reason as above -- this guarantees a clean
+        # single-arch archive the server can load with no Docker Hub access.
+        Info "Packaging postgres:16-alpine for linux/amd64 ..."
+        $pgctx = Join-Path $stage "pgctx"
+        New-Item -ItemType Directory -Force -Path $pgctx | Out-Null
+        Set-Content -Path (Join-Path $pgctx "Dockerfile") -Value "FROM postgres:16-alpine" -Encoding ASCII
+        & docker buildx build --platform linux/amd64 -t postgres:16-alpine --output "type=docker,dest=$stage\postgres.tar" $pgctx
+        if ($LASTEXITCODE -ne 0) { Fail "postgres packaging failed" }
+        Remove-Item -Recurse -Force $pgctx -ErrorAction SilentlyContinue
     } finally {
-        Remove-Item Env:DOCKER_DEFAULT_PLATFORM -ErrorAction SilentlyContinue
         Pop-Location
     }
-    Ok "Images built and pulled (linux/amd64)"
+    Ok "Image archives built (linux/amd64)"
 }
 
 # -- Step 2: Save images to tar -----------------------------------------------
 function Save-Images {
     Info "Saving images to $Archive ..."
-    # postgres:16-alpine is included so the server never needs outbound Docker Hub
-    # access -- the image is loaded from the archive alongside backend and frontend.
-    # Always save :latest -- for bundle builds the bundled image is tagged :latest
-    # in Build-Images so the archive matches the compose file in both modes.
-    $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
-    & docker save -o $Archive $images
-    if ($LASTEXITCODE -ne 0) { Fail "docker save failed" }
+    # Build-Images already exported each image as a self-contained, loadable
+    # docker-archive tar under .images.  Bundle those per-image tars into the
+    # single archive the rest of the pipeline ships (postgres included so the
+    # server never needs outbound Docker Hub access).  The server extracts this
+    # and `docker load`s each inner tar.
+    $stage = Join-Path $ScriptDir ".images"
+    & tar -cf $Archive -C $stage backend.tar frontend.tar postgres.tar
+    if ($LASTEXITCODE -ne 0) { Fail "Bundling image archive failed" }
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 
     $sizeMB = [math]::Round((Get-Item $Archive).Length / 1MB)
     Ok "Archive ready: $Archive (${sizeMB} MB)"
@@ -652,7 +665,13 @@ function Start-Containers {
 # -- Step 5b: Load images then start ------------------------------------------
 function Deploy-Platform {
     Info "Loading Docker images on $Target ..."
-    Invoke-Sudo "docker load -i $RemoteDir/sabc-images.tar" -AllowFail
+    # sabc-images.tar bundles per-image docker-archive tars (backend.tar,
+    # frontend.tar, postgres.tar -- see Build-Images). Extract to a temp dir and
+    # load each. No single/double-quote nesting in the bash body so it survives
+    # PowerShell -> plink/ssh argument quoting; backtick-$ passes vars to the
+    # remote shell, $RemoteDir expands locally.
+    $loadCmd = "bash -c 'set -e; d=`$(mktemp -d); tar -xf $RemoteDir/sabc-images.tar -C `$d; for f in `$d/*.tar; do docker load -i `$f; done; rm -rf `$d'"
+    Invoke-Sudo $loadCmd -AllowFail
     if ($LASTEXITCODE -ne 0) {
         Warn "Image load failed -- initiating automatic rollback ..."
         Invoke-Rollback -AllowFail
