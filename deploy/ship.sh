@@ -92,6 +92,10 @@ build_images() {
     info "Building bundled image (with airgap packages) ..."
     DOCKER_DEFAULT_PLATFORM=linux/amd64 docker build \
       -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
+    # docker-compose.yml references sabc-compliance-backend:latest, so tag the
+    # bundled image as :latest too — otherwise the loaded image never matches
+    # the compose file and the backend fails to start with "image not found".
+    docker tag sabc-compliance-backend:bundled sabc-compliance-backend:latest
   fi
 
   # postgres is not built from a Dockerfile — pull it for linux/amd64 so
@@ -108,10 +112,10 @@ save_images() {
 
   # postgres:16-alpine is included so the server never needs outbound Docker Hub
   # access — the image is loaded from the archive alongside backend and frontend.
+  # Always save the :latest tag. For bundle builds the bundled image is also
+  # tagged :latest in build_images, so the archive — and therefore the loaded
+  # image — matches the compose file (which references :latest) in both modes.
   local images="sabc-compliance-backend:latest sabc-compliance-frontend:latest postgres:16-alpine"
-  if [[ "$BUNDLE" == true ]]; then
-    images="sabc-compliance-backend:bundled sabc-compliance-frontend:latest postgres:16-alpine"
-  fi
 
   docker save $images | gzip > "$ARCHIVE"
 
@@ -126,7 +130,7 @@ setup_ec2() {
   remote "sudo bash -s" << 'SETUP_EOF'
 set -e
 
-if command -v docker &>/dev/null && command -v docker compose &>/dev/null; then
+if command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
   echo "Docker already installed: $(docker --version)"
   echo "Compose: $(docker compose version)"
   exit 0
@@ -386,10 +390,10 @@ if grep -qE "^[[:space:]]*build:" "\$COMPOSE_FILE"; then
 fi
 
 \$COMPOSE down --remove-orphans 2>/dev/null || true
-docker rm -f sabc-frontend sabc-backend 2>/dev/null || true
+docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true
 
 # 1) PostgreSQL alone, wait until healthy (~60s max).
-\$COMPOSE up -d postgres
+\$COMPOSE up -d --no-build postgres
 echo "[ship.sh] Waiting for PostgreSQL to become healthy ..."
 for i in \$(seq 1 30); do
   s=\$(docker inspect -f '{{.State.Health.Status}}' sabc-postgres 2>/dev/null || echo starting)

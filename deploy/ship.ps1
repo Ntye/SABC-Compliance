@@ -210,6 +210,10 @@ function Build-Images {
             Info "Building bundled image (airgap packages) ..."
             & docker build -f backend/Dockerfile.bundle -t sabc-compliance-backend:bundled backend/
             if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
+            # docker-compose.yml references :latest, so re-tag the bundled image so
+            # the archive matches the compose file when loaded on the server.
+            & docker tag sabc-compliance-backend:bundled sabc-compliance-backend:latest
+            if ($LASTEXITCODE -ne 0) { Fail "Bundle re-tag failed" }
         }
 
         # postgres is not built from a Dockerfile -- pull it for linux/amd64 so
@@ -229,11 +233,9 @@ function Save-Images {
     Info "Saving images to $Archive ..."
     # postgres:16-alpine is included so the server never needs outbound Docker Hub
     # access -- the image is loaded from the archive alongside backend and frontend.
-    if ($Bundle) {
-        $images = @("sabc-compliance-backend:bundled", "sabc-compliance-frontend:latest", "postgres:16-alpine")
-    } else {
-        $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
-    }
+    # Always save :latest -- for bundle builds the bundled image is tagged :latest
+    # in Build-Images so the archive matches the compose file in both modes.
+    $images = @("sabc-compliance-backend:latest", "sabc-compliance-frontend:latest", "postgres:16-alpine")
     & docker save -o $Archive $images
     if ($LASTEXITCODE -ne 0) { Fail "docker save failed" }
 
@@ -556,7 +558,7 @@ function Start-Containers {
         '  exit 2',
         'fi',
         '$COMPOSE down --remove-orphans 2>/dev/null || true',
-        'docker rm -f sabc-frontend sabc-backend 2>/dev/null || true',
+        'docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true',
         '# 1) PostgreSQL alone, wait until healthy (~60s max).',
         '$COMPOSE up -d --no-build postgres',
         'echo "Waiting for PostgreSQL to become healthy ..."',
@@ -566,12 +568,14 @@ function Start-Containers {
         '  sleep 2',
         'done',
         '# 2) One-shot SQLite -> PostgreSQL migration before the backend boots.',
-        "`$COMPOSE run --rm --no-deps -T backend sh -c 'if [ -f /app/data/.migrated-to-postgres ]; then echo ship: already migrated to postgres; elif [ -f /app/data/platform.db ]; then echo ship: migrating SQLite to PostgreSQL; python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres; else echo ship: fresh install, no migration needed; touch /app/data/.migrated-to-postgres; fi'",
-        '# 3) Full stack -- backend now connects to a populated PostgreSQL.',
-        '$COMPOSE up -d --no-build',
+        "`$COMPOSE run --rm --no-deps -T backend sh -c 'if [ -f /app/data/.migrated-to-postgres ]; then echo ship: already migrated to postgres; elif [ -f /app/data/platform.db ]; then echo ship: migrating SQLite to PostgreSQL; python /app/migrate_to_postgres.py && touch /app/data/.migrated-to-postgres; else echo ship: fresh install, no migration needed; touch /app/data/.migrated-to-postgres; fi' 2>&1 || echo '[ship] Migration step skipped (non-fatal) -- continuing.'",
+        '# 3) Full stack. Plain "up -d" (no --no-build) matches docker-compose v1',
+        '#    behaviour: on some v1 patch levels --no-build exits 1 when it cannot',
+        '#    find a Dockerfile even when no build was requested.',
+        '$COMPOSE up -d',
         '# 4) Verify the stack is REALLY up. docker-compose v1 can return 0 without',
         '#    creating a service, so check real container state, not the exit code.',
-        'sleep 4',
+        'sleep 15',
         'missing=""',
         'for c in sabc-postgres sabc-backend sabc-frontend; do',
         '  st=$(docker inspect -f "{{.State.Status}}" "$c" 2>/dev/null || echo absent)',
