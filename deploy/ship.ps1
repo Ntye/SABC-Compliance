@@ -218,8 +218,11 @@ function Build-Images {
 
         # postgres is not built from a Dockerfile -- pull it for linux/amd64 so
         # it is included in the archive and never needs to be pulled on the server.
+        # Remove the tag first to avoid the stale multi-arch manifest issue that
+        # causes `docker save` to fail with "NotFound: content digest sha256:...".
         Info "Pulling postgres:16-alpine for linux/amd64 ..."
-        & docker pull postgres:16-alpine
+        & docker image rm postgres:16-alpine 2>$null
+        & docker pull --platform linux/amd64 postgres:16-alpine
         if ($LASTEXITCODE -ne 0) { Fail "docker pull postgres:16-alpine failed" }
     } finally {
         Remove-Item Env:DOCKER_DEFAULT_PLATFORM -ErrorAction SilentlyContinue

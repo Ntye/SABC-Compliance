@@ -100,8 +100,15 @@ build_images() {
 
   # postgres is not built from a Dockerfile — pull it for linux/amd64 so
   # it is included in the archive and never needs to be pulled on the server.
+  # Remove the tag first: on macOS Docker Desktop the DOCKER_DEFAULT_PLATFORM
+  # env var can leave a stale multi-arch manifest index tagged as :latest whose
+  # layers are not fully present, causing `docker save` to fail with:
+  #   unable to create manifests file: NotFound: content digest sha256:…
+  # Using --platform directly writes a single-arch manifest that save handles
+  # cleanly.
   info "Pulling postgres:16-alpine for linux/amd64 ..."
-  DOCKER_DEFAULT_PLATFORM=linux/amd64 docker pull postgres:16-alpine
+  docker image rm postgres:16-alpine 2>/dev/null || true
+  docker pull --platform linux/amd64 postgres:16-alpine
 
   ok "Images built and pulled (linux/amd64)"
 }
