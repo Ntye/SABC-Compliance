@@ -679,6 +679,7 @@
 
     - name: Run Wazuh installer — AIRGAP offline mode (-a --offline-installation)
       shell: |
+        set -o pipefail
         bash wazuh-install.sh \
           -a \
           --offline-installation \
@@ -696,6 +697,7 @@
 
     - name: Run Wazuh installer — ONLINE mode (-a)
       shell: |
+        set -o pipefail
         bash wazuh-install.sh \
           -a \
           --ignore-check \
@@ -759,6 +761,40 @@
         state: absent
       when: not wazuh_installed
       ignore_errors: yes
+
+    # ── Post-install gate: verify the installer actually worked ───────────
+    # Both install tasks pipe through `tee`, which always exits 0, masking a
+    # failed wazuh-install.sh. Re-stat the control binary: if it still does not
+    # exist after a fresh install attempt, fail here with an actionable message
+    # rather than blundering into post-install configuration tasks.
+
+    - name: Re-check wazuh-control binary after installation attempt
+      stat:
+        path: /var/ossec/bin/wazuh-control
+      register: wazuh_control_bin_post
+      when: not wazuh_installed
+
+    - name: Abort — Wazuh installer did not create wazuh-control (installation failed)
+      fail:
+        msg: |-
+          The Wazuh installer ran but /var/ossec/bin/wazuh-control is still absent.
+          The installation did not complete successfully.
+
+          Diagnose with the installer log on the target:
+            ls /var/log/wazuh-install/
+            sudo tail -150 /var/log/wazuh-install/<latest-file>.log
+
+          Common causes:
+            ● Offline tarball missing or corrupt
+              (check the "offline tarball looks too small" preflight warning above)
+            ● Insufficient disk space or RAM
+              (check the preflight warnings above)
+            ● Package dependency conflict or broken apt/yum cache
+            ● Target cannot reach packages.wazuh.com (online mode only)
+      when:
+        - not wazuh_installed
+        - wazuh_control_bin_post is defined
+        - not wazuh_control_bin_post.stat.exists
 
     # ══════════════════════════════════════════════════════════════════════
     # FIREWALL — open Wazuh ports on both Debian (ufw) and RedHat (firewalld)
@@ -905,6 +941,7 @@
         PYEOF
       register: authd_force_cfg
       changed_when: "'changed' in authd_force_cfg.stdout"
+      ignore_errors: yes
       notify: Restart wazuh-manager
 
     # ══════════════════════════════════════════════════════════════════════
