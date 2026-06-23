@@ -392,8 +392,14 @@ fi
 \$COMPOSE down --remove-orphans 2>/dev/null || true
 docker rm -f sabc-frontend sabc-backend sabc-postgres 2>/dev/null || true
 
-# 1) PostgreSQL alone, wait until healthy (~60s max).
-\$COMPOSE up -d --no-build postgres
+# 1) Bring the WHOLE stack up in one shot — the exact single "up -d" the proven
+#    manual deploy uses. Compose honours depends_on ordering (postgres →
+#    backend → frontend). We deliberately drop the old "compose run --rm"
+#    migration step: that ephemeral-container subcommand is the part that
+#    misbehaves on docker-compose v1 and forced the manual fallback.
+\$COMPOSE up -d
+
+# 2) Wait for PostgreSQL to report healthy so the migration below can connect.
 echo "[ship.sh] Waiting for PostgreSQL to become healthy ..."
 for i in \$(seq 1 30); do
   s=\$(docker inspect -f '{{.State.Health.Status}}' sabc-postgres 2>/dev/null || echo starting)
@@ -401,12 +407,17 @@ for i in \$(seq 1 30); do
   sleep 2
 done
 
-# 2) One-shot SQLite → PostgreSQL migration.  Run non-fatally: a migration
-#    hiccup must never block the deploy — the backend seeds cleanly into an
-#    empty PostgreSQL on first start anyway.  || true prevents set -e from
-#    aborting when docker-compose run exits non-zero (e.g. v1 quirks, missing
-#    marker file races, or the migration script itself returning non-zero).
-\$COMPOSE run --rm --no-deps -T backend sh -c '
+# 3) One-shot SQLite → PostgreSQL migration, run as a follow-up against the
+#    already-running backend via "docker exec" — reliable on every compose
+#    version, unlike "compose run --rm". Marker-guarded so it runs at most once,
+#    and non-fatal so a hiccup never blocks the deploy. The migration script
+#    skips any table that already has rows, so it can never overwrite data.
+#    NOTE: because the backend boots (and seeds default groups/profiles/admin
+#    into an empty PostgreSQL) before this runs, a genuine SQLite→PostgreSQL
+#    *upgrade* would find those tables already populated and skip them. That
+#    matters only when importing a legacy SQLite database; fresh installs and
+#    already-migrated servers are unaffected.
+docker exec sabc-backend sh -c '
   if [ -f /app/data/.migrated-to-postgres ]; then
     echo "[ship.sh] Database already migrated to PostgreSQL — skipping."
   elif [ -f /app/data/platform.db ]; then
@@ -417,12 +428,6 @@ done
     touch /app/data/.migrated-to-postgres
   fi
 ' 2>&1 || echo "[ship.sh] Migration step skipped (non-fatal) — continuing."
-
-# 3) Full stack.  Plain "up -d" (no --no-build) matches docker-compose v1
-#    behaviour: when the compose file has no build: contexts the flag is
-#    redundant and on some v1 patch levels it causes the command to exit 1
-#    when it cannot find a Dockerfile — even though no build was requested.
-\$COMPOSE up -d
 
 # 4) Wait 15 s — same window the working manual script uses — so containers
 #    that need a few seconds to transition from "created" to "running" are
