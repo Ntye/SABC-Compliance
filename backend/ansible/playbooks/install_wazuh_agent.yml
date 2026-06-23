@@ -85,6 +85,65 @@
         path: /var/ossec/bin/wazuh-agentd
       register: wazuh_agent_installed
 
+    # ── Cleanup: remove any invalid <force> block left by a prior failed run ───
+    - name: Clean up any residual force-enrollment block in ossec.conf
+      shell: |
+        python3 -c "
+        import re
+        path = '/var/ossec/etc/ossec.conf'
+        try:
+            conf = open(path).read()
+            cleaned = re.sub(r'\s*<force>[\s\S]*?</force>', '', conf)
+            if cleaned != conf:
+                open(path, 'w').write(cleaned)
+                print('cleaned')
+            else:
+                print('ok')
+        except Exception as e:
+            print('error: ' + str(e))
+        "
+      changed_when: false
+      failed_when: false
+      when: wazuh_agent_installed.stat.exists
+
+    # ── Idempotency: check CURRENT connection state (not just log history) ────
+    # grep alone is unreliable — the log retains old "Connected" entries even
+    # when the agent is broken/stopped. We require ALL three conditions:
+    #   1. wazuh-agentd is currently running
+    #   2. client.keys is non-empty (agent has a valid registration key)
+    #   3. The LAST relevant log entry is "Connected to the server"
+    #      (not an error like "Duplicate agent name" or "Invalid element")
+    - name: Check if already-installed agent is currently connected
+      shell: |
+        RUNNING=$(/var/ossec/bin/wazuh-control status 2>/dev/null | grep -c 'wazuh-agentd is running' || echo 0)
+        KEYS=$(test -s /var/ossec/etc/client.keys && echo "1" || echo "0")
+        LAST=$(grep -E 'Connected to the server|ERROR.*Unable to add|ERROR.*Duplicate|ERROR.*Invalid element|ERROR.*Exiting' \
+               /var/ossec/logs/ossec.log 2>/dev/null | tail -1)
+        if [ "$RUNNING" = "1" ] && [ "$KEYS" = "1" ] && echo "$LAST" | grep -q 'Connected to the server'; then
+          exit 0
+        else
+          exit 1
+        fi
+      register: _agent_already_connected
+      changed_when: false
+      failed_when: false
+      when: wazuh_agent_installed.stat.exists
+
+    - name: Agent already installed and connected — nothing to do
+      debug:
+        msg: >-
+          wazuh-agent is already installed and connected to {{ wazuh_manager }}
+          on {{ ansible_fqdn }}. Skipping installation.
+      when:
+        - wazuh_agent_installed.stat.exists
+        - (_agent_already_connected.rc | default(1)) == 0
+
+    - name: End play — agent already enrolled and connected
+      meta: end_host
+      when:
+        - wazuh_agent_installed.stat.exists
+        - (_agent_already_connected.rc | default(1)) == 0
+
     # ── Airgap detection (shared by both platform scripts) ───────────────────
     - name: Find offline Wazuh agent packages on controller
       find:
@@ -329,6 +388,74 @@
           key to force a fresh registration.
       when: wazuh_enroll_stuck | bool
 
+    # ── REST API cleanup — delete stale manager entry before key reset ────────
+    # The manager keeps the old agent record; clearing only client.keys causes
+    # a "Duplicate agent name" rejection on re-enrollment. Deleting via API
+    # first lets the agent register cleanly with a fresh ID.
+    # Tries WAZUH_API_PASS if set, falls back to the Wazuh default 'wazuh'.
+    # If both fail the rescue block warns and the key-reset continues anyway.
+    - name: Remove stale agent entry from Wazuh manager via REST API
+      when: wazuh_enroll_stuck | bool
+      block:
+        - name: Authenticate to Wazuh REST API (runs on controller)
+          uri:
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
+            method: POST
+            url_username: "{{ wazuh_api_user | default('wazuh') }}"
+            url_password: "{{ wazuh_api_pass | default('wazuh') }}"
+            force_basic_auth: yes
+            return_content: yes
+            validate_certs: no
+            timeout: 10
+          register: _wazuh_jwt
+          no_log: true
+          delegate_to: localhost
+          become: no
+
+        - name: Find agents named {{ ansible_hostname }} on the manager
+          uri:
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_hostname }}&status=all"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
+            validate_certs: no
+            return_content: yes
+            timeout: 10
+          register: _wazuh_stale_agents
+          delegate_to: localhost
+          become: no
+
+        - name: Build list of stale agent IDs to delete
+          set_fact:
+            _stale_ids: >-
+              {{ _wazuh_stale_agents.json.data.affected_items
+                 | map(attribute='id') | list }}
+          when: (_wazuh_stale_agents.json.data.affected_items | default([]) | length) > 0
+
+        - name: Delete stale agents from manager (IDs {{ _stale_ids | default([]) | join(', ') }})
+          uri:
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?agents_list={{ _stale_ids | join(',') }}&status=all&older_than=0s"
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
+            validate_certs: no
+            return_content: yes
+            timeout: 10
+          delegate_to: localhost
+          become: no
+          when:
+            - _stale_ids is defined
+            - (_stale_ids | length) > 0
+
+      rescue:
+        - name: REST API cleanup failed — continuing with client.keys reset only
+          debug:
+            msg: >-
+              WARNING: Could not delete stale Wazuh agent '{{ ansible_hostname }}'
+              via the manager REST API. The client.keys reset below will still
+              force a new enrollment ID; the manager may briefly show a duplicate
+              entry but will resolve once the agent reconnects.
+
     - name: Stop wazuh-agent before resetting key
       service:
         name: wazuh-agent
@@ -359,10 +486,13 @@
         state: started
       when: wazuh_enroll_stuck | bool
 
-    - name: Wait for the agent to connect after re-enrollment (up to 60s)
-      shell: grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
+    - name: Wait for the agent to connect after re-enrollment (up to 90s)
+      shell: |
+        /var/ossec/bin/wazuh-control status 2>/dev/null | grep -q 'wazuh-agentd is running' && \
+        test -s /var/ossec/etc/client.keys && \
+        grep -aq 'Connected to the server' /var/ossec/logs/ossec.log
       register: agent_connected_retry
-      retries: 12
+      retries: 18
       delay: 5
       until: agent_connected_retry.rc == 0
       changed_when: false

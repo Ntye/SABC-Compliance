@@ -1,0 +1,102 @@
+---
+# Read-only agent enrollment detection.
+# Uses only "raw" tasks so no Python interpreter is needed on the managed
+# node — this makes it compatible with legacy distributions such as
+# RHEL/AlmaLinux 8 that ship Python 3.6 (Ansible-core 2.17+ generates
+# wrapper code that requires Python 3.7+, breaking the "setup" and "shell"
+# modules on those hosts).
+#
+# The platform backend parses two sentinel strings in the job log:
+#   PUPPET_STATUS=ENROLLED   → sets puppet_enrolled = True
+#   WAZUH_STATUS=ENROLLED    → sets wazuh_enrolled  = True
+#
+# Any other output is informational for troubleshooting.
+#
+- name: Detect Agent Enrollment
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  tasks:
+
+    - name: "══ AGENT ENROLLMENT DETECTION ═══════════════════════════════════"
+      raw: "echo \"Checking $(hostname -f) on $(. /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\" || uname -r)\""
+
+    # ── Puppet ────────────────────────────────────────────────────────────────
+    - name: Detect Puppet agent enrollment
+      raw: |
+        PUPPET=/opt/puppetlabs/puppet/bin/puppet
+        CERTDIR=/etc/puppetlabs/puppet/ssl/certs
+        if ! test -f "${PUPPET}"; then
+          echo "PUPPET_STATUS=NOT_ENROLLED"
+          echo "  Reason: puppet binary not found at ${PUPPET}"
+          echo "  (Puppet agent is not installed on this node)"
+        else
+          VER=$("${PUPPET}" --version 2>/dev/null || echo "unknown")
+          CERT=$(find "${CERTDIR}" -maxdepth 1 -name '*.pem' ! -name 'ca.pem' 2>/dev/null | head -1)
+          if [ -n "${CERT}" ]; then
+            echo "PUPPET_STATUS=ENROLLED"
+            echo "  Version  : ${VER}"
+            echo "  Cert file: $(basename ${CERT})"
+            echo "  Service  : $(systemctl is-active puppet 2>/dev/null || echo 'unknown')"
+          else
+            echo "PUPPET_STATUS=NOT_ENROLLED"
+            echo "  Reason : Puppet ${VER} installed but no signed cert in ${CERTDIR}/"
+            echo "  (Agent installed but not enrolled with a Puppet master)"
+          fi
+        fi
+      register: puppet_detection
+      changed_when: false
+      failed_when: false
+
+    - name: Puppet detection result
+      debug:
+        msg: "{{ puppet_detection.stdout_lines }}"
+
+    # ── Wazuh ─────────────────────────────────────────────────────────────────
+    - name: Detect Wazuh agent enrollment
+      raw: |
+        AGENTD=/var/ossec/bin/wazuh-agentd
+        LOG=/var/ossec/logs/ossec.log
+        CONF=/var/ossec/etc/ossec.conf
+        KEYS=/var/ossec/etc/client.keys
+        if ! test -f "${AGENTD}"; then
+          echo "WAZUH_STATUS=NOT_ENROLLED"
+          echo "  Reason: wazuh-agentd binary not found at ${AGENTD}"
+          echo "  (Wazuh agent is not installed on this node)"
+        else
+          VER=$(/var/ossec/bin/wazuh-control info 2>/dev/null | grep -i '^Wazuh' | head -1 || echo "unknown")
+          MGR=$(grep -oP '(?<=<address>)[^<]+' "${CONF}" 2>/dev/null | head -1 || echo "unknown")
+          AGENT_ID=$(awk '{print $1}' "${KEYS}" 2>/dev/null | head -1 || echo "none")
+          SVC=$(/var/ossec/bin/wazuh-control status 2>/dev/null | grep wazuh-agentd | awk '{print $NF}')
+          if grep -aq 'Connected to the server' "${LOG}" 2>/dev/null; then
+            echo "WAZUH_STATUS=ENROLLED"
+            echo "  Version  : ${VER}"
+            echo "  Agent ID : ${AGENT_ID}"
+            echo "  Manager  : ${MGR}"
+            echo "  Service  : ${SVC:-unknown}"
+            grep 'Connected to the server' "${LOG}" 2>/dev/null | tail -1 | sed 's/^/  Last connect: /'
+          else
+            echo "WAZUH_STATUS=NOT_ENROLLED"
+            echo "  Version  : ${VER}"
+            echo "  Agent ID : ${AGENT_ID}"
+            echo "  Manager  : ${MGR}"
+            echo "  Service  : ${SVC:-unknown}"
+            echo "  Reason   : agentd installed but no 'Connected to the server' in ossec.log"
+            echo "  Recent log entries:"
+            grep -E 'ERROR|WARNING|Connecting|Duplicate|refused|denied|Connected' "${LOG}" 2>/dev/null | tail -5 | sed 's/^/    /'
+          fi
+        fi
+      register: wazuh_detection
+      changed_when: false
+      failed_when: false
+
+    - name: Wazuh detection result
+      debug:
+        msg: "{{ wazuh_detection.stdout_lines }}"
+
+    - name: "══ DETECTION COMPLETE ═══════════════════════════════════════════"
+      debug:
+        msg:
+          - "Puppet : {{ (puppet_detection.stdout_lines | select('match', 'PUPPET_STATUS=.*') | list | first) | default('unknown') }}"
+          - "Wazuh  : {{ (wazuh_detection.stdout_lines | select('match', 'WAZUH_STATUS=.*') | list | first) | default('unknown') }}"

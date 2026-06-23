@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal
 from core.errors import (
-    ConflictError, ForbiddenError, UnauthorizedError, ValidationError,
+    ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -23,6 +23,7 @@ class LoginResponse(BaseModel):
     role: str
     username: str
     api_key: str
+    permissions: list[str] = []
 
 class ApiKeyResponse(BaseModel):
     id: str
@@ -39,13 +40,11 @@ class CreateApiKeyRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    role: str = "readonly"
     email: str | None = None
 
 class UserResponse(BaseModel):
     id: str
     username: str
-    role: str
     email: str | None = None
     active: bool
     created_at: datetime
@@ -54,6 +53,34 @@ class UserResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+class UpdateUserRequest(BaseModel):
+    email: str | None = None
+    active: bool | None = None
+    password: str | None = None
+
+class UserGroupResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    permissions: list[str] = []
+    is_default: bool = False
+    member_ids: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+
+class CreateUserGroupRequest(BaseModel):
+    name: str
+    description: str | None = None
+    permissions: list[str] = []
+
+class UpdateUserGroupRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    permissions: list[str] | None = None
+
+class AddGroupMemberRequest(BaseModel):
+    user_id: str
 
 # ── Dependency factories (set by main.py via module-level vars) ───────────────
 
@@ -67,6 +94,15 @@ _login_uc = None
 _create_user_uc = None
 _list_users_uc = None
 _change_password_uc = None
+_update_user_uc = None
+_delete_user_uc = None
+_create_group_uc = None
+_list_groups_uc = None
+_get_group_uc = None
+_update_group_uc = None
+_delete_group_uc = None
+_add_member_uc = None
+_remove_member_uc = None
 
 
 def set_use_cases(
@@ -80,10 +116,22 @@ def set_use_cases(
     create_user_uc,
     list_users_uc,
     change_password_uc,
+    update_user_uc=None,
+    delete_user_uc=None,
+    create_group_uc=None,
+    list_groups_uc=None,
+    get_group_uc=None,
+    update_group_uc=None,
+    delete_group_uc=None,
+    add_member_uc=None,
+    remove_member_uc=None,
 ) -> None:
     global _authenticate_uc, _decode_jwt_uc, _init_api_key_uc
     global _create_api_key_uc, _list_api_keys_uc, _revoke_api_key_uc
     global _login_uc, _create_user_uc, _list_users_uc, _change_password_uc
+    global _update_user_uc, _delete_user_uc
+    global _create_group_uc, _list_groups_uc, _get_group_uc, _update_group_uc
+    global _delete_group_uc, _add_member_uc, _remove_member_uc
     _authenticate_uc = authenticate_uc
     _decode_jwt_uc = decode_jwt_uc
     _init_api_key_uc = init_api_key_uc
@@ -94,6 +142,15 @@ def set_use_cases(
     _create_user_uc = create_user_uc
     _list_users_uc = list_users_uc
     _change_password_uc = change_password_uc
+    _update_user_uc = update_user_uc
+    _delete_user_uc = delete_user_uc
+    _create_group_uc = create_group_uc
+    _list_groups_uc = list_groups_uc
+    _get_group_uc = get_group_uc
+    _update_group_uc = update_group_uc
+    _delete_group_uc = delete_group_uc
+    _add_member_uc = add_member_uc
+    _remove_member_uc = remove_member_uc
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
@@ -214,7 +271,7 @@ async def list_users(principal: AuthPrincipal = Depends(require_admin)):
     users = await _list_users_uc.execute()
     return [
         UserResponse(
-            id=u.id, username=u.username, role=u.role,
+            id=u.id, username=u.username,
             email=u.email, active=u.active, created_at=u.created_at,
             last_login=u.last_login,
         )
@@ -237,11 +294,10 @@ async def create_user(
         user = await _create_user_uc.execute({
             "username": body.username,
             "password": body.password,
-            "role": body.role,
             "email": body.email,
         })
         return UserResponse(
-            id=user.id, username=user.username, role=user.role,
+            id=user.id, username=user.username,
             email=user.email, active=user.active, created_at=user.created_at,
             last_login=user.last_login,
         )
@@ -264,3 +320,85 @@ async def change_password(
         return await _change_password_uc.execute(principal.id, body.old_password, body.new_password)
     except (UnauthorizedError, ValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.patch("/users/{id}", response_model=UserResponse)
+async def update_user(id: str, body: UpdateUserRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        user = await _update_user_uc.execute(id, body.model_dump(exclude_none=True))
+        return UserResponse(id=user.id, username=user.username, email=user.email, active=user.active, created_at=user.created_at, last_login=user.last_login)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/users/{id}")
+async def delete_user(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _delete_user_uc.execute(id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/groups", response_model=list[UserGroupResponse])
+async def list_groups(principal: AuthPrincipal = Depends(require_admin)):
+    groups = await _list_groups_uc.execute()
+    return [UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at) for g in groups]
+
+
+@router.post("/groups", status_code=201, response_model=UserGroupResponse)
+async def create_group(body: CreateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _create_group_uc.execute(body.model_dump())
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except (ValidationError, ConflictError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/groups/{id}", response_model=UserGroupResponse)
+async def get_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _get_group_uc.execute(id)
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.patch("/groups/{id}", response_model=UserGroupResponse)
+async def update_group(id: str, body: UpdateUserGroupRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        g = await _update_group_uc.execute(id, body.model_dump(exclude_none=True))
+        return UserGroupResponse(id=g.id, name=g.name, description=g.description, permissions=g.permissions, is_default=g.is_default, member_ids=g.member_ids, created_at=g.created_at, updated_at=g.updated_at)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/groups/{id}")
+async def delete_group(id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _delete_group_uc.execute(id)
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/groups/{id}/members")
+async def add_group_member(id: str, body: AddGroupMemberRequest, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _add_member_uc.execute(id, body.user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/groups/{id}/members/{user_id}")
+async def remove_group_member(id: str, user_id: str, principal: AuthPrincipal = Depends(require_admin)):
+    try:
+        return await _remove_member_uc.execute(id, user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

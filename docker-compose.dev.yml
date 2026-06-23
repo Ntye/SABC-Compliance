@@ -12,6 +12,26 @@
 
 services:
 
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: sabc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       "${POSTGRES_DB:-sabc}"
+      POSTGRES_USER:     "${POSTGRES_USER:-sabc}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sabc-change-me}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - sabc-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sabc} -d ${POSTGRES_DB:-sabc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   # ── Backend: FastAPI + Ansible ─────────────────────────────────────────────
   backend:
     build: ./backend          # built once — deps cached; rebuild only when
@@ -25,12 +45,21 @@ services:
       SSH_KEY_PATH:  /app/keys/ansible_id_rsa
       ANSIBLE_DIR:   /app/ansible
       PACKAGES_DIR:  /app/packages
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sabc}:${POSTGRES_PASSWORD:-sabc-change-me}@postgres:5432/${POSTGRES_DB:-sabc}"
+      PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
+      HTTPS_PORT:          "${HTTPS_PORT:-8443}"
+      TLS_CERTS_DIR:       /app/certs
     volumes:
       - backend-data:/app/data
       - backend-keys:/app/keys
       - ./backend/packages:/app/packages
+      - frontend-certs:/app/certs
       - ./backend/src:/app/src           # live — git pull reflects instantly
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
+      - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     networks:
@@ -52,31 +81,32 @@ services:
       - "3000"
       - --reload     # restarts automatically on any .py file change
 
-  # ── Frontend: Vite dev server ──────────────────────────────────────────────
+  # ── Frontend: Vite dev server (HTTPS) ──────────────────────────────────────
   frontend:
     image: node:20-alpine
     container_name: sabc-frontend
     working_dir: /app
+    environment:
+      TLS_SAN: "${PLATFORM_PUBLIC_HOST:-}"
     volumes:
       - ./frontend:/app
-      - frontend-node-modules:/app/node_modules   # kept inside container so
-                                                  # host & container binaries
-                                                  # don't conflict (ARM/x86)
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+      - frontend-node-modules:/app/node_modules
+      - frontend-certs:/certs
+    command: sh /app/dev-entrypoint.sh
     ports:
-      - "${HTTP_PORT:-80}:5173"
+      - "${HTTPS_PORT:-8443}:5173"
     depends_on:
       backend:
         condition: service_healthy
     networks:
       - sabc-net
-    # Vite proxies /api → backend:3000 (configured in vite.config.js),
-    # including WebSocket job-log streaming — same behaviour as Nginx in prod.
 
 volumes:
+  postgres-data:
   backend-data:
   backend-keys:
-  frontend-node-modules:    # isolated node_modules volume (not on the host)
+  frontend-node-modules:
+  frontend-certs:
 
 networks:
   sabc-net:

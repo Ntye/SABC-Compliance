@@ -1,0 +1,1177 @@
+---
+# ══════════════════════════════════════════════════════════════════════════════
+# Install Wazuh (manager + indexer + dashboard) COLOCATED on a Puppet Primary
+# Server — purpose-built to NEVER disrupt the Puppet service.
+#
+# This playbook is specifically for servers already running Puppet Server
+# (open-source) or Puppet Enterprise (PE). Use install_wazuh_manager.yml
+# for standalone Wazuh installs.
+#
+# ── SAFETY DESIGN ─────────────────────────────────────────────────────────────
+# 1. PUPPET PRE-FLIGHT GATE  — aborts immediately if Puppet is unhealthy before
+#    we touch anything; never risks installing onto a degraded Puppet server.
+#
+# 2. PORT CONFLICT RESOLUTION (automatic)
+#    - Puppet Enterprise holds :443 (web console).  Wazuh dashboard also
+#      defaults to :443.  When PE is detected, Wazuh dashboard is automatically
+#      remapped to :9443 — PE keeps :443 undisturbed.
+#    - All other Wazuh ports (1514, 1515, 55000, 9200, 1516) are checked and
+#      the job aborts with a clear message if any are held by a non-Wazuh process.
+#
+# 3. PACKAGE MANAGER SERIALISATION
+#    - puppet-agent (local catalog-run timer) is suspended during the package
+#      install phase so it cannot trigger a concurrent apt/yum run.
+#      puppet-agent ≠ puppet-server; suspending the agent does NOT stop the
+#      server from compiling catalogs for other nodes.
+#    - Waits up to 5 minutes for any pre-existing lock to clear.
+#
+# 4. PUPPET POST-INSTALL GATE  — after Wazuh is fully running, re-checks every
+#    Puppet service.  The job FAILS (not just warns) if Puppet is degraded,
+#    with actionable recovery instructions printed to the log.
+#
+# ── PORT LAYOUT WHEN PE IS DETECTED ──────────────────────────────────────────
+#   :8140  Puppet agent comms  (Puppet, unchanged)
+#   :443   Puppet Enterprise console  (PE, unchanged)
+#   :9443  Wazuh dashboard HTTPS  (auto-remapped from :443)
+#   :1514  Wazuh agent comms
+#   :1515  Wazuh enrollment (authd)
+#   :55000 Wazuh REST API
+#   :9200  OpenSearch indexer (localhost only)
+#   :1516  Wazuh cluster (localhost only)
+#
+# ── RESOURCE REQUIREMENTS ────────────────────────────────────────────────────
+#   RAM  : 8 GB minimum (Puppet JVM + OpenSearch JVM); 12 GB+ recommended
+#   Disk : 30 GB free on / minimum (Wazuh events + Puppet data grow over time)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: Install Wazuh colocated on Puppet Primary Server (Puppet-safe)
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    wazuh_version: "4.x"
+
+    # ── Puppet ports that MUST stay open before and after install ───────────
+    puppet_agent_port: 8140
+
+    # ── Wazuh default ports ─────────────────────────────────────────────────
+    wazuh_manager_port:  1514
+    wazuh_auth_port:     1515
+    wazuh_syslog_port:   514
+    wazuh_api_port:      55000
+    wazuh_indexer_port:  9200
+    wazuh_cluster_port:  1516
+    # wazuh_dashboard_port is computed dynamically (443 or 9443)
+
+    # ── File paths ───────────────────────────────────────────────────────────
+    wazuh_pkg_dir:  "{{ packages_dir }}/wazuh-manager"
+    wazuh_work_dir: /tmp/wazuh-colocated-install
+
+    # ── Resource floors (colocated = higher than standalone) ────────────────
+    colocated_min_ram_mb:  8192
+    colocated_rec_ram_mb:  12288
+    colocated_min_disk_gb: 30
+
+  # ── Bootstrap Python ────────────────────────────────────────────────────────
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then
+              v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+              if [ "$v" -ge 308 ]; then command -v "$p"; return 0; fi
+            fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP: installing a modern python3 (>=3.8)" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y || true
+          apt-get install -y python3 || true
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 || true
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python38 \
+            || amazon-linux-extras install -y python3.8 \
+            || { amazon-linux-extras enable python3.8 && yum clean metadata && yum install -y python38; } \
+            || yum install -y python3 \
+            || true
+        elif command -v zypper >/dev/null 2>&1; then
+          zypper --non-interactive install python3 || true
+        fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: could not provide python >= 3.8 on target" >&2
+        exit 1
+      register: python_bootstrap
+      changed_when: "'installing a modern' in (python_bootstrap.stderr | default(''))"
+
+    - name: Pin ansible_python_interpreter to the bootstrapped interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts now that a suitable Python is available
+      setup:
+
+  tasks:
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 1 — PUPPET PRE-FLIGHT HEALTH GATE
+    # We check BEFORE touching anything.  If Puppet is already unhealthy,
+    # we abort — we will not risk making it worse.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[PUPPET GATE PRE] Check open-source puppetserver service"
+      command: systemctl is-active puppetserver
+      register: oss_puppet_active
+      changed_when: false
+      failed_when: false
+
+    - name: "[PUPPET GATE PRE] Check Puppet Enterprise pe-puppetserver service"
+      command: systemctl is-active pe-puppetserver
+      register: pe_puppet_active
+      changed_when: false
+      failed_when: false
+
+    - name: "[PUPPET GATE PRE] Determine Puppet variant"
+      set_fact:
+        puppet_type:     "{{ 'enterprise' if pe_puppet_active.rc == 0 else ('opensource' if oss_puppet_active.rc == 0 else 'none') }}"
+        puppet_svc_name: "{{ 'pe-puppetserver' if pe_puppet_active.rc == 0 else ('puppetserver' if oss_puppet_active.rc == 0 else 'none') }}"
+
+    - name: "[PUPPET GATE PRE] ABORT — no Puppet service is running on this host"
+      fail:
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  ABORT: No running Puppet service found on {{ ansible_fqdn }}      ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+
+          This playbook requires Puppet Server (puppetserver) or Puppet Enterprise
+          (pe-puppetserver) to be RUNNING before Wazuh is installed alongside it.
+
+          Neither service is active on this host.
+
+          Options:
+            • If Puppet is installed but stopped — start it first:
+                systemctl start puppetserver   # or pe-puppetserver
+            • If Puppet is not yet installed — run "Install Puppet Primary Server"
+              first, then use this job.
+            • For a server WITHOUT Puppet — use "Install Wazuh Manager" instead.
+
+          No changes were made to this host.
+      when: puppet_type == 'none'
+
+    - name: "[PUPPET GATE PRE] Verify Puppet agent port :{{ puppet_agent_port }} is open"
+      wait_for:
+        host:    127.0.0.1
+        port:    "{{ puppet_agent_port }}"
+        timeout: 30
+        delay:   2
+        msg: >-
+          PUPPET GATE FAILED: Puppet port :{{ puppet_agent_port }} not responding.
+          {{ puppet_svc_name }} is active but not accepting connections.
+          Fix Puppet before running this job:
+            journalctl -u {{ puppet_svc_name }} -n 50 --no-pager
+
+    - name: "[PUPPET GATE PRE] Snapshot Puppet service state (baseline)"
+      shell: >-
+        systemctl show {{ puppet_svc_name }}
+        --property=ActiveState,SubState,MainPID 2>/dev/null
+        || echo "SNAPSHOT_FAILED"
+      register: puppet_snapshot_before
+      changed_when: false
+
+    - name: "[PUPPET GATE PRE] Record whether PE holds :443"
+      set_fact:
+        puppet_owns_443: "{{ puppet_type == 'enterprise' }}"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 2 — COLOCATED CONFLICT ANALYSIS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[CONFLICT] Compute Wazuh dashboard port (auto-resolve :443 vs PE)"
+      set_fact:
+        wazuh_dashboard_port: "{{ '9443' if puppet_owns_443 else '443' }}"
+
+    - name: "[CONFLICT] Report Puppet variant and port plan"
+      debug:
+        msg: |-
+          Puppet variant : {{ puppet_type | upper }} (service: {{ puppet_svc_name }})
+          Dashboard port : {{ wazuh_dashboard_port }}
+          {% if puppet_owns_443 %}
+          Puppet Enterprise holds :443 — Wazuh dashboard AUTOMATICALLY remapped to :9443.
+          PE console will remain on :443 undisturbed.
+          {% else %}
+          Open-source Puppet detected — no :443 conflict; Wazuh dashboard uses :443.
+          {% endif %}
+
+    - name: "[CONFLICT] Check for existing Wazuh installation (idempotency)"
+      stat:
+        path: /var/ossec/bin/wazuh-control
+      register: wazuh_control_bin
+
+    - name: "[CONFLICT] Check running Wazuh manager service"
+      command: systemctl is-active wazuh-manager
+      register: wazuh_svc_active
+      changed_when: false
+      failed_when: false
+
+    - name: "[CONFLICT] Set wazuh_installed fact"
+      set_fact:
+        wazuh_installed: "{{ wazuh_control_bin.stat.exists }}"
+        wazuh_running:   "{{ wazuh_svc_active.rc == 0 }}"
+
+    # Scan ports before install — we want actionable errors, not cryptic installer failures.
+    - name: "[CONFLICT] Scan for port conflicts on Wazuh-required ports"
+      shell: |
+        set +e
+        CONFLICTS=""
+        for port in {{ wazuh_manager_port }} {{ wazuh_auth_port }} {{ wazuh_api_port }} \
+                    {{ wazuh_indexer_port }} {{ wazuh_cluster_port }} {{ wazuh_dashboard_port }}; do
+          if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"; then
+            # Identify owner process
+            PID=$(ss -ltnp 2>/dev/null \
+              | awk -v p=":${port}" '$4~p {match($6,/pid=([0-9]+)/,m); print m[1]; exit}')
+            COMM=""
+            [ -n "$PID" ] && COMM=$(cat /proc/${PID}/comm 2>/dev/null || echo "unknown")
+            # Wazuh/OpenSearch owning a Wazuh port = idempotent re-run, not a conflict
+            if echo "$COMM" | grep -qiE "^(wazuh|ossec|opensearch|filebeat)"; then
+              echo "WAZUH_PORT_OK:${port}:${COMM}"
+            else
+              CONFLICTS="${CONFLICTS} ${port}(${COMM:-pid:${PID:-?}})"
+            fi
+          fi
+        done
+        echo "CONFLICTS:${CONFLICTS}"
+      register: port_scan_result
+      changed_when: false
+      failed_when: false
+      when: not wazuh_installed
+
+    - name: "[CONFLICT] Parse port conflict result"
+      set_fact:
+        port_conflicts_str: >-
+          {{ port_scan_result.stdout
+             | default('')
+             | regex_findall('CONFLICTS:(.*)')
+             | first | default('') | trim }}
+      when: not wazuh_installed
+
+    - name: "[CONFLICT] ABORT — non-Wazuh process holds a required Wazuh port"
+      fail:
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  ABORT: PORT CONFLICT — WAZUH INSTALL CANCELLED                    ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+
+          These Wazuh-required ports are held by non-Wazuh processes on {{ ansible_fqdn }}:
+
+            {{ port_conflicts_str }}
+
+          Wazuh needs:
+            :{{ wazuh_manager_port }} (agent comms)   :{{ wazuh_auth_port }} (enrollment)
+            :{{ wazuh_api_port }} (REST API)       :{{ wazuh_indexer_port }} (OpenSearch, local)
+            :{{ wazuh_cluster_port }} (cluster)    :{{ wazuh_dashboard_port }} (dashboard HTTPS)
+
+          {% if puppet_owns_443 %}
+          Note: Wazuh dashboard was already remapped from :443 → :9443 (Puppet Enterprise
+          detected). The conflicts above are on OTHER ports and must be resolved manually.
+          {% endif %}
+
+          Puppet was NOT touched. No changes were made to this server.
+          Free the conflicting ports and re-run this job.
+      when:
+        - not wazuh_installed
+        - port_conflicts_str | default('') | trim | length > 0
+
+    # ── Resource warnings ─────────────────────────────────────────────────────
+
+    - name: "[RESOURCES] Warn — RAM below minimum for colocated Puppet + Wazuh"
+      debug:
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  ⚠  RAM WARNING — COLOCATED STACK                                  ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+          Available RAM : {{ ansible_memtotal_mb }} MB
+          Minimum needed: {{ colocated_min_ram_mb }} MB  ({{ colocated_min_ram_mb // 1024 }} GB)
+          Recommended   : {{ colocated_rec_ram_mb }} MB  ({{ colocated_rec_ram_mb // 1024 }} GB)
+
+          Both the Puppet JRuby runtime and the Wazuh OpenSearch JVM require
+          significant heap.  Below {{ colocated_min_ram_mb }} MB the OpenSearch indexer is
+          likely to be OOM-killed shortly after startup, which may also put
+          memory pressure on Puppet's JVM.
+
+          Proceeding anyway — monitor `free -h` and `dmesg | grep -i kill` after
+          install.  Strongly consider upgrading this instance to {{ colocated_rec_ram_mb // 1024 }} GB+.
+      when:
+        - not wazuh_installed
+        - ansible_memtotal_mb < colocated_min_ram_mb
+
+    - name: "[RESOURCES] Note — RAM is acceptable but below recommended"
+      debug:
+        msg: >-
+          RAM: {{ ansible_memtotal_mb }} MB — above minimum ({{ colocated_min_ram_mb }} MB)
+          but below recommended ({{ colocated_rec_ram_mb }} MB) for colocated Puppet + Wazuh.
+          Proceeding. Monitor memory usage after install.
+      when:
+        - not wazuh_installed
+        - ansible_memtotal_mb >= colocated_min_ram_mb
+        - ansible_memtotal_mb < colocated_rec_ram_mb
+
+    - name: "[RESOURCES] Check free disk on /"
+      shell: df -BG --output=avail / | tail -1 | tr -d 'G '
+      register: root_free_gb
+      changed_when: false
+      failed_when: false
+
+    - name: "[RESOURCES] Warn — low disk for colocated stack"
+      debug:
+        msg: >-
+          ⚠  DISK WARNING: {{ root_free_gb.stdout | trim }} GB free on /.
+          Colocated Puppet + Wazuh needs {{ colocated_min_disk_gb }} GB+ (Wazuh indexed events
+          grow over time). Proceeding — monitor disk usage with `df -h`.
+      when:
+        - not wazuh_installed
+        - root_free_gb.stdout | trim | length > 0
+        - (root_free_gb.stdout | trim | int) < colocated_min_disk_gb
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 3 — SAFE PRE-INSTALL PREPARATION
+    # Prevent concurrent package-manager usage by pausing puppet-agent
+    # (the local catalog-run timer).  This does NOT stop puppet-server.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[PREP] Detect puppet-agent service on this host"
+      command: systemctl is-active puppet
+      register: puppet_agent_svc
+      changed_when: false
+      failed_when: false
+      when: not wazuh_installed
+
+    - name: "[PREP] Record whether we paused puppet-agent"
+      set_fact:
+        we_paused_puppet_agent: "{{ puppet_agent_svc.rc is defined and puppet_agent_svc.rc == 0 }}"
+      when: not wazuh_installed
+
+    - name: "[PREP] Pause puppet-agent catalog runs during package installation"
+      service:
+        name: puppet
+        state: stopped
+      when:
+        - not wazuh_installed
+        - we_paused_puppet_agent | default(false)
+      ignore_errors: yes
+
+    - name: "[PREP] Wait for apt/dpkg lock to clear (Debian, up to 5 min)"
+      shell: |
+        for i in $(seq 1 10); do
+          if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+             && ! fuser /var/lib/apt/lists/lock   >/dev/null 2>&1 \
+             && ! fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+            echo "LOCK_FREE"; exit 0
+          fi
+          echo "apt/dpkg lock held — waiting 30s (attempt $i/10)..." >&2
+          sleep 30
+        done
+        echo "LOCK_TIMEOUT: apt/dpkg still locked after 5 minutes" >&2
+        exit 1
+      register: apt_lock_wait
+      changed_when: false
+      failed_when: apt_lock_wait.rc != 0
+      when:
+        - not wazuh_installed
+        - ansible_os_family == 'Debian'
+
+    - name: "[PREP] Wait for yum/dnf lock to clear (RedHat, up to 5 min)"
+      shell: |
+        for i in $(seq 1 10); do
+          if ! fuser /var/run/yum.pid >/dev/null 2>&1 \
+             && ! fuser /var/run/dnf.pid >/dev/null 2>&1; then
+            echo "LOCK_FREE"; exit 0
+          fi
+          echo "yum/dnf lock held — waiting 30s (attempt $i/10)..." >&2
+          sleep 30
+        done
+        echo "LOCK_TIMEOUT: yum/dnf still locked after 5 minutes" >&2
+        exit 1
+      register: yum_lock_wait
+      changed_when: false
+      failed_when: yum_lock_wait.rc != 0
+      when:
+        - not wazuh_installed
+        - ansible_os_family == 'RedHat'
+
+    # vm.max_map_count is required by OpenSearch (Wazuh indexer).
+    # This sysctl setting is safe for Puppet — Puppet does not depend on it.
+    - name: "[PREP] Set vm.max_map_count=262144 for OpenSearch indexer"
+      sysctl:
+        name:       vm.max_map_count
+        value:      "262144"
+        state:      present
+        sysctl_set: yes
+        reload:     yes
+      when: not wazuh_installed
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 4 — AIRGAP / ONLINE DETECTION (mirrors install_wazuh_manager.yml)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[INSTALL] Determine OS package family"
+      set_fact:
+        wazuh_os_family: "{{ 'deb' if ansible_os_family == 'Debian' else 'rpm' }}"
+
+    - name: "[INSTALL] Check for wazuh-install.sh on controller"
+      stat:
+        path: "{{ wazuh_pkg_dir }}/wazuh-install.sh"
+      register: offline_script
+      delegate_to: localhost
+      become: no
+
+    - name: "[INSTALL] Check for OS-specific offline tarball on controller"
+      stat:
+        path: "{{ wazuh_pkg_dir }}/wazuh-offline-{{ wazuh_os_family }}.tar.gz"
+      register: offline_tar_specific
+      delegate_to: localhost
+      become: no
+
+    - name: "[INSTALL] Check for generic offline tarball on controller (fallback)"
+      stat:
+        path: "{{ wazuh_pkg_dir }}/wazuh-offline.tar.gz"
+      register: offline_tar_generic
+      delegate_to: localhost
+      become: no
+
+    - name: "[INSTALL] Check for pre-generated certificates on controller"
+      stat:
+        path: "{{ wazuh_pkg_dir }}/wazuh-install-files.tar"
+      register: offline_certs
+      delegate_to: localhost
+      become: no
+
+    - name: "[INSTALL] Resolve offline tarball path"
+      set_fact:
+        offline_tar_path: >-
+          {{
+            wazuh_pkg_dir ~ '/wazuh-offline-' ~ wazuh_os_family ~ '.tar.gz'
+            if offline_tar_specific.stat.exists
+            else (
+              wazuh_pkg_dir ~ '/wazuh-offline.tar.gz'
+              if offline_tar_generic.stat.exists
+              else ''
+            )
+          }}
+        offline_tar_name: >-
+          {{
+            'wazuh-offline-' ~ wazuh_os_family ~ '.tar.gz'
+            if offline_tar_specific.stat.exists
+            else (
+              'wazuh-offline.tar.gz'
+              if offline_tar_generic.stat.exists
+              else ''
+            )
+          }}
+
+    - name: "[INSTALL] Set installation mode facts"
+      set_fact:
+        wazuh_airgap:    "{{ offline_script.stat.exists and offline_tar_path != '' }}"
+        wazuh_has_certs: "{{ offline_certs.stat.exists }}"
+
+    - name: "[INSTALL] ABORT — script present but no matching offline tarball"
+      fail:
+        msg: |-
+          wazuh-install.sh is present in {{ wazuh_pkg_dir }} but no offline
+          tarball exists for this OS ({{ wazuh_os_family }}).
+          Expected:
+            {{ wazuh_pkg_dir }}/wazuh-offline-{{ wazuh_os_family }}.tar.gz
+            {{ wazuh_pkg_dir }}/wazuh-offline.tar.gz  (fallback)
+          Puppet was NOT touched. No changes were made.
+      when:
+        - offline_script.stat.exists
+        - offline_tar_path == ''
+        - not wazuh_installed
+
+    - name: "[INSTALL] Online — check connectivity to packages.wazuh.com"
+      shell: >-
+        curl -s --connect-timeout 10 --max-time 20
+        -o /dev/null -w "%{http_code}"
+        https://packages.wazuh.com/key/GPG-KEY-WAZUH
+      register: inet_check
+      changed_when: false
+      failed_when: false
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] ABORT — no internet and no offline packages"
+      fail:
+        msg: |-
+          No internet access on target and no offline packages in {{ wazuh_pkg_dir }}.
+          Puppet was NOT touched.
+
+          To build offline packages on an internet-connected machine:
+            curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh
+            bash wazuh-install.sh --download-packages {{ wazuh_os_family }}
+            mv wazuh-offline.tar.gz {{ wazuh_pkg_dir }}/wazuh-offline-{{ wazuh_os_family }}.tar.gz
+
+          Place the files in {{ wazuh_pkg_dir }} and re-run.
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed
+        - inet_check.stdout | default('000') != '200'
+
+    # ── Prerequisites ──────────────────────────────────────────────────────────
+    - name: "[INSTALL] Install prerequisites (Debian/Ubuntu)"
+      apt:
+        name: [curl, tar, gnupg, apt-transport-https, ca-certificates, libcap2-bin, lsof]
+        state: present
+        update_cache: yes
+      when:
+        - not wazuh_installed
+        - ansible_os_family == 'Debian'
+
+    - name: "[INSTALL] Install prerequisites (RHEL/Rocky/CentOS)"
+      yum:
+        name: [curl, tar, libcap, gnupg2, lsof]
+        state: present
+      when:
+        - not wazuh_installed
+        - ansible_os_family == 'RedHat'
+
+    # ── Workspace ──────────────────────────────────────────────────────────────
+    - name: "[INSTALL] Create isolated installation workspace"
+      file:
+        path: "{{ wazuh_work_dir }}"
+        state: directory
+        mode: '0700'
+      when: not wazuh_installed
+
+    # ── Installer script upload ────────────────────────────────────────────────
+    - name: "[INSTALL] Upload wazuh-install.sh from packages dir (airgap)"
+      copy:
+        src:  "{{ wazuh_pkg_dir }}/wazuh-install.sh"
+        dest: "{{ wazuh_work_dir }}/wazuh-install.sh"
+        mode: '0755'
+      when:
+        - wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] Download wazuh-install.sh on controller (online)"
+      get_url:
+        url:  "https://packages.wazuh.com/{{ wazuh_version }}/wazuh-install.sh"
+        dest: /tmp/wazuh-colocated-install.sh
+        mode: '0755'
+        timeout: 60
+      delegate_to: localhost
+      become: no
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] Upload wazuh-install.sh from controller (online)"
+      copy:
+        src:  /tmp/wazuh-colocated-install.sh
+        dest: "{{ wazuh_work_dir }}/wazuh-install.sh"
+        mode: '0755'
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed
+
+    # ── Offline packages ───────────────────────────────────────────────────────
+    - name: "[INSTALL] Stat offline tarball for size report"
+      stat:
+        path: "{{ offline_tar_path }}"
+        get_checksum: false
+      register: tar_stat
+      delegate_to: localhost
+      become: no
+      when:
+        - wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] Warn if offline tarball is suspiciously small (< 200 MB)"
+      debug:
+        msg: >-
+          ⚠  WARNING: {{ offline_tar_name }} is only
+          {{ (tar_stat.stat.size / 1048576) | round(1) }} MB.
+          A complete Wazuh offline archive is typically 500 MB+.
+          Proceeding — the installer will fail if packages are missing.
+      when:
+        - wazuh_airgap
+        - not wazuh_installed
+        - tar_stat.stat is defined
+        - tar_stat.stat.size < 209715200
+
+    - name: "[INSTALL] Upload offline packages tarball (this may take several minutes)"
+      copy:
+        src:  "{{ offline_tar_path }}"
+        dest: "{{ wazuh_work_dir }}/wazuh-offline.tar.gz"
+        mode: '0644'
+      when:
+        - wazuh_airgap
+        - not wazuh_installed
+
+    # ── Certificates ──────────────────────────────────────────────────────────
+    - name: "[INSTALL] Upload pre-generated certificates (if available)"
+      copy:
+        src:  "{{ wazuh_pkg_dir }}/wazuh-install-files.tar"
+        dest: "{{ wazuh_work_dir }}/wazuh-install-files.tar"
+        mode: '0644'
+      when:
+        - wazuh_has_certs
+        - not wazuh_installed
+
+    - name: "[INSTALL] Generate config.yml for certificate generation"
+      copy:
+        dest: "{{ wazuh_work_dir }}/config.yml"
+        mode: '0644'
+        content: |
+          # Wazuh single-node colocated configuration
+          # Generated by SABC Compliance Platform — {{ ansible_date_time.iso8601 }}
+          # Host: {{ ansible_fqdn }} (colocated with Puppet {{ puppet_type }})
+          nodes:
+            indexer:
+              - name: wazuh-indexer
+                ip: "{{ ansible_default_ipv4.address }}"
+            server:
+              - name: wazuh-server
+                ip: "{{ ansible_default_ipv4.address }}"
+            dashboard:
+              - name: wazuh-dashboard
+                ip: "{{ ansible_default_ipv4.address }}"
+      when:
+        - not wazuh_has_certs
+        - not wazuh_installed
+
+    - name: "[INSTALL] Generate Wazuh certificates (wazuh-install.sh -g)"
+      shell: bash wazuh-install.sh --generate-config-files 2>&1
+      args:
+        chdir: "{{ wazuh_work_dir }}"
+        executable: /bin/bash
+      register: cert_gen
+      when:
+        - not wazuh_has_certs
+        - not wazuh_installed
+
+    - name: "[INSTALL] Verify wazuh-install-files.tar was created"
+      stat:
+        path: "{{ wazuh_work_dir }}/wazuh-install-files.tar"
+      register: install_files_tar
+      when:
+        - not wazuh_has_certs
+        - not wazuh_installed
+
+    - name: "[INSTALL] ABORT — certificate generation did not produce wazuh-install-files.tar"
+      fail:
+        msg: |-
+          wazuh-install.sh --generate-config-files completed but
+          {{ wazuh_work_dir }}/wazuh-install-files.tar was not created.
+          Puppet was NOT touched.
+          Cert-gen output:
+          {{ cert_gen.stdout_lines | default([]) | join('\n') }}
+      when:
+        - not wazuh_has_certs
+        - not wazuh_installed
+        - install_files_tar is defined
+        - not install_files_tar.stat.exists
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 4b — RUN THE WAZUH INSTALLER
+    # ══════════════════════════════════════════════════════════════════════════
+    # We use ignore_errors: yes here because when Puppet Enterprise holds :443,
+    # the Wazuh dashboard service will fail to bind during the installer's
+    # post-install startup phase — causing wazuh-install.sh to exit non-zero.
+    # The manager and indexer are installed and started correctly regardless.
+    # We fix the dashboard port in Phase 5 and verify everything in Phase 6.
+
+    - name: "[INSTALL] Ensure installer log directory exists"
+      file:
+        path: /var/log/wazuh-install
+        state: directory
+        mode: '0750'
+      when: not wazuh_installed
+
+    - name: "[INSTALL] Run Wazuh installer — AIRGAP offline mode"
+      shell: |
+        bash wazuh-install.sh \
+          -a \
+          --offline-installation \
+          --ignore-check \
+          2>&1 | tee /var/log/wazuh-install/wazuh-colocated-$(date +%Y%m%dT%H%M%S).log
+      args:
+        chdir: "{{ wazuh_work_dir }}"
+        executable: /bin/bash
+      register: install_result_airgap
+      async:  2400
+      poll:   30
+      ignore_errors: yes
+      when:
+        - wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] Run Wazuh installer — ONLINE mode"
+      shell: |
+        bash wazuh-install.sh \
+          -a \
+          --ignore-check \
+          2>&1 | tee /var/log/wazuh-install/wazuh-colocated-$(date +%Y%m%dT%H%M%S).log
+      args:
+        chdir: "{{ wazuh_work_dir }}"
+        executable: /bin/bash
+      register: install_result_online
+      async:  2400
+      poll:   30
+      ignore_errors: yes
+      when:
+        - not wazuh_airgap
+        - not wazuh_installed
+
+    - name: "[INSTALL] Consolidate installer output"
+      set_fact:
+        install_stdout: >-
+          {{
+            install_result_airgap.stdout_lines  | default([])
+            + install_result_online.stdout_lines | default([])
+          }}
+      when: not wazuh_installed
+
+    - name: "[INSTALL] Show last 40 lines of installer output"
+      debug:
+        msg: "{{ install_stdout[-40:] | default([]) }}"
+      when:
+        - not wazuh_installed
+        - install_stdout is defined
+
+    # Hard check: /var/ossec/bin/wazuh-control must exist.
+    # If it doesn't, the core manager package was never installed — that is a
+    # real failure, not a dashboard port conflict (which only affects the last step).
+    - name: "[INSTALL] Verify wazuh-control binary exists post-install"
+      stat:
+        path: /var/ossec/bin/wazuh-control
+      register: wazuh_control_post
+
+    - name: "[INSTALL] ABORT — wazuh-manager package was not installed"
+      fail:
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  ABORT: Wazuh installation FAILED — core package not installed     ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+
+          /var/ossec/bin/wazuh-control does not exist after the installer ran.
+          The wazuh-manager package was NOT installed — this is not a port
+          conflict (those only affect the dashboard at the very end).
+
+          Puppet was NOT affected. Check Puppet:
+            systemctl status {{ puppet_svc_name }}
+
+          Check installer log:
+            ls -lt /var/log/wazuh-install/ | head -3
+            tail -100 /var/log/wazuh-install/<most-recent-log>
+
+          Common causes:
+            • Insufficient disk (need {{ colocated_min_disk_gb }} GB free)
+            • Package repository unreachable (online mode)
+            • Corrupted or wrong-OS offline tarball (airgap mode)
+      when:
+        - not wazuh_installed
+        - not wazuh_control_post.stat.exists
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 5 — DASHBOARD PORT REMAPPING (only when PE holds :443)
+    # The installer wrote :443 as the dashboard port into opensearch_dashboards.yml.
+    # We change it to :9443 and restart the dashboard.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[DASHBOARD] Stat wazuh-dashboard config file"
+      stat:
+        path: /etc/wazuh-dashboard/opensearch_dashboards.yml
+      register: dashboard_cfg_stat
+
+    - name: "[DASHBOARD] Remap dashboard port from :443 to :{{ wazuh_dashboard_port }}"
+      lineinfile:
+        path:   /etc/wazuh-dashboard/opensearch_dashboards.yml
+        regexp: '^\s*server\.port\s*:'
+        line:   "server.port: {{ wazuh_dashboard_port }}"
+        create: no
+      register: dashboard_port_patched
+      notify: Restart wazuh-dashboard
+      when:
+        - puppet_owns_443
+        - dashboard_cfg_stat.stat.exists
+
+    - name: "[DASHBOARD] Flush handlers — apply dashboard port change before verification"
+      meta: flush_handlers
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 6 — SERVICE MANAGEMENT
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[SERVICES] Enable and start wazuh-indexer"
+      service:
+        name:    wazuh-indexer
+        state:   started
+        enabled: yes
+      ignore_errors: yes
+
+    - name: "[SERVICES] Enable and start wazuh-manager"
+      service:
+        name:    wazuh-manager
+        state:   started
+        enabled: yes
+      ignore_errors: yes
+
+    - name: "[SERVICES] Enable and start wazuh-dashboard (port :{{ wazuh_dashboard_port }})"
+      service:
+        name:    wazuh-dashboard
+        state:   started
+        enabled: yes
+      ignore_errors: yes
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 7 — AUTHD FORCE RE-REGISTRATION
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[CONFIG] Enable authd force re-registration in ossec.conf"
+      shell: |
+        python3 << 'PYEOF'
+        import re, sys
+        path = '/var/ossec/etc/ossec.conf'
+        try:
+            content = open(path).read()
+        except FileNotFoundError:
+            print('SKIPPED: ossec.conf not found')
+            sys.exit(0)
+        force = (
+          '    <force>\n'
+          '      <enabled>yes</enabled>\n'
+          '      <key_mismatch>yes</key_mismatch>\n'
+          '      <disconnected_time enabled="yes">0s</disconnected_time>\n'
+          '      <after_registration_time>0s</after_registration_time>\n'
+          '    </force>'
+        )
+        if '<force>' in content:
+            content = re.sub(r'<force>[\s\S]*?</force>', force, content)
+        else:
+            content = content.replace('</auth>', force + '\n  </auth>', 1)
+        open(path, 'w').write(content)
+        print('changed')
+        PYEOF
+      register: authd_force_cfg
+      changed_when: "'changed' in authd_force_cfg.stdout"
+      notify: Restart wazuh-manager
+
+    - name: "[CONFIG] Flush handlers — apply ossec.conf changes"
+      meta: flush_handlers
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 8 — WORKSPACE CLEANUP
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[CLEANUP] Remove installation workspace (certs, offline archive)"
+      file:
+        path: "{{ wazuh_work_dir }}"
+        state: absent
+      ignore_errors: yes
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 9 — RE-ENABLE PUPPET-AGENT
+    # We paused it during package installation; now we restore it.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[PUPPET RESTORE] Re-enable puppet-agent (if we stopped it)"
+      service:
+        name:    puppet
+        state:   started
+        enabled: yes
+      when: we_paused_puppet_agent | default(false)
+      ignore_errors: yes
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 10 — FIREWALL
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[FIREWALL] ufw — Wazuh agent comms :{{ wazuh_manager_port }}/tcp+udp"
+      ufw:
+        rule:    allow
+        port:    "{{ wazuh_manager_port }}"
+        proto:   "{{ item }}"
+        comment: "Wazuh manager agent traffic"
+      loop: [tcp, udp]
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: "[FIREWALL] ufw — Wazuh enrollment :{{ wazuh_auth_port }}/tcp"
+      ufw:
+        rule:    allow
+        port:    "{{ wazuh_auth_port }}"
+        proto:   tcp
+        comment: "Wazuh agent enrollment (authd)"
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: "[FIREWALL] ufw — Wazuh REST API :{{ wazuh_api_port }}/tcp"
+      ufw:
+        rule:    allow
+        port:    "{{ wazuh_api_port }}"
+        proto:   tcp
+        comment: "Wazuh REST API"
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: "[FIREWALL] ufw — Wazuh dashboard :{{ wazuh_dashboard_port }}/tcp"
+      ufw:
+        rule:    allow
+        port:    "{{ wazuh_dashboard_port }}"
+        proto:   tcp
+        comment: "Wazuh dashboard HTTPS"
+      when: ansible_os_family == 'Debian'
+      ignore_errors: yes
+
+    - name: "[FIREWALL] firewalld — open all Wazuh ports (RedHat)"
+      shell: |
+        if ! command -v firewall-cmd >/dev/null 2>&1; then
+          echo "firewalld not installed, skipping"; exit 0
+        fi
+        if ! firewall-cmd --state >/dev/null 2>&1; then
+          echo "firewalld not running, skipping"; exit 0
+        fi
+        for port in \
+          {{ wazuh_manager_port }}/tcp \
+          {{ wazuh_manager_port }}/udp \
+          {{ wazuh_auth_port }}/tcp \
+          {{ wazuh_api_port }}/tcp \
+          {{ wazuh_dashboard_port }}/tcp \
+          {{ wazuh_indexer_port }}/tcp \
+          {{ wazuh_cluster_port }}/tcp; do
+          firewall-cmd --permanent --add-port="$port" && echo "opened $port"
+        done
+        firewall-cmd --reload && echo "firewall rules applied"
+      args:
+        executable: /bin/bash
+      register: firewalld_result
+      changed_when: "'firewall rules applied' in (firewalld_result.stdout | default(''))"
+      failed_when: false
+      when: ansible_os_family == 'RedHat'
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 11 — WAZUH POST-INSTALL VERIFICATION
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[VERIFY] Wait for Wazuh indexer to accept connections (:{{ wazuh_indexer_port }})"
+      wait_for:
+        host:    127.0.0.1
+        port:    "{{ wazuh_indexer_port }}"
+        timeout: 180
+        delay:   10
+        msg: >-
+          Wazuh indexer did not open :{{ wazuh_indexer_port }} within 3 minutes.
+          Check: journalctl -u wazuh-indexer -n 50 --no-pager
+
+    - name: "[VERIFY] Wait for Wazuh REST API to accept connections (:{{ wazuh_api_port }})"
+      wait_for:
+        host:    127.0.0.1
+        port:    "{{ wazuh_api_port }}"
+        timeout: 180
+        delay:   10
+        msg: >-
+          Wazuh API did not open :{{ wazuh_api_port }} within 3 minutes.
+          Check: journalctl -u wazuh-manager -n 50 --no-pager
+
+    - name: "[VERIFY] Wait for Wazuh dashboard to accept connections (:{{ wazuh_dashboard_port }})"
+      wait_for:
+        host:    127.0.0.1
+        port:    "{{ wazuh_dashboard_port }}"
+        timeout: 180
+        delay:   10
+        msg: >-
+          Wazuh dashboard did not open :{{ wazuh_dashboard_port }} within 3 minutes.
+          Check: journalctl -u wazuh-dashboard -n 50 --no-pager
+          {% if puppet_owns_443 %}
+          Note: dashboard was remapped from :443 to :{{ wazuh_dashboard_port }} (PE conflict resolution).
+          {% endif %}
+
+    - name: "[VERIFY] Probe Wazuh REST API health endpoint"
+      uri:
+        url:            "https://127.0.0.1:{{ wazuh_api_port }}/"
+        method:         GET
+        validate_certs: no
+        status_code:    [200, 401]
+        timeout:        30
+      register: api_probe
+      ignore_errors: yes
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PHASE 12 — PUPPET POST-INSTALL HEALTH GATE (CRITICAL / NON-NEGOTIABLE)
+    # Wazuh is now running. We verify Puppet is STILL healthy.
+    # Any degradation causes a hard job failure with recovery steps.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: "[PUPPET GATE POST] Check Puppet service status after Wazuh install"
+      command: systemctl is-active {{ puppet_svc_name }}
+      register: puppet_active_after
+      changed_when: false
+      failed_when: false
+
+    - name: "[PUPPET GATE POST] Verify Puppet port :{{ puppet_agent_port }} is STILL open"
+      wait_for:
+        host:    127.0.0.1
+        port:    "{{ puppet_agent_port }}"
+        timeout: 30
+        delay:   2
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  CRITICAL: PUPPET PORT :8140 NOT RESPONDING AFTER WAZUH INSTALL   ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+          Wazuh was installed but Puppet is no longer accepting connections.
+          Immediate diagnosis:
+            systemctl status {{ puppet_svc_name }}
+            journalctl -u {{ puppet_svc_name }} -n 100 --no-pager
+            dmesg | grep -i "killed process" | tail -20
+            free -h
+          If Puppet was OOM-killed by OpenSearch, stop Wazuh temporarily:
+            systemctl stop wazuh-indexer wazuh-manager wazuh-dashboard
+            systemctl start {{ puppet_svc_name }}
+          Then reduce OpenSearch JVM heap in /etc/wazuh-indexer/jvm.options.
+
+    - name: "[PUPPET GATE POST] Snapshot Puppet state after Wazuh install"
+      shell: >-
+        systemctl show {{ puppet_svc_name }}
+        --property=ActiveState,SubState,MainPID 2>/dev/null
+        || echo "SNAPSHOT_FAILED"
+      register: puppet_snapshot_after
+      changed_when: false
+
+    - name: "[PUPPET GATE POST] FAIL — Puppet service is degraded after Wazuh install"
+      fail:
+        msg: |-
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║  CRITICAL: PUPPET IS DEGRADED AFTER WAZUH INSTALLATION            ║
+          ╚══════════════════════════════════════════════════════════════════════╝
+
+          {{ puppet_svc_name }} on {{ ansible_fqdn }} is no longer active.
+
+          Before install: {{ puppet_snapshot_before.stdout | default('N/A') | replace('\n', ' ') }}
+          After install : {{ puppet_snapshot_after.stdout  | default('N/A') | replace('\n', ' ') }}
+
+          ── IMMEDIATE RECOVERY STEPS ──────────────────────────────────────────
+
+          1. Diagnose Puppet failure:
+               systemctl status {{ puppet_svc_name }}
+               journalctl -u {{ puppet_svc_name }} -n 100 --no-pager
+
+          2. Check for OOM kill (most likely cause on low-RAM servers):
+               dmesg | grep -i "killed process" | tail -20
+               free -h
+
+          3a. If OOM-killed: reduce OpenSearch heap first, then restart Puppet:
+               # Stop Wazuh to free memory:
+               systemctl stop wazuh-indexer wazuh-manager wazuh-dashboard
+               # Restart Puppet:
+               systemctl start {{ puppet_svc_name }}
+               # Edit /etc/wazuh-indexer/jvm.options — reduce -Xms and -Xmx
+               # (e.g. change 4g → 2g), then restart Wazuh:
+               systemctl start wazuh-indexer wazuh-manager wazuh-dashboard
+
+          3b. If Puppet config was corrupted (check first):
+               diff /etc/puppetlabs/puppet/puppet.conf \
+                 <(puppet config print --section main 2>/dev/null) \
+                 || echo "puppet config unreadable"
+
+          4. Confirm Puppet is serving agents before closing this incident:
+               curl -sk https://localhost:{{ puppet_agent_port }}/status/v1/simple | python3 -m json.tool
+      when: puppet_active_after.rc != 0
+
+    - name: "[PUPPET GATE POST] Puppet is healthy — gate PASSED"
+      debug:
+        msg: |-
+          ✓ PUPPET HEALTH GATE PASSED
+            Service : {{ puppet_svc_name }} — {{ puppet_active_after.stdout | default('active') }}
+            Port    : :{{ puppet_agent_port }} accepting connections
+            Puppet was NOT disrupted by the Wazuh installation.
+
+    # ── Extract admin password ─────────────────────────────────────────────────
+    - name: "[SUMMARY] Extract Wazuh dashboard admin password from installer output"
+      set_fact:
+        wazuh_admin_password: >-
+          {{
+            install_stdout
+            | select('search', 'Password:')
+            | list | last
+            | regex_replace('.*Password:\s*', '')
+            | trim
+          }}
+      when:
+        - install_stdout is defined
+        - install_stdout | select('search', 'Password:') | list | length > 0
+
+    - name: "[SUMMARY] Get Wazuh version"
+      command: /var/ossec/bin/wazuh-control info
+      register: wazuh_info
+      changed_when: false
+      failed_when: false
+
+    - name: "[SUMMARY] Get Wazuh daemon status"
+      command: /var/ossec/bin/wazuh-control status
+      register: wazuh_ctl_status
+      changed_when: false
+      failed_when: false
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FINAL SUMMARY
+    # ══════════════════════════════════════════════════════════════════════════
+
+    - name: Print colocated installation summary
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════════════╗"
+          - "║   Wazuh + Puppet Colocated — Installation Complete                 ║"
+          - "╚══════════════════════════════════════════════════════════════════════╝"
+          - ""
+          - "  Host      : {{ ansible_fqdn }} ({{ ansible_default_ipv4.address }})"
+          - "  Wazuh     : {{ wazuh_info.stdout_lines | default(['(see logs)']) | first }}"
+          - "  Puppet    : {{ puppet_type | upper }} ({{ puppet_svc_name }}) — HEALTHY ✓"
+          - "  Mode      : {{ 'AIRGAP (offline)' if wazuh_airgap else 'ONLINE' }}"
+          - "  OS        : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - ""
+          - "  ── Wazuh Access ──────────────────────────────────────────────────"
+          - "  Dashboard : https://{{ ansible_default_ipv4.address }}:{{ wazuh_dashboard_port }}"
+          - "  REST API  : https://{{ ansible_default_ipv4.address }}:{{ wazuh_api_port }}"
+          - "  API probe : HTTP {{ api_probe.status | default('—') }}"
+          - ""
+          - "  ── Wazuh Dashboard Credentials ──────────────────────────────────"
+          - "  User      : admin"
+          - "  Password  : {{ wazuh_admin_password | default('(see /var/log/wazuh-install/)') }}"
+          - ""
+          - "  ── Port Allocation on This Host ─────────────────────────────────"
+          - "  :{{ puppet_agent_port }}    Puppet agent comms (Puppet, unchanged)"
+          - "{{ '  :443     Puppet Enterprise console (PE, unchanged)' if puppet_owns_443 else '' }}"
+          - "  :{{ wazuh_dashboard_port }}   Wazuh dashboard HTTPS{{ ' (remapped from :443 — PE conflict resolved)' if puppet_owns_443 else '' }}"
+          - "  :{{ wazuh_manager_port }}   Wazuh agent comms"
+          - "  :{{ wazuh_auth_port }}   Wazuh enrollment (authd)"
+          - "  :{{ wazuh_api_port }}  Wazuh REST API"
+          - "  :{{ wazuh_indexer_port }}   OpenSearch indexer (localhost)"
+          - ""
+          - "  ── Agent Enrollment ─────────────────────────────────────────────"
+          - "  Register : {{ ansible_default_ipv4.address }}:{{ wazuh_auth_port }}/tcp"
+          - "  Traffic  : {{ ansible_default_ipv4.address }}:{{ wazuh_manager_port }}/tcp+udp"
+          - ""
+          - "  ── Wazuh Service Status ─────────────────────────────────────────"
+          - "{{ wazuh_ctl_status.stdout_lines | default([]) | join('\n') }}"
+          - "══════════════════════════════════════════════════════════════════════"
+
+
+  # ── Handlers ─────────────────────────────────────────────────────────────────
+  handlers:
+    - name: Restart wazuh-dashboard
+      service:
+        name:    wazuh-dashboard
+        state:   restarted
+      ignore_errors: yes
+
+    - name: Restart wazuh-manager
+      service:
+        name:    wazuh-manager
+        state:   restarted
+      ignore_errors: yes

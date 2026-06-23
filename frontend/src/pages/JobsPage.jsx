@@ -10,12 +10,14 @@ import CopyButton from '../components/common/CopyButton.jsx'
 // ── Service type → human-readable label ──────────────────────────────────────
 
 const SERVICE_LABELS = {
-  'puppet-master':  'Puppet Master Install',
-  'puppet-agent':   'Puppet Agent Install',
-  'wazuh-manager':  'Wazuh Manager Install',
-  'wazuh-agent':    'Wazuh Agent Install',
-  'provision':      'VM Provision (Add VM)',
-  'inspec-verify':  'Compliance Scan (InSpec)',
+  'puppet-master':         'Puppet Master Install',
+  'puppet-agent':          'Puppet Agent Install',
+  'wazuh-manager':         'Wazuh Manager Install',
+  'wazuh-agent':           'Wazuh Agent Install',
+  'provision':             'VM Provision (Add VM)',
+  'scan-verify':           'Compliance Scan',
+  'install_check_health':  'Node Health Check',
+  'detect_agents':         'Agent Detection',
 }
 
 function serviceLabel(type) {

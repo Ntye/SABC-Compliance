@@ -1,0 +1,344 @@
+{
+  "info": {
+    "_postman_id": "b1f0d2a4-1c3e-4a9b-9f21-0a1b2c3d4e5f",
+    "name": "Wazuh Server API (v4.x)",
+    "description": "Comprehensive collection for the Wazuh server REST API (default port 55000, HTTPS, JWT auth).\n\nUSAGE\n1. Select the **Wazuh** environment (Wazuh.postman_environment.json).\n2. Set `wazuhHost`, `wazuhUser`, `wazuhPassword` for your manager.\n3. Run **Security > Login (get JWT)** once. It stores the JWT in the `token` collection/environment variable; every other request inherits Bearer auth automatically.\n4. JWT lifetime defaults to 900s — re-run Login when you get HTTP 401.\n\nNOTES\n- All requests inherit `Authorization: Bearer {{token}}` from the collection auth.\n- TLS uses a self-signed cert by default: disable SSL verification in Postman settings (Settings > General > SSL certificate verification = OFF).\n- Endpoints support common query params: `pretty`, `wait_for_complete`, `offset`, `limit`, `select`, `sort`, `search`, `q` (query), `distinct`. A few are pre-filled as examples.\n- The legacy **Vulnerability detector** folder applies to Wazuh <= 4.7; from 4.8 vulnerability data is served by the Wazuh indexer, not this API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "{{wazuhProtocol}}://{{wazuhHost}}:{{wazuhApiPort}}", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "agentId", "value": "001", "type": "string" },
+    { "key": "groupId", "value": "default", "type": "string" },
+    { "key": "nodeId", "value": "node01", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Default",
+      "item": [
+        {
+          "name": "API information (GET /)",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/?pretty=true" }
+        }
+      ]
+    },
+    {
+      "name": "Security",
+      "item": [
+        {
+          "name": "Login (get JWT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// With ?raw=true the body is the bare JWT string.",
+                  "let token = pm.response.text();",
+                  "try { const j = pm.response.json(); if (j && j.data && j.data.token) token = j.data.token; } catch (e) {}",
+                  "token = (token || '').trim();",
+                  "pm.collectionVariables.set('token', token);",
+                  "pm.environment.set('token', token);",
+                  "pm.test('Got a JWT', function () { pm.expect(token.length).to.be.above(10); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "{{wazuhUser}}", "type": "string" },
+                { "key": "password", "value": "{{wazuhPassword}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/security/user/authenticate?raw=true",
+            "description": "Authenticate with basic auth and obtain a JWT. `?raw=true` returns the bare token. Token TTL defaults to 900s."
+          }
+        },
+        {
+          "name": "Login as another user (run_as)",
+          "request": {
+            "auth": { "type": "basic", "basic": [ { "key": "username", "value": "{{wazuhUser}}", "type": "string" }, { "key": "password", "value": "{{wazuhPassword}}", "type": "string" } ] },
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/security/user/authenticate/run_as?raw=true",
+            "description": "Authenticate using auth context (run_as) for authorization-context roles."
+          }
+        },
+        { "name": "Revoke all JWTs (PUT /security/user/revoke)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/security/user/revoke" } },
+        { "name": "Get current user (GET /security/users/me)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/users/me?pretty=true" } },
+        { "name": "Get current user policies (GET /security/users/me/policies)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/users/me/policies?pretty=true" } },
+        { "name": "List RBAC actions (GET /security/actions)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/actions?pretty=true" } },
+        { "name": "List RBAC resources (GET /security/resources)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/resources?pretty=true" } },
+        { "name": "List users (GET /security/users)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/users?pretty=true" } },
+        { "name": "Create user (POST /security/users)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"username\": \"newuser\",\n  \"password\": \"SecretPassw0rd.\"\n}" }, "url": "{{baseUrl}}/security/users" } },
+        { "name": "Update user (PUT /security/users/{user_id})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"password\": \"NewSecretPassw0rd.\"\n}" }, "url": "{{baseUrl}}/security/users/2" } },
+        { "name": "Delete users (DELETE /security/users)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/users?user_ids=2" } },
+        { "name": "List roles (GET /security/roles)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/roles?pretty=true" } },
+        { "name": "Create role (POST /security/roles)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"new_role\"\n}" }, "url": "{{baseUrl}}/security/roles" } },
+        { "name": "Update role (PUT /security/roles/{role_id})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"renamed_role\"\n}" }, "url": "{{baseUrl}}/security/roles/100" } },
+        { "name": "Delete roles (DELETE /security/roles)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/roles?role_ids=100" } },
+        { "name": "List rules (GET /security/rules)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/rules?pretty=true" } },
+        { "name": "Create rule (POST /security/rules)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"new_rule\",\n  \"rule\": { \"MATCH\": { \"definition\": \"value\" } }\n}" }, "url": "{{baseUrl}}/security/rules" } },
+        { "name": "Update rule (PUT /security/rules/{rule_id})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"updated_rule\",\n  \"rule\": { \"MATCH\": { \"definition\": \"value\" } }\n}" }, "url": "{{baseUrl}}/security/rules/100" } },
+        { "name": "Delete rules (DELETE /security/rules)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/rules?rule_ids=100" } },
+        { "name": "List policies (GET /security/policies)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/policies?pretty=true" } },
+        { "name": "Create policy (POST /security/policies)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"new_policy\",\n  \"policy\": {\n    \"actions\": [\"agent:read\"],\n    \"resources\": [\"agent:id:*\"],\n    \"effect\": \"allow\"\n  }\n}" }, "url": "{{baseUrl}}/security/policies" } },
+        { "name": "Update policy (PUT /security/policies/{policy_id})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"updated_policy\",\n  \"policy\": {\n    \"actions\": [\"agent:read\"],\n    \"resources\": [\"agent:id:*\"],\n    \"effect\": \"allow\"\n  }\n}" }, "url": "{{baseUrl}}/security/policies/100" } },
+        { "name": "Delete policies (DELETE /security/policies)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/policies?policy_ids=100" } },
+        { "name": "Add roles to user (POST /security/users/{user_id}/roles)", "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/security/users/2/roles?role_ids=1" } },
+        { "name": "Remove roles from user (DELETE /security/users/{user_id}/roles)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/users/2/roles?role_ids=1" } },
+        { "name": "Add policies to role (POST /security/roles/{role_id}/policies)", "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/security/roles/100/policies?policy_ids=1" } },
+        { "name": "Remove policies from role (DELETE /security/roles/{role_id}/policies)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/roles/100/policies?policy_ids=1" } },
+        { "name": "Add rules to role (POST /security/roles/{role_id}/rules)", "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/security/roles/100/rules?rule_ids=1" } },
+        { "name": "Remove rules from role (DELETE /security/roles/{role_id}/rules)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/roles/100/rules?rule_ids=1" } },
+        { "name": "Get security config (GET /security/config)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/security/config?pretty=true" } },
+        { "name": "Update security config (PUT /security/config)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"auth_token_exp_timeout\": 900,\n  \"rbac_mode\": \"white\"\n}" }, "url": "{{baseUrl}}/security/config" } },
+        { "name": "Restore default security config (DELETE /security/config)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/security/config" } }
+      ]
+    },
+    {
+      "name": "Agents",
+      "item": [
+        { "name": "List agents (GET /agents)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents?pretty=true&limit=500" } },
+        { "name": "Add agent (POST /agents)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"my-agent\",\n  \"ip\": \"any\"\n}" }, "url": "{{baseUrl}}/agents" } },
+        { "name": "Delete agents (DELETE /agents)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/agents?agents_list=001&status=all&older_than=0s" } },
+        { "name": "Add agent quick (GET /agents/insert/quick)", "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/agents/insert/quick?name=my-agent" } },
+        { "name": "Insert agent w/ key (POST /agents/insert)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"my-agent\",\n  \"ip\": \"10.0.0.10\",\n  \"id\": \"002\",\n  \"key\": \"1abcd...\"\n}" }, "url": "{{baseUrl}}/agents/insert" } },
+        { "name": "Agents without group (GET /agents/no_group)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/no_group?pretty=true" } },
+        { "name": "Outdated agents (GET /agents/outdated)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/outdated?pretty=true" } },
+        { "name": "Agents distinct values (GET /agents/stats/distinct)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/stats/distinct?fields=os.platform&pretty=true" } },
+        { "name": "Summary of agents OS (GET /agents/summary/os)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/summary/os?pretty=true" } },
+        { "name": "Summary of agents status (GET /agents/summary/status)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/summary/status?pretty=true" } },
+        { "name": "Restart agents (PUT /agents/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/restart?agents_list=001" } },
+        { "name": "Restart agents in group (PUT /agents/group/{group_id}/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/group/{{groupId}}/restart" } },
+        { "name": "Restart agents in node (PUT /agents/node/{node_id}/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/node/{{nodeId}}/restart" } },
+        { "name": "Restart single agent (PUT /agents/{agent_id}/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/restart" } },
+        { "name": "Reconnect agents (PUT /agents/reconnect)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/reconnect?agents_list=001" } },
+        { "name": "Upgrade agents (PUT /agents/upgrade)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/upgrade?agents_list=001" } },
+        { "name": "Upgrade agents custom WPK (PUT /agents/upgrade_custom)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/upgrade_custom?agents_list=001&file_path=/var/ossec/wpk.wpk&installer=upgrade.sh" } },
+        { "name": "Upgrade results (GET /agents/upgrade_result)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/upgrade_result?agents_list=001&pretty=true" } },
+        { "name": "Add agents to group (PUT /agents/group)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/group?group_id={{groupId}}&agents_list=001" } },
+        { "name": "Remove agents from groups (DELETE /agents/group)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/agents/group?agents_list=001&groups_list={{groupId}}" } },
+        { "name": "Assign agent to group (PUT /agents/{agent_id}/group/{group_id})", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/group/{{groupId}}" } },
+        { "name": "Remove agent from group (DELETE /agents/{agent_id}/group/{group_id})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/group/{{groupId}}" } },
+        { "name": "Group sync status (GET /agents/{agent_id}/group/is_sync)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/group/is_sync?pretty=true" } },
+        { "name": "Agent active config (GET /agents/{agent_id}/config/{component}/{configuration})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/config/agent/buffer?pretty=true" } },
+        { "name": "Agent component stats (GET /agents/{agent_id}/stats/{component})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/stats/logcollector?pretty=true" } },
+        { "name": "Agent daemon stats (GET /agents/{agent_id}/daemons/stats)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/agents/{{agentId}}/daemons/stats?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Groups",
+      "item": [
+        { "name": "List groups (GET /groups)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/groups?pretty=true" } },
+        { "name": "Create group (POST /groups)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"group_id\": \"my-group\"\n}" }, "url": "{{baseUrl}}/groups" } },
+        { "name": "Delete groups (DELETE /groups)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/groups?groups_list=my-group" } },
+        { "name": "Agents in group (GET /groups/{group_id}/agents)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/groups/{{groupId}}/agents?pretty=true" } },
+        { "name": "Group config (GET /groups/{group_id}/configuration)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/groups/{{groupId}}/configuration?pretty=true" } },
+        { "name": "Update group config (PUT /groups/{group_id}/configuration)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/xml" } ], "body": { "mode": "raw", "raw": "<agent_config>\n  <!-- agent.conf content -->\n</agent_config>" }, "url": "{{baseUrl}}/groups/{{groupId}}/configuration" } },
+        { "name": "Group files (GET /groups/{group_id}/files)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/groups/{{groupId}}/files?pretty=true" } },
+        { "name": "Group file content (GET /groups/{group_id}/files/{file_name})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/groups/{{groupId}}/files/agent.conf?raw=true" } }
+      ]
+    },
+    {
+      "name": "Manager",
+      "item": [
+        { "name": "Manager info (GET /manager/info)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/info?pretty=true" } },
+        { "name": "Manager status (GET /manager/status)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/status?pretty=true" } },
+        { "name": "Manager configuration (GET /manager/configuration)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/configuration?pretty=true" } },
+        { "name": "Update ossec.conf (PUT /manager/configuration)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/octet-stream" } ], "body": { "mode": "raw", "raw": "<ossec_config>\n  <!-- full ossec.conf -->\n</ossec_config>" }, "url": "{{baseUrl}}/manager/configuration" } },
+        { "name": "Active configuration (GET /manager/configuration/{component}/{configuration})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/configuration/analysis/global?pretty=true" } },
+        { "name": "Validate configuration (GET /manager/configuration/validation)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/configuration/validation?pretty=true" } },
+        { "name": "Daemon stats (GET /manager/daemons/stats)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/daemons/stats?pretty=true" } },
+        { "name": "Weekly/daily stats (GET /manager/stats)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/stats?pretty=true" } },
+        { "name": "Hourly stats (GET /manager/stats/hourly)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/stats/hourly?pretty=true" } },
+        { "name": "Weekly stats (GET /manager/stats/weekly)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/stats/weekly?pretty=true" } },
+        { "name": "analysisd stats (GET /manager/stats/analysisd)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/stats/analysisd?pretty=true" } },
+        { "name": "remoted stats (GET /manager/stats/remoted)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/stats/remoted?pretty=true" } },
+        { "name": "Manager logs (GET /manager/logs)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/logs?pretty=true&limit=500" } },
+        { "name": "Logs summary (GET /manager/logs/summary)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/logs/summary?pretty=true" } },
+        { "name": "API config (GET /manager/api/config)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/api/config?pretty=true" } },
+        { "name": "Restart manager (PUT /manager/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/manager/restart" } },
+        { "name": "Check available updates (GET /manager/version/check)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/manager/version/check?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Cluster",
+      "item": [
+        { "name": "Local node info (GET /cluster/local/info)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/local/info?pretty=true" } },
+        { "name": "Local node config (GET /cluster/local/config)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/local/config?pretty=true" } },
+        { "name": "Cluster nodes (GET /cluster/nodes)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/nodes?pretty=true" } },
+        { "name": "Cluster healthcheck (GET /cluster/healthcheck)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/healthcheck?pretty=true" } },
+        { "name": "Cluster status (GET /cluster/status)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/status?pretty=true" } },
+        { "name": "Cluster ruleset sync status (GET /cluster/ruleset/synchronization)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/ruleset/synchronization?pretty=true" } },
+        { "name": "Cluster config (GET /cluster/config)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/config?pretty=true" } },
+        { "name": "Cluster API config (GET /cluster/api/config)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/api/config?pretty=true" } },
+        { "name": "Node status (GET /cluster/{node_id}/status)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/status?pretty=true" } },
+        { "name": "Node info (GET /cluster/{node_id}/info)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/info?pretty=true" } },
+        { "name": "Node configuration (GET /cluster/{node_id}/configuration)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/configuration?pretty=true" } },
+        { "name": "Update node ossec.conf (PUT /cluster/{node_id}/configuration)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/octet-stream" } ], "body": { "mode": "raw", "raw": "<ossec_config>\n</ossec_config>" }, "url": "{{baseUrl}}/cluster/{{nodeId}}/configuration" } },
+        { "name": "Node active config (GET /cluster/{node_id}/configuration/{component}/{configuration})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/configuration/analysis/global?pretty=true" } },
+        { "name": "Node logs (GET /cluster/{node_id}/logs)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/logs?pretty=true&limit=500" } },
+        { "name": "Node logs summary (GET /cluster/{node_id}/logs/summary)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/logs/summary?pretty=true" } },
+        { "name": "Node daemon stats (GET /cluster/{node_id}/daemons/stats)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/daemons/stats?pretty=true" } },
+        { "name": "Node stats (GET /cluster/{node_id}/stats)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/stats?pretty=true" } },
+        { "name": "Node hourly stats (GET /cluster/{node_id}/stats/hourly)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/stats/hourly?pretty=true" } },
+        { "name": "Node weekly stats (GET /cluster/{node_id}/stats/weekly)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/stats/weekly?pretty=true" } },
+        { "name": "Node analysisd stats (GET /cluster/{node_id}/stats/analysisd)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/stats/analysisd?pretty=true" } },
+        { "name": "Node remoted stats (GET /cluster/{node_id}/stats/remoted)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/stats/remoted?pretty=true" } },
+        { "name": "Validate node config (GET /cluster/{node_id}/configuration/validation)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/cluster/{{nodeId}}/configuration/validation?pretty=true" } },
+        { "name": "Restart cluster nodes (PUT /cluster/restart)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/cluster/restart?nodes_list={{nodeId}}" } }
+      ]
+    },
+    {
+      "name": "Decoders",
+      "item": [
+        { "name": "List decoders (GET /decoders)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/decoders?pretty=true&limit=500" } },
+        { "name": "List decoder files (GET /decoders/files)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/decoders/files?pretty=true" } },
+        { "name": "Parent decoders (GET /decoders/parents)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/decoders/parents?pretty=true" } },
+        { "name": "Get decoder file content (GET /decoders/files/{filename})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/decoders/files/0005-wazuh_decoders.xml?raw=true" } },
+        { "name": "Upload/replace decoder file (PUT /decoders/files/{filename})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/octet-stream" } ], "body": { "mode": "raw", "raw": "<decoder name=\"custom\">\n  <prematch>...</prematch>\n</decoder>" }, "url": "{{baseUrl}}/decoders/files/custom_decoder.xml?overwrite=true" } },
+        { "name": "Delete decoder file (DELETE /decoders/files/{filename})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/decoders/files/custom_decoder.xml" } },
+        { "name": "Download decoder file (GET /decoders/files/{filename}/download)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/decoders/files/0005-wazuh_decoders.xml/download" } }
+      ]
+    },
+    {
+      "name": "Rules",
+      "item": [
+        { "name": "List rules (GET /rules)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules?pretty=true&limit=500" } },
+        { "name": "List rule groups (GET /rules/groups)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules/groups?pretty=true" } },
+        { "name": "Rules by requirement (GET /rules/requirement/{requirement})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules/requirement/pci_dss?pretty=true" } },
+        { "name": "List rule files (GET /rules/files)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules/files?pretty=true" } },
+        { "name": "Get rule file content (GET /rules/files/{filename})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules/files/0010-rules_config.xml?raw=true" } },
+        { "name": "Upload/replace rule file (PUT /rules/files/{filename})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/octet-stream" } ], "body": { "mode": "raw", "raw": "<group name=\"custom\">\n  <rule id=\"100001\" level=\"5\">\n    <description>Custom rule</description>\n  </rule>\n</group>" }, "url": "{{baseUrl}}/rules/files/custom_rules.xml?overwrite=true" } },
+        { "name": "Delete rule file (DELETE /rules/files/{filename})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/rules/files/custom_rules.xml" } },
+        { "name": "Download rule file (GET /rules/files/{filename}/download)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rules/files/0010-rules_config.xml/download" } }
+      ]
+    },
+    {
+      "name": "CDB Lists",
+      "item": [
+        { "name": "List CDB lists (GET /lists)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/lists?pretty=true" } },
+        { "name": "List CDB list files (GET /lists/files)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/lists/files?pretty=true" } },
+        { "name": "Get CDB list content (GET /lists/files/{filename})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/lists/files/audit-keys?raw=true" } },
+        { "name": "Upload/replace CDB list (PUT /lists/files/{filename})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/octet-stream" } ], "body": { "mode": "raw", "raw": "key1:value1\nkey2:value2" }, "url": "{{baseUrl}}/lists/files/custom-list?overwrite=true" } },
+        { "name": "Delete CDB list (DELETE /lists/files/{filename})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/lists/files/custom-list" } },
+        { "name": "Download CDB list (GET /lists/files/{filename}/download)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/lists/files/audit-keys/download" } }
+      ]
+    },
+    {
+      "name": "SCA (Security Configuration Assessment)",
+      "item": [
+        { "name": "Agent SCA policies (GET /sca/{agent_id})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/sca/{{agentId}}?pretty=true" } },
+        { "name": "Policy checks (GET /sca/{agent_id}/checks/{policy_id})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/sca/{{agentId}}/checks/cis_debian10?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Syscheck (FIM)",
+      "item": [
+        { "name": "Run syscheck scan (PUT /syscheck)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/syscheck?agents_list={{agentId}}" } },
+        { "name": "Agent syscheck results (GET /syscheck/{agent_id})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscheck/{{agentId}}?pretty=true&limit=500" } },
+        { "name": "Clear syscheck DB (DELETE /syscheck/{agent_id})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/syscheck/{{agentId}}" } },
+        { "name": "Last syscheck scan (GET /syscheck/{agent_id}/last_scan)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscheck/{{agentId}}/last_scan?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Rootcheck",
+      "item": [
+        { "name": "Run rootcheck scan (PUT /rootcheck)", "request": { "method": "PUT", "header": [], "url": "{{baseUrl}}/rootcheck?agents_list={{agentId}}" } },
+        { "name": "Agent rootcheck results (GET /rootcheck/{agent_id})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rootcheck/{{agentId}}?pretty=true" } },
+        { "name": "Clear rootcheck DB (DELETE /rootcheck/{agent_id})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/rootcheck/{{agentId}}" } },
+        { "name": "Last rootcheck scan (GET /rootcheck/{agent_id}/last_scan)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/rootcheck/{{agentId}}/last_scan?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Syscollector (Inventory)",
+      "item": [
+        { "name": "Hardware (GET /syscollector/{agent_id}/hardware)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/hardware?pretty=true" } },
+        { "name": "OS (GET /syscollector/{agent_id}/os)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/os?pretty=true" } },
+        { "name": "Packages (GET /syscollector/{agent_id}/packages)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/packages?pretty=true&limit=500" } },
+        { "name": "Hotfixes (GET /syscollector/{agent_id}/hotfixes)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/hotfixes?pretty=true" } },
+        { "name": "Processes (GET /syscollector/{agent_id}/processes)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/processes?pretty=true&limit=500" } },
+        { "name": "Ports (GET /syscollector/{agent_id}/ports)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/ports?pretty=true" } },
+        { "name": "Network interfaces (GET /syscollector/{agent_id}/netiface)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/netiface?pretty=true" } },
+        { "name": "Network addresses (GET /syscollector/{agent_id}/netaddr)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/netaddr?pretty=true" } },
+        { "name": "Network protocols (GET /syscollector/{agent_id}/netproto)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/syscollector/{{agentId}}/netproto?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Active Response",
+      "item": [
+        { "name": "Run active response command (PUT /active-response)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"command\": \"restart-wazuh0\",\n  \"arguments\": [],\n  \"alert\": {}\n}" }, "url": "{{baseUrl}}/active-response?agents_list={{agentId}}" } }
+      ]
+    },
+    {
+      "name": "MITRE ATT&CK",
+      "item": [
+        { "name": "Metadata (GET /mitre/metadata)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/metadata?pretty=true" } },
+        { "name": "Groups (GET /mitre/groups)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/groups?pretty=true" } },
+        { "name": "Mitigations (GET /mitre/mitigations)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/mitigations?pretty=true" } },
+        { "name": "References (GET /mitre/references)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/references?pretty=true" } },
+        { "name": "Software (GET /mitre/software)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/software?pretty=true" } },
+        { "name": "Tactics (GET /mitre/tactics)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/tactics?pretty=true" } },
+        { "name": "Techniques (GET /mitre/techniques)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/mitre/techniques?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "item": [
+        { "name": "Tasks status (GET /tasks/status)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/tasks/status?pretty=true" } }
+      ]
+    },
+    {
+      "name": "CIS-CAT",
+      "item": [
+        { "name": "Agent CIS-CAT results (GET /ciscat/{agent_id}/results)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/ciscat/{{agentId}}/results?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Logtest",
+      "item": [
+        { "name": "Run logtest (PUT /logtest)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"log_format\": \"syslog\",\n  \"location\": \"stdin\",\n  \"event\": \"Dec 10 01:02:03 host sshd[1234]: Failed password for root from 10.0.0.1 port 22 ssh2\"\n}" }, "url": "{{baseUrl}}/logtest" } },
+        { "name": "End logtest session (DELETE /logtest/sessions/{token})", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/logtest/sessions/{{logtestToken}}" } }
+      ]
+    },
+    {
+      "name": "Vulnerability detector (legacy <= 4.7)",
+      "item": [
+        { "name": "Agent vulnerabilities (GET /vulnerability/{agent_id})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/vulnerability/{{agentId}}?pretty=true&limit=500" } },
+        { "name": "Vulnerability field summary (GET /vulnerability/{agent_id}/summary/{field})", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/vulnerability/{{agentId}}/summary/severity?pretty=true" } },
+        { "name": "Last vulnerability scan (GET /vulnerability/{agent_id}/last_scan)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/vulnerability/{{agentId}}/last_scan?pretty=true" } }
+      ]
+    },
+    {
+      "name": "Experimental",
+      "item": [
+        { "name": "All agents CIS-CAT results (GET /experimental/ciscat/results)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/ciscat/results?pretty=true" } },
+        { "name": "All agents hardware (GET /experimental/syscollector/hardware)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/hardware?pretty=true" } },
+        { "name": "All agents OS (GET /experimental/syscollector/os)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/os?pretty=true" } },
+        { "name": "All agents packages (GET /experimental/syscollector/packages)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/packages?pretty=true&limit=500" } },
+        { "name": "All agents hotfixes (GET /experimental/syscollector/hotfixes)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/hotfixes?pretty=true" } },
+        { "name": "All agents processes (GET /experimental/syscollector/processes)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/processes?pretty=true&limit=500" } },
+        { "name": "All agents ports (GET /experimental/syscollector/ports)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/ports?pretty=true" } },
+        { "name": "All agents netiface (GET /experimental/syscollector/netiface)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/netiface?pretty=true" } },
+        { "name": "All agents netaddr (GET /experimental/syscollector/netaddr)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/netaddr?pretty=true" } },
+        { "name": "All agents netproto (GET /experimental/syscollector/netproto)", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/experimental/syscollector/netproto?pretty=true" } },
+        { "name": "Clear all syscheck DBs (DELETE /experimental/syscheck)", "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/experimental/syscheck?agents_list=all" } }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        { "name": "Ingest events (POST /events)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"events\": [\n    \"Custom event log line 1\",\n    \"Custom event log line 2\"\n  ]\n}" }, "url": "{{baseUrl}}/events" } }
+      ]
+    }
+  ]
+}

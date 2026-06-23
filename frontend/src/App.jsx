@@ -8,10 +8,17 @@ import NodeDetailPage from './pages/NodeDetailPage.jsx'
 import AddVmPage from './pages/AddVmPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import CompliancePage from './pages/CompliancePage.jsx'
-import PuppetRulesPage from './pages/PuppetRulesPage.jsx'
+import NodeCompliancePage from './pages/NodeCompliancePage.jsx'
+import ProfilesPage from './pages/ProfilesPage.jsx'
+import ProfileDetailPage from './pages/ProfileDetailPage.jsx'
 import ApiKeysPage from './pages/ApiKeysPage.jsx'
 import AuditLogPage from './pages/AuditLogPage.jsx'
 import InfrastructurePage from './pages/InfrastructurePage.jsx'
+import UsersPage from './pages/UsersPage.jsx'
+import UserGroupsPage from './pages/UserGroupsPage.jsx'
+import PermissionsPage from './pages/PermissionsPage.jsx'
+import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
+import TlsCertificatePage from './pages/TlsCertificatePage.jsx'
 
 export default function App() {
   return (
@@ -28,9 +35,20 @@ export default function App() {
             <Route path="/infrastructure" element={<InfrastructurePage />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/compliance" element={<CompliancePage />} />
-            <Route path="/rules" element={<PuppetRulesPage />} />
+            <Route path="/compliance/:id" element={<NodeCompliancePage />} />
+            <Route path="/profiles" element={<ProfilesPage />} />
+            <Route path="/profiles/:id" element={<ProfileDetailPage />} />
+            <Route path="/rules" element={<Navigate to="/profiles" replace />} />
             <Route path="/keys" element={<ApiKeysPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
+            {/* IAM routes */}
+            <Route path="/iam/users" element={<UsersPage />} />
+            <Route path="/iam/groups" element={<UserGroupsPage />} />
+            <Route path="/iam/keys" element={<ApiKeysPage />} />
+            <Route path="/iam/permissions" element={<PermissionsPage />} />
+            <Route path="/settings/tls" element={<TlsCertificatePage />} />
+            {/* Node Groups */}
+            <Route path="/node-groups" element={<NodeGroupsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Routes>

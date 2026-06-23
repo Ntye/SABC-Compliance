@@ -1,13 +1,40 @@
 from __future__ import annotations
+import asyncio
+import json
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 
-from core.domain.entities import ComplianceReport, Node, RemediationEvent
+from core.domain.entities import (
+    CIS_BENCHMARK_PROFILE_ID, INTERNAL_PROFILE_ID,
+    ComplianceReport, Node, RemediationEvent,
+)
 from core.domain.interfaces import (
     IComplianceRepository, INodeRepository, ISSHClient,
 )
 from core.errors import NotFoundError, ValidationError
+
+
+# CIS Benchmark top-level sections, used to group controls in the UI.
+_CIS_SECTIONS = {
+    "1": "Initial Setup",
+    "2": "Services",
+    "3": "Network Configuration",
+    "4": "Logging & Auditing",
+    "5": "Access, Authentication & Authorization",
+    "6": "System Maintenance",
+}
+
+
+def _cis_section(cis_id: str | None) -> str:
+    """Map a CIS control id like '5.2.8' to a section label '5 · Access…'."""
+    if not cis_id:
+        return "Other"
+    top = str(cis_id).split(".")[0].strip()
+    name = _CIS_SECTIONS.get(top)
+    return f"{top} · {name}" if name else "Other"
 
 
 async def _resolve_node(repo: INodeRepository, id_or_hostname: str) -> Node:
@@ -17,44 +44,6 @@ async def _resolve_node(repo: INodeRepository, id_or_hostname: str) -> Node:
     if not node:
         raise NotFoundError(f"Node '{id_or_hostname}' not found")
     return node
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CIS spot-checks
-#
-# A small, OS-agnostic set of CIS-aligned checks executed over SSH in a single
-# shell invocation. Each check prints a line:  <control_id>|<PASS|FAIL>|<title>
-# This gives real, immediately-useful compliance data without requiring the
-# Puppet or Wazuh APIs. The catalogue is intentionally short — it is the
-# "start displaying things" baseline and will be expanded later.
-# ──────────────────────────────────────────────────────────────────────────────
-
-_CIS_SCRIPT = r"""
-emit() { echo "$1|$2|$3"; }
-chk() { if eval "$2" >/dev/null 2>&1; then emit "$1" PASS "$3"; else emit "$1" FAIL "$3"; fi; }
-
-# 5.2.x — SSH hardening
-chk "5.2.8"  "grep -Eqi '^[[:space:]]*PermitRootLogin[[:space:]]+no' /etc/ssh/sshd_config" "Disable SSH root login"
-chk "5.2.10" "grep -Eqi '^[[:space:]]*PermitEmptyPasswords[[:space:]]+no' /etc/ssh/sshd_config" "Disallow SSH empty passwords"
-chk "5.2.4"  "grep -Eqi '^[[:space:]]*X11Forwarding[[:space:]]+no' /etc/ssh/sshd_config" "Disable SSH X11 forwarding"
-
-# 1.x — filesystem / kernel
-chk "1.5.1"  "test \"$(sysctl -n kernel.randomize_va_space 2>/dev/null)\" = 2" "Enable ASLR (kernel.randomize_va_space=2)"
-chk "6.1.2"  "test \"$(stat -c %a /etc/passwd 2>/dev/null)\" = 644" "/etc/passwd permissions are 644"
-chk "6.1.3"  "stat -c %a /etc/shadow 2>/dev/null | grep -Eq '^(0|400|600|640)$'" "/etc/shadow permissions are restrictive"
-
-# 3.5 / 3.4 — host firewall present and active
-chk "3.5.1"  "{ command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; } || { systemctl is-active firewalld >/dev/null 2>&1; } || { command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q .; }" "Host firewall is active"
-
-# 4.1 — auditing
-chk "4.1.1"  "systemctl is-active auditd >/dev/null 2>&1 || command -v auditctl >/dev/null 2>&1" "auditd is installed and running"
-
-# 5.4 — password policy (login.defs)
-chk "5.4.1"  "grep -Eq '^PASS_MAX_DAYS[[:space:]]+([0-9]|[0-8][0-9]|9[0-9]|[1-9][0-9][0-9])$' /etc/login.defs" "Password expiration is configured"
-
-# 2.x — unwanted services
-chk "2.2.1"  "! systemctl is-enabled telnet.socket >/dev/null 2>&1 && ! command -v telnetd >/dev/null 2>&1" "Telnet server is not installed"
-"""
 
 
 class GetComplianceSummaryUseCase:
@@ -87,12 +76,14 @@ class GetNodeComplianceUseCase:
             "status": node.status,
             "puppet_enrolled": node.puppet_enrolled,
             "wazuh_enrolled": node.wazuh_enrolled,
-            "inspec_installed": node.inspec_installed,
+            "scan_ready": node.scan_ready,
             "reports": [
                 {
                     "id": r.id, "source": r.source, "framework": r.framework,
                     "score": r.score, "passed_checks": r.passed_checks,
                     "failed_checks": r.failed_checks, "total_checks": r.total_checks,
+                    "skipped_checks": r.skipped_checks, "profile": r.profile,
+                    "duration": r.duration, "severity_counts": r.severity_counts,
                     "details": r.details,
                     "collected_at": r.collected_at.isoformat(),
                 }
@@ -112,43 +103,90 @@ class GetNodeComplianceUseCase:
 
 class CollectNodeComplianceUseCase:
     """
-    Collect real compliance data from an enrolled node over SSH:
-      - CIS spot-checks (always available once the node is reachable)
-      - Puppet last-run summary (when the Puppet agent is enrolled)
+    Run a structured compliance scan against an enrolled node using CINC Auditor.
 
-    Gated on the node being Puppet/Wazuh enrolled so the UI only starts showing
-    data once the node is part of the managed infrastructure.
+    The bundled CIS Benchmark profile is executed from the controller over an
+    agentless ssh:// transport — every control carries an impact score, a
+    severity, and a CIS section reference. There is no shell fallback: this is
+    a complete scan or a clear, actionable error. When ``auto_install`` is set
+    and the scan engine is missing from the controller, it is installed on demand
+    so the operator can scan directly from the compliance page.
+
+    The Puppet last-run summary is collected as a supplementary report when the
+    Puppet agent is enrolled.
     """
 
-    def __init__(self, node_repo: INodeRepository, compliance_repo: IComplianceRepository, ssh: ISSHClient) -> None:
+    SCAN_BIN = "/usr/bin/cinc-auditor"
+
+    def __init__(
+        self,
+        node_repo: INodeRepository,
+        compliance_repo: IComplianceRepository,
+        ssh: ISSHClient,
+        default_ssh_key_path: str = "",
+        profile_path: str = "",
+        scan_bin: str | None = None,
+        scan_ctrl=None,
+    ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
         self._ssh = ssh
+        self._default_key = default_ssh_key_path
+        self._profile_path = profile_path
+        self._scan_bin = scan_bin or self.SCAN_BIN
+        # ScanEngineUseCase — used to install the scan engine on demand.
+        self._scan_engine_ctrl = scan_ctrl
 
-    async def execute(self, id_or_hostname: str) -> dict:
+    def _scan_engine_available(self) -> bool:
+        return bool(
+            os.path.isfile(self._scan_bin) or shutil.which("cinc-auditor")
+        )
+
+    async def execute(
+        self, id_or_hostname: str, auto_install: bool = True, profile_id: str | None = None
+    ) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
-        if not (node.puppet_enrolled or node.wazuh_enrolled):
-            raise ValidationError(
-                "Node is not enrolled with Puppet or Wazuh yet — enroll it from the "
-                "Infrastructure page before collecting compliance data."
-            )
+        # Ensure the scan engine is present on the controller; install on demand
+        # so the operator can scan directly from the compliance page.
+        if not self._scan_engine_available():
+            if auto_install and self._scan_engine_ctrl is not None:
+                install = await self._scan_engine_ctrl.install_on_controller()
+                if not (install.get("installed") or install.get("success")):
+                    raise ValidationError(
+                        "CINC Auditor is not installed on the platform and automatic "
+                        "installation failed: " + (install.get("error") or "unknown error")
+                    )
+            else:
+                raise ValidationError(
+                    "CINC Auditor is not installed on the platform. Install it from the "
+                    "compliance page to run compliance scans."
+                )
 
         collected: list[dict] = []
 
-        cis_report = await self._collect_cis(node)
-        if cis_report:
-            await self._repo.save_report(cis_report)
-            collected.append(self._summarise(cis_report))
+        # Complete, structured compliance scan — no shell fallback.
+        scan_report, scan_reason = await self._collect_scan(node)
+        if not scan_report:
+            raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
 
+        self._apply_profile(scan_report, profile_id)
+        await self._repo.save_report(scan_report)
+        collected.append(self._summarise(scan_report))
+        if not node.scan_ready:
+            node.scan_ready = True
+            node.updated_at = datetime.utcnow()
+            try:
+                await self._nodes.update(node)
+            except Exception:
+                pass
+
+        # Supplementary Puppet enforcement summary.
         if node.puppet_enrolled:
             puppet_report = await self._collect_puppet(node)
             if puppet_report:
                 await self._repo.save_report(puppet_report)
                 collected.append(self._summarise(puppet_report))
-
-        if not collected:
-            raise ValidationError("No compliance data could be collected from the node over SSH.")
 
         return {"node_id": node.id, "collected": collected}
 
@@ -156,45 +194,232 @@ class CollectNodeComplianceUseCase:
         return {
             "id": r.id, "source": r.source, "framework": r.framework, "score": r.score,
             "passed_checks": r.passed_checks, "failed_checks": r.failed_checks,
-            "total_checks": r.total_checks, "collected_at": r.collected_at.isoformat(),
+            "total_checks": r.total_checks, "skipped_checks": r.skipped_checks,
+            "profile": r.profile, "duration": r.duration,
+            "severity_counts": r.severity_counts,
+            "collected_at": r.collected_at.isoformat(),
         }
 
-    async def _collect_cis(self, node: Node) -> ComplianceReport | None:
-        try:
-            stdout, _, _ = await self._ssh.run_command(
-                node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path, _CIS_SCRIPT
+    @staticmethod
+    def _apply_profile(report: ComplianceReport, profile_id: str | None) -> None:
+        """Override report profile/framework labels based on the operator's selection."""
+        if profile_id == CIS_BENCHMARK_PROFILE_ID:
+            report.profile = "CIS Benchmark"
+            report.framework = "cis"
+        elif profile_id == INTERNAL_PROFILE_ID:
+            report.profile = "SABC Linux Baseline"
+            report.framework = "internal"
+
+    # ── Compliance scan ────────────────────────────────────────────────────────
+
+    async def _collect_scan(self, node: Node) -> tuple[ComplianceReport | None, str | None]:
+        """Run the bundled CIS profile against the node and parse JSON output.
+
+        Returns ``(report, None)`` on success, or ``(None, reason)`` when the
+        scan is skipped or fails so the caller can surface a clear error.
+        """
+        if not self._profile_path or not os.path.isdir(self._profile_path):
+            return None, (
+                f"Scan profile not found at {self._profile_path or '(unset)'} — "
+                "the bundled profile is missing from the deployment."
             )
+
+        # Resolve the scan binary; the configured path may differ per install.
+        scan_bin = self._scan_bin
+        if not os.path.isfile(scan_bin):
+            scan_bin = shutil.which("cinc-auditor") or scan_bin
+        if not (os.path.isfile(scan_bin) or shutil.which("cinc-auditor")):
+            return None, (
+                "CINC Auditor is not installed on the platform — install it from the "
+                "Infrastructure page to enable compliance scans."
+            )
+
+        key = node.ssh_key_path or self._default_key
+        target = f"ssh://{node.ssh_user}@{node.ip}"
+        args = [
+            scan_bin, "exec", self._profile_path,
+            "-t", target,
+            "-i", key,
+            "--port", str(node.ssh_port),
+            "--reporter", "json",
+            "--no-color", "--no-distinct-exit",
+        ]
+        # Most controls need root to read /etc/shadow, auditd state, etc.
+        if (node.ssh_user or "").strip() != "root":
+            args.append("--sudo")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except FileNotFoundError:
+            return None, "CINC Auditor binary could not be executed on the platform."
+        except asyncio.TimeoutError:
+            return None, "Compliance scan timed out after 240s (node slow or unreachable)."
+        except Exception as exc:
+            return None, f"Compliance scan failed to start: {exc}"
+
+        raw = (stdout or b"").decode(errors="replace").strip()
+        data = self._extract_json(raw)
+        if not data:
+            err = (stderr or b"").decode(errors="replace").strip()
+            # An unreachable node is the most common cause: surface it clearly
+            # instead of dumping the raw "no parseable output" engine log.
+            transport = self._ssh_transport_error(f"{err}\n{raw}")
+            if transport:
+                return None, (
+                    f"Cannot establish an SSH connection to {node.ip}:{node.ssh_port} "
+                    f"(user '{node.ssh_user}'): {transport}. Verify the node is online, "
+                    "the SSH service is running on that port, and the platform's SSH key "
+                    "is authorized for this user."
+                )
+            snippet = (err or raw or "no output")[-400:]
+            return None, f"Scan produced no parseable output: {snippet}"
+
+        report = self._scan_to_report(node, data)
+        if not report:
+            return None, "Compliance scan returned no controls."
+        return report, None
+
+    @staticmethod
+    def _ssh_transport_error(text: str) -> str | None:
+        """Detect an SSH transport failure in the scan engine output.
+
+        CINC Auditor reports an unreachable node in its train ssh backend log
+        (e.g. ``Errno::ECONNREFUSED``, ``connection failed``, ``SSH session
+        could not be established``) rather than as JSON. Map those signatures to
+        a short, human-readable cause so the operator gets an actionable error.
+        """
+        if not text:
+            return None
+        low = text.lower()
+        causes = [
+            ("econnrefused", "connection refused"),
+            ("connection refused", "connection refused"),
+            ("etimedout", "connection timed out"),
+            ("connection timed out", "connection timed out"),
+            ("ehostunreach", "host unreachable"),
+            ("no route to host", "host unreachable"),
+            ("authentication failed", "authentication failed"),
+            ("permission denied", "authentication failed (permission denied)"),
+            ("host key verification failed", "host key verification failed"),
+        ]
+        for needle, label in causes:
+            if needle in low:
+                return label
+        # Generic train/ssh transport failure with no specific errno.
+        if (
+            "can't connect to 'ssh' backend" in low
+            or "ssh session could not be established" in low
+            or "[ssh] connection failed" in low
+        ):
+            return "SSH session could not be established"
+        return None
+
+    @staticmethod
+    def _extract_json(raw: str) -> dict | None:
+        """The scan engine may emit a license/info banner before the JSON document."""
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            return json.loads(raw[start:end + 1])
         except Exception:
             return None
 
+    @staticmethod
+    def _severity(impact: float) -> str:
+        if impact >= 0.7:
+            return "high"
+        if impact >= 0.4:
+            return "medium"
+        if impact > 0:
+            return "low"
+        return "info"
+
+    def _scan_to_report(self, node: Node, data: dict) -> ComplianceReport | None:
         details: list[dict] = []
-        passed = failed = 0
-        for line in stdout.splitlines():
-            parts = line.strip().split("|", 2)
-            if len(parts) != 3:
-                continue
-            control_id, status, title = parts
-            ok = status.upper() == "PASS"
-            if ok:
-                passed += 1
-            elif status.upper() == "FAIL":
-                failed += 1
-            else:
-                continue
-            details.append({"control_id": control_id, "title": title, "status": "pass" if ok else "fail"})
+        passed = failed = skipped = 0
+
+        profile_name: str | None = None
+        for prof in data.get("profiles") or []:
+            profile_name = profile_name or prof.get("name")
+            for ctrl in prof.get("controls") or []:
+                results = ctrl.get("results") or []
+                statuses = [r.get("status") for r in results]
+                if not statuses or all(s == "skipped" for s in statuses):
+                    status = "skip"
+                elif "failed" in statuses:
+                    status = "fail"
+                else:
+                    status = "pass"
+
+                impact = float(ctrl.get("impact") or 0)
+                severity = self._severity(impact)
+
+                message = ""
+                for r in results:
+                    if r.get("status") == "failed":
+                        message = (r.get("message") or r.get("code_desc") or "").strip()
+                        break
+                if not message and status == "skip" and results:
+                    message = (results[0].get("skip_message") or results[0].get("message") or "").strip()
+
+                tags = ctrl.get("tags") or {}
+                # Only extract the CIS framework tag; all other framework tags are ignored.
+                frameworks = {
+                    k: v
+                    for k, v in tags.items()
+                    if k == "cis" and v
+                }
+
+                if status == "pass":
+                    passed += 1
+                elif status == "fail":
+                    failed += 1
+                else:
+                    skipped += 1
+
+                details.append({
+                    "control_id": ctrl.get("id"),
+                    "title": (ctrl.get("title") or ctrl.get("id") or "").strip(),
+                    "status": status,
+                    "severity": severity,
+                    "impact": impact,
+                    "frameworks": frameworks,
+                    "section": _cis_section(frameworks.get("cis")),
+                    "desc": (ctrl.get("desc") or "").strip()[:600],
+                    "message": message[:600],
+                })
 
         if not details:
             return None
 
+        stats = data.get("statistics") or {}
+        duration = stats.get("duration") if isinstance(stats, dict) else None
+
         return ComplianceReport(
             id=str(uuid.uuid4()),
             node_id=node.id,
-            source="cis-ssh",
+            source="scan",
             framework="cis",
             passed_checks=passed,
             failed_checks=failed,
             total_checks=passed + failed,
+            skipped_checks=skipped,
             details=details,
+            profile=profile_name or "sabc-linux-baseline",
+            duration=float(duration) if isinstance(duration, (int, float)) else None,
             collected_at=datetime.utcnow(),
         )
 

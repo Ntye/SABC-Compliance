@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from jose import jwt, JWTError
 
-from core.domain.entities import ApiKey, User, AuthPrincipal
-from core.domain.interfaces import IApiKeyRepository, IUserRepository
+from core.domain.entities import ApiKey, User, UserGroup, AuthPrincipal
+from core.domain.interfaces import IApiKeyRepository, IUserRepository, IUserGroupRepository
 from core.errors import (
     ConflictError, UnauthorizedError, ForbiddenError,
     ValidationError, NotFoundError,
@@ -114,8 +114,9 @@ class RevokeApiKeyUseCase:
 # ── Username / Password (JWT) auth ──────────────────────────────────────────
 
 class InitAdminUserUseCase:
-    def __init__(self, repo: IUserRepository) -> None:
+    def __init__(self, repo: IUserRepository, group_repo=None) -> None:
         self._repo = repo
+        self._group_repo = group_repo
 
     async def execute(self) -> dict | None:
         if await self._repo.count_active() > 0:
@@ -125,11 +126,15 @@ class InitAdminUserUseCase:
             id=str(uuid.uuid4()),
             username="admin",
             password_hash=_hash_password(password),
-            role="admin",
+            role="admin",  # kept for DB compat
             created_at=datetime.utcnow(),
         )
         await self._repo.save(user)
-        return {"username": "admin", "password": password, "role": "admin"}
+        if self._group_repo:
+            admin_group = await self._group_repo.find_by_name("admin")
+            if admin_group:
+                await self._group_repo.add_member(admin_group.id, user.id)
+        return {"username": "admin", "password": password}
 
 
 class LoginUseCase:
@@ -137,12 +142,14 @@ class LoginUseCase:
         self,
         user_repo: IUserRepository,
         api_key_repo: IApiKeyRepository,
+        group_repo: IUserGroupRepository,
         jwt_secret: str,
         jwt_algorithm: str,
         jwt_expire_hours: int,
     ) -> None:
         self._repo = user_repo
         self._api_key_repo = api_key_repo
+        self._group_repo = group_repo
         self._secret = jwt_secret
         self._algorithm = jwt_algorithm
         self._expire_hours = jwt_expire_hours
@@ -155,21 +162,48 @@ class LoginUseCase:
             raise UnauthorizedError("Invalid credentials")
         user.last_login = datetime.utcnow()
         await self._repo.update(user)
+
+        # Aggregate permissions from all groups the user belongs to
+        all_groups = await self._group_repo.find_all()
+        perms: set[str] = set()
+        for g in all_groups:
+            if user.id in g.member_ids:
+                perms.update(g.permissions)
+        perms_list = sorted(perms)
+
+        # Derive effective role for backward compat
+        ADMIN_PERMS = {"manage_users", "manage_groups", "manage_node_groups"}
+        OPERATOR_PERMS = {
+            "ping_nodes", "register_nodes", "run_playbooks", "install_agents",
+            "collect_compliance", "trigger_remediation", "cancel_jobs", "manage_api_keys",
+        }
+        if perms & ADMIN_PERMS:
+            eff_role = "admin"
+        elif perms & OPERATOR_PERMS:
+            eff_role = "operator"
+        else:
+            eff_role = "readonly"
+
         expire = datetime.utcnow() + timedelta(hours=self._expire_hours)
         token = jwt.encode(
-            {"sub": user.id, "username": user.username, "role": user.role, "exp": expire},
+            {
+                "sub": user.id,
+                "username": user.username,
+                "permissions": perms_list,
+                "role": eff_role,
+                "exp": expire,
+            },
             self._secret,
             algorithm=self._algorithm,
         )
         # Revoke any previous personal key for this user, then issue a fresh one.
-        # The raw key is returned once so the frontend can auto-apply it.
         await self._api_key_repo.revoke_by_user_id(user.id)
         raw = _gen_key()
         personal_key = ApiKey(
             id=str(uuid.uuid4()),
             name=f"personal-{user.username}",
             key_hash=_hash_key(raw),
-            role=user.role,
+            role=eff_role,
             created_at=datetime.utcnow(),
             user_id=user.id,
         )
@@ -177,7 +211,8 @@ class LoginUseCase:
         return {
             "access_token": token,
             "token_type": "bearer",
-            "role": user.role,
+            "role": eff_role,
+            "permissions": perms_list,
             "username": user.username,
             "api_key": raw,
         }
@@ -200,7 +235,15 @@ class DecodeJwtUseCase:
         user = await self._repo.find_by_id(user_id)
         if not user or not user.active:
             raise UnauthorizedError("User not found or inactive")
-        return AuthPrincipal(id=user.id, name=user.username, role=user.role, source="jwt")
+        permissions = payload.get("permissions", [])
+        role = payload.get("role", "readonly")
+        return AuthPrincipal(
+            id=user.id,
+            name=user.username,
+            role=role,
+            permissions=permissions,
+            source="jwt",
+        )
 
 
 class CreateUserUseCase:
@@ -210,12 +253,9 @@ class CreateUserUseCase:
     async def execute(self, data: dict) -> User:
         username = data.get("username", "").strip()
         password = data.get("password", "")
-        role = data.get("role", "readonly")
         email = data.get("email")
         if not username or not password:
             raise ValidationError("username and password are required")
-        if role not in User.ROLES:
-            raise ValidationError(f"role must be one of {User.ROLES}")
         existing = await self._repo.find_by_username(username)
         if existing:
             raise ConflictError(f"User '{username}' already exists")
@@ -223,7 +263,7 @@ class CreateUserUseCase:
             id=str(uuid.uuid4()),
             username=username,
             password_hash=_hash_password(password),
-            role=role,
+            role="",
             email=email,
             created_at=datetime.utcnow(),
         )
@@ -259,3 +299,173 @@ class ChangePasswordUseCase:
 async def require_role(principal: AuthPrincipal, *roles: str) -> None:
     if principal.role not in roles:
         raise ForbiddenError(f"Role '{principal.role}' is not allowed. Required: {roles}")
+
+
+class UpdateUserUseCase:
+    def __init__(self, repo: IUserRepository) -> None:
+        self._repo = repo
+
+    async def execute(self, user_id: str, data: dict) -> User:
+        user = await self._repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        if "email" in data:
+            user.email = data.get("email")
+        if "active" in data:
+            user.active = bool(data["active"])
+        if "password" in data and data["password"]:
+            user.password_hash = _hash_password(data["password"])
+        await self._repo.update(user)
+        return user
+
+
+class DeleteUserUseCase:
+    def __init__(self, repo: IUserRepository, api_key_repo: IApiKeyRepository) -> None:
+        self._repo = repo
+        self._key_repo = api_key_repo
+
+    async def execute(self, user_id: str) -> dict:
+        user = await self._repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        user.active = False
+        await self._repo.update(user)
+        await self._key_repo.revoke_by_user_id(user_id)
+        return {"message": f"User '{user.username}' deactivated"}
+
+
+class SeedDefaultGroupsUseCase:
+    """Ensures the three immutable default groups exist on startup."""
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self) -> None:
+        for name, cfg in UserGroup.DEFAULT_GROUPS.items():
+            existing = await self._repo.find_by_name(name)
+            if existing:
+                continue
+            group = UserGroup(
+                id=str(uuid.uuid4()),
+                name=name,
+                description=cfg["description"],
+                permissions=cfg["permissions"],
+                is_default=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            await self._repo.save(group)
+
+
+class CreateUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, data: dict):
+        name = data.get("name", "").strip()
+        if not name:
+            raise ValidationError("name is required")
+        if name in UserGroup.DEFAULT_GROUPS:
+            raise ConflictError(f"'{name}' is a reserved group name")
+        perms = data.get("permissions", [])
+        invalid = [p for p in perms if p not in UserGroup.ALL_PERMISSIONS]
+        if invalid:
+            raise ValidationError(f"Unknown permissions: {invalid}")
+        group = UserGroup(
+            id=str(uuid.uuid4()), name=name,
+            description=data.get("description"),
+            permissions=perms,
+            is_default=False,
+            created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+        )
+        await self._repo.save(group)
+        return group
+
+
+class ListUserGroupsUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self):
+        return await self._repo.find_all()
+
+
+class GetUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str):
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        return group
+
+
+class UpdateUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str, data: dict):
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        if group.is_default:
+            raise ForbiddenError("Default groups cannot be modified")
+        if "name" in data and data["name"].strip():
+            new_name = data["name"].strip()
+            if new_name in UserGroup.DEFAULT_GROUPS:
+                raise ValidationError(f"'{new_name}' is a reserved group name")
+            group.name = new_name
+        if "description" in data:
+            group.description = data.get("description")
+        if "permissions" in data:
+            perms = data["permissions"] or []
+            invalid = [p for p in perms if p not in UserGroup.ALL_PERMISSIONS]
+            if invalid:
+                raise ValidationError(f"Unknown permissions: {invalid}")
+            group.permissions = perms
+        group.updated_at = datetime.utcnow()
+        await self._repo.update(group)
+        return group
+
+
+class DeleteUserGroupUseCase:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def execute(self, group_id: str) -> dict:
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        if group.is_default:
+            raise ForbiddenError("Default groups cannot be deleted")
+        await self._repo.delete(group_id)
+        return {"message": f"Group '{group.name}' deleted"}
+
+
+class AddUserToGroupUseCase:
+    def __init__(self, group_repo, user_repo: IUserRepository) -> None:
+        self._group_repo = group_repo
+        self._user_repo = user_repo
+
+    async def execute(self, group_id: str, user_id: str) -> dict:
+        group = await self._group_repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        user = await self._user_repo.find_by_id(user_id)
+        if not user:
+            raise NotFoundError(f"User '{user_id}' not found")
+        await self._group_repo.add_member(group_id, user_id)
+        return {"message": f"User '{user.username}' added to group '{group.name}'"}
+
+
+class RemoveUserFromGroupUseCase:
+    def __init__(self, group_repo, user_repo: IUserRepository) -> None:
+        self._group_repo = group_repo
+        self._user_repo = user_repo
+
+    async def execute(self, group_id: str, user_id: str) -> dict:
+        group = await self._group_repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Group '{group_id}' not found")
+        await self._group_repo.remove_member(group_id, user_id)
+        return {"message": f"User removed from group '{group.name}'"}

@@ -6,8 +6,9 @@ import {
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
-  checkPuppetAgentPlatform,
-  getInspecStatus, installInspecOnController, verifyInspecAllNodes, verifyInspecNode,
+  checkPuppetAgentPlatform, probeWazuhDashboardPort,
+  getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
+  checkNodeHealth,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -195,6 +196,9 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   const [starting, setStarting]         = useState(false)
   const [platformCheck, setPlatformCheck]     = useState(null)
   const [checkingPlatform, setCheckingPlatform] = useState(false)
+  const [dashboardPort, setDashboardPort] = useState(443)
+  const [portProbe, setPortProbe]         = useState(null)   // { suggested_port, occupied_candidates }
+  const [probingPort, setProbingPort]     = useState(false)
   const toast = useToast()
 
   const serviceLabels = {
@@ -206,20 +210,40 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   async function handleNodeChange(nodeId) {
     setSelectedNode(nodeId)
     setPlatformCheck(null)
+    setPortProbe(null)
+    setDashboardPort(443)
     if (!nodeId) return
+
+    // Always run the platform check
     setCheckingPlatform(true)
     try {
       const result = await checkPuppetAgentPlatform(nodeId)
       setPlatformCheck(result)
     } catch (_) {}
     finally { setCheckingPlatform(false) }
+
+    // For Wazuh Manager: probe for a free dashboard port
+    if (service === 'wazuh-manager') {
+      setProbingPort(true)
+      try {
+        const probe = await probeWazuhDashboardPort(nodeId)
+        setPortProbe(probe)
+        setDashboardPort(probe.suggested_port)
+      } catch (_) {
+        setPortProbe({ suggested_port: 443, occupied_candidates: [] })
+        setDashboardPort(443)
+      } finally {
+        setProbingPort(false)
+      }
+    }
   }
 
   async function handleStart() {
     if (!selectedNode) return
     setStarting(true)
     try {
-      const job = await installService(service, selectedNode)
+      const options = service === 'wazuh-manager' ? { dashboard_port: dashboardPort } : {}
+      const job = await installService(service, selectedNode, options)
       onJobStarted(job)
       onClose()
     } catch (err) {
@@ -254,6 +278,45 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
               ))}
             </select>
           </div>
+          {service === 'wazuh-manager' && selectedNode && (
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
+                Wazuh dashboard port (HTTPS)
+              </label>
+              {probingPort ? (
+                <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                  <Spinner size={11} /> Scanning ports on node…
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={dashboardPort}
+                      onChange={(e) => setDashboardPort(Number(e.target.value))}
+                      className="w-32 px-3 py-2 text-[13px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+                    />
+                    {portProbe && portProbe.occupied_candidates.length === 0 && (
+                      <span className="text-[11px] text-green-700 bg-green-50 px-2 py-1 rounded-lg">
+                        Port {dashboardPort} is free
+                      </span>
+                    )}
+                  </div>
+                  {portProbe && portProbe.occupied_candidates.length > 0 && (
+                    <p className="mt-1.5 text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                      Port{portProbe.occupied_candidates.length > 1 ? 's' : ''}{' '}
+                      <span className="font-mono font-semibold">{portProbe.occupied_candidates.join(', ')}</span>{' '}
+                      {portProbe.occupied_candidates.length > 1 ? 'are' : 'is'} already in use on this node.
+                      Using <span className="font-mono font-semibold">{portProbe.suggested_port}</span> instead.
+                      Change if needed.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {nodes.length === 0 && (
             <p className="text-[11px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
               {t('infra.noNodes')}
@@ -435,6 +498,13 @@ function AgentsTab({ nodes, onRefresh, t }) {
     setSelectedNode(nodeId)
     setPlatformCheck(null)
     if (!nodeId) return
+    // Pre-deselect agents that are already enrolled on this node
+    const chosen = nodes.find((n) => n.id === nodeId)
+    if (chosen) {
+      const puppet = !chosen.puppet_enrolled
+      const wazuh  = !chosen.wazuh_enrolled
+      setAgentSel(puppet || wazuh ? { puppet, wazuh } : { puppet: true, wazuh: true })
+    }
     setCheckingPlatform(true)
     try {
       const result = await checkPuppetAgentPlatform(nodeId)
@@ -473,7 +543,11 @@ function AgentsTab({ nodes, onRefresh, t }) {
   }
 
   const node = nodes.find((n) => n.id === selectedNode)
-  const canLaunch = !!selectedNode && (agentSel.puppet || agentSel.wazuh)
+  // canLaunch: node selected AND at least one non-enrolled agent is checked
+  const canLaunch = !!selectedNode && (
+    (agentSel.puppet && !node?.puppet_enrolled) ||
+    (agentSel.wazuh  && !node?.wazuh_enrolled)
+  )
 
   // Per-node coverage
   const enrolled = nodes.filter((n) => n.puppet_enrolled || n.wazuh_enrolled).length
@@ -539,36 +613,46 @@ function AgentsTab({ nodes, onRefresh, t }) {
               </div>
               <div className="space-y-2">
                 {[
-                  { key: 'puppet', label: t('infra.puppetAgentLabel'), desc: t('infra.puppetAgentDesc') },
-                  { key: 'wazuh',  label: t('infra.wazuhAgentLabel'),  desc: t('infra.wazuhAgentDesc')  },
-                ].map(({ key, label, desc }) => (
-                  <button
-                    key={key}
-                    onClick={() => toggleAgent(key)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
-                      agentSel[key]
-                        ? 'border-brand bg-brand/5'
-                        : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                      agentSel[key] ? 'bg-brand/10' : 'bg-gray-100'
-                    }`}>
-                      <Cpu size={14} className={agentSel[key] ? 'text-brand' : 'text-gray-400'} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-[12px] font-semibold ${agentSel[key] ? 'text-brand' : 'text-gray-700'}`}>
-                        {label}
-                      </p>
-                      <p className="text-[11px] text-gray-400">{desc}</p>
-                    </div>
-                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
-                      agentSel[key] ? 'border-brand bg-brand' : 'border-gray-300'
-                    }`}>
-                      {agentSel[key] && <CheckCircle size={10} className="text-white" />}
-                    </div>
-                  </button>
-                ))}
+                  { key: 'puppet', enrolledFlag: 'puppet_enrolled', label: t('infra.puppetAgentLabel'), desc: t('infra.puppetAgentDesc') },
+                  { key: 'wazuh',  enrolledFlag: 'wazuh_enrolled',  label: t('infra.wazuhAgentLabel'),  desc: t('infra.wazuhAgentDesc')  },
+                ].map(({ key, enrolledFlag, label, desc }) => {
+                  const alreadyEnrolled = node ? !!node[enrolledFlag] : false
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => !alreadyEnrolled && toggleAgent(key)}
+                      disabled={alreadyEnrolled}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
+                        alreadyEnrolled
+                          ? 'border-green-200 bg-green-50 cursor-default'
+                          : agentSel[key]
+                            ? 'border-brand bg-brand/5'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                        alreadyEnrolled ? 'bg-green-100' : agentSel[key] ? 'bg-brand/10' : 'bg-gray-100'
+                      }`}>
+                        <Cpu size={14} className={alreadyEnrolled ? 'text-green-600' : agentSel[key] ? 'text-brand' : 'text-gray-400'} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-[12px] font-semibold ${alreadyEnrolled ? 'text-green-700' : agentSel[key] ? 'text-brand' : 'text-gray-700'}`}>
+                          {label}
+                        </p>
+                        <p className="text-[11px] text-gray-400">
+                          {alreadyEnrolled ? t('infra.enrolled') : desc}
+                        </p>
+                      </div>
+                      <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                        alreadyEnrolled
+                          ? 'border-green-500 bg-green-500'
+                          : agentSel[key] ? 'border-brand bg-brand' : 'border-gray-300'
+                      }`}>
+                        {(alreadyEnrolled || agentSel[key]) && <CheckCircle size={10} className="text-white" />}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
 
               <div className="flex gap-2 mt-2">
@@ -669,12 +753,18 @@ function AgentsTab({ nodes, onRefresh, t }) {
                     <Pip ok={n.wazuh_enrolled || false} label={n.wazuh_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => { setSelectedNode(n.id); handleNodeChange(n.id) }}
-                      className={btnSm(false)}
-                    >
-                      {t('infra.enroll')}
-                    </button>
+                    {n.puppet_enrolled && n.wazuh_enrolled ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-green-700 bg-green-50">
+                        <CheckCircle size={10} /> {t('infra.enrolled')}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => { setSelectedNode(n.id); handleNodeChange(n.id) }}
+                        className={btnSm(false)}
+                      >
+                        {t('infra.enroll')}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -690,7 +780,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
   )
 }
 
-// ── Tab 3: Verification (InSpec) ──────────────────────────────────────────────
+// ── Tab 3: Verification (Scan readiness) ──────────────────────────────────────
 
 function VerifyTab({ nodes, onRefresh, t }) {
   const [status, setStatus]       = useState(null)
@@ -698,12 +788,15 @@ function VerifyTab({ nodes, onRefresh, t }) {
   const [installing, setInstalling] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [probing, setProbing]     = useState({})
+  const [probeErrors, setProbeErrors] = useState({})
+  const [diagnosing, setDiagnosing]   = useState({})
+  const [activeJob, setActiveJob]     = useState(null)
   const [results, setResults]     = useState(null)
   const toast = useToast()
 
   async function loadStatus() {
     try {
-      setStatus(await getInspecStatus())
+      setStatus(await getScanEngineStatus())
     } catch (_) {
       setStatus({ installed: false, version: null })
     } finally {
@@ -716,8 +809,8 @@ function VerifyTab({ nodes, onRefresh, t }) {
   async function handleInstall() {
     setInstalling(true)
     try {
-      const res = await installInspecOnController()
-      toast(t('infra.inspecInstallDone', { version: res.version || '' }), 'success')
+      const res = await installScanEngineOnController()
+      toast(t('infra.scanEngineInstallDone', { version: res.version || '' }), 'success')
       await loadStatus()
     } catch (err) {
       toast(err.message, 'error')
@@ -730,9 +823,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
     setVerifying(true)
     setResults(null)
     try {
-      const res = await verifyInspecAllNodes()
+      const res = await verifyScanEngineAllNodes()
       setResults(res)
-      toast(t('infra.inspecVerifyDone', { ok: res.reachable, total: res.total }), 'success')
+      toast(t('infra.scanEngineVerifyDone', { ok: res.reachable, total: res.total }), 'success')
       onRefresh?.()
     } catch (err) {
       toast(err.message, 'error')
@@ -743,8 +836,16 @@ function VerifyTab({ nodes, onRefresh, t }) {
 
   async function handleProbeNode(nodeId) {
     setProbing((p) => ({ ...p, [nodeId]: true }))
+    setProbeErrors((p) => ({ ...p, [nodeId]: null }))
     try {
-      await verifyInspecNode(nodeId)
+      const result = await verifyScanEngineNode(nodeId)
+      const errMsg = result.output || result.error || null
+      if (!result.reachable && errMsg) {
+        setProbeErrors((p) => ({ ...p, [nodeId]: errMsg }))
+      }
+      if (result.error) {
+        toast(result.error, 'warning')
+      }
       onRefresh?.()
     } catch (err) {
       toast(err.message, 'error')
@@ -753,11 +854,24 @@ function VerifyTab({ nodes, onRefresh, t }) {
     }
   }
 
-  const reachableCount = nodes.filter((n) => n.inspec_installed).length
+  async function handleDiagnose(nodeId) {
+    setDiagnosing((p) => ({ ...p, [nodeId]: true }))
+    try {
+      const job = await checkNodeHealth(nodeId)
+      setActiveJob(job)
+      toast(t('infra.diagStarted'), 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setDiagnosing((p) => ({ ...p, [nodeId]: false }))
+    }
+  }
+
+  const reachableCount = nodes.filter((n) => n.scan_ready).length
 
   return (
     <>
-      {/* InSpec info card */}
+      {/* Scan engine info card */}
       <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
@@ -765,36 +879,36 @@ function VerifyTab({ nodes, onRefresh, t }) {
               <ShieldCheck size={16} className={status?.installed ? 'text-brand' : 'text-gray-300'} />
             </div>
             <div>
-              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.inspec')}</h3>
-              <p className="text-[11px] text-gray-400">{t('infra.inspecDesc')}</p>
+              <h3 className="text-[14px] font-semibold text-gray-900">{t('infra.scanEngine')}</h3>
+              <p className="text-[11px] text-gray-400">{t('infra.scanEngineDesc')}</p>
             </div>
           </div>
           {loading ? (
             <Spinner size={12} />
           ) : status?.installed ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-50 text-green-700">
-              <CheckCircle size={9} /> {t('infra.inspecInstalled')}
+              <CheckCircle size={9} /> {t('infra.scanEngineInstalled')}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">
-              {t('infra.inspecMissing')}
+              {t('infra.scanEngineMissing')}
             </span>
           )}
         </div>
 
-        <p className="text-[12px] text-gray-500 mb-4 leading-relaxed">{t('infra.inspecExplain')}</p>
+        <p className="text-[12px] text-gray-500 mb-4 leading-relaxed">{t('infra.scanEngineExplain')}</p>
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="px-3 py-2 bg-gray-50 rounded-lg">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecPlatformVersion')}</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.scanEnginePlatformVersion')}</p>
             <p className="text-[12px] font-mono text-gray-700">
-              {status?.installed ? (status.version || 'installed') : t('infra.inspecMissing')}
+              {status?.installed ? (status.version || 'installed') : t('infra.scanEngineMissing')}
             </p>
           </div>
           <div className="px-3 py-2 bg-gray-50 rounded-lg">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.inspecCoverage')}</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{t('infra.scanEngineCoverage')}</p>
             <p className="text-[12px] font-mono text-gray-700">
-              {reachableCount} / {nodes.length} {t('infra.inspecNodesReachable')}
+              {reachableCount} / {nodes.length} {t('infra.scanEngineNodesReachable')}
             </p>
           </div>
         </div>
@@ -803,7 +917,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
           {!status?.installed && (
             <button onClick={handleInstall} disabled={installing} className={btnSm(true)}>
               {installing ? <Spinner size={11} /> : <Server size={11} />}
-              {installing ? t('infra.inspecInstalling') : t('infra.inspecInstallBtn')}
+              {installing ? t('infra.scanEngineInstalling') : t('infra.scanEngineInstallBtn')}
             </button>
           )}
           <button
@@ -812,14 +926,14 @@ function VerifyTab({ nodes, onRefresh, t }) {
             className={btnSm(status?.installed)}
           >
             {verifying ? <Spinner size={11} /> : <RefreshCw size={11} />}
-            {verifying ? t('infra.inspecVerifying') : t('infra.inspecVerifyBtn')}
+            {verifying ? t('infra.scanEngineVerifying') : t('infra.scanEngineVerifyBtn')}
           </button>
         </div>
 
         {results && results.results?.length > 0 && (
           <div className="mt-4 border-t border-gray-100 pt-3">
             <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider mb-2">
-              {t('infra.inspecLastVerify')}
+              {t('infra.scanEngineLastVerify')}
             </p>
             <div className="space-y-1.5 max-h-36 overflow-y-auto">
               {results.results.map((r) => (
@@ -830,9 +944,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
                     <XCircle size={11} className="text-red-500 mt-0.5 flex-shrink-0" />
                   )}
                   <span className="font-mono text-gray-700">{r.hostname || r.node_id?.slice(0, 8)}</span>
-                  {!r.reachable && r.output && (
-                    <span className="text-red-600 truncate" title={r.output}>
-                      — {r.output.split('\n').slice(-1).join(' ').slice(0, 60)}
+                  {!r.reachable && (r.output || r.error) && (
+                    <span className="text-red-600 truncate" title={r.output || r.error}>
+                      — {(r.output || r.error).split('\n').slice(-1).join(' ').slice(0, 60)}
                     </span>
                   )}
                 </div>
@@ -845,9 +959,9 @@ function VerifyTab({ nodes, onRefresh, t }) {
       {/* Per-node table */}
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-          <h4 className="text-[13px] font-semibold text-gray-800">{t('infra.nodeInspection')}</h4>
+          <h4 className="text-[13px] font-semibold text-gray-800">{t('infra.nodeScanReadiness')}</h4>
           <span className="text-[11px] text-gray-400">
-            {reachableCount} / {nodes.length} {t('infra.inspecNodesReachable')}
+            {reachableCount} / {nodes.length} {t('infra.scanEngineNodesReachable')}
           </span>
         </div>
         {nodes.length === 0 ? (
@@ -870,20 +984,39 @@ function VerifyTab({ nodes, onRefresh, t }) {
                     <p className="text-[11px] text-gray-400 font-mono">{n.ip}</p>
                   </td>
                   <td className="px-5 py-3">
-                    <Pip ok={n.inspec_installed || false} label={n.inspec_installed ? t('infra.reachable') : t('infra.unreachable')} />
+                    <Pip ok={n.scan_ready || false} label={n.scan_ready ? t('infra.reachable') : t('infra.unreachable')} />
+                    {probeErrors[n.id] && (
+                      <p
+                        className="text-[10px] text-red-500 font-mono mt-1 max-w-[220px] truncate cursor-help"
+                        title={probeErrors[n.id]}
+                      >
+                        {probeErrors[n.id].split('\n')[0]}
+                      </p>
+                    )}
                   </td>
                   <td className="px-5 py-3 text-gray-500">
                     {timeAgo(n.updated_at)}
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => handleProbeNode(n.id)}
-                      disabled={!status?.installed || probing[n.id]}
-                      className={btnSm(false)}
-                    >
-                      {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
-                      {t('infra.inspect')}
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleProbeNode(n.id)}
+                        disabled={probing[n.id]}
+                        className={btnSm(false)}
+                      >
+                        {probing[n.id] ? <Spinner size={11} /> : <Search size={11} />}
+                        {t('infra.probe')}
+                      </button>
+                      <button
+                        onClick={() => handleDiagnose(n.id)}
+                        disabled={diagnosing[n.id]}
+                        className={btnSm(false)}
+                        title={t('infra.diagnoseHint')}
+                      >
+                        {diagnosing[n.id] ? <Spinner size={11} /> : <AlertTriangle size={11} />}
+                        {diagnosing[n.id] ? t('infra.diagnosing') : t('infra.diagnose')}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -891,6 +1024,10 @@ function VerifyTab({ nodes, onRefresh, t }) {
           </table>
         )}
       </div>
+
+      {activeJob && (
+        <LogDrawer job={activeJob} onClose={() => { setActiveJob(null); onRefresh() }} t={t} />
+      )}
     </>
   )
 }

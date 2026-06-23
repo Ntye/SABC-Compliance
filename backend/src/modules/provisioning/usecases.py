@@ -8,7 +8,8 @@ from core.domain.entities import Job, Node
 from core.domain.interfaces import (
     IJobRepository, INodeRepository, IPlatformConfigRepository,
 )
-from core.errors import NotFoundError, ValidationError
+from config import get_settings
+from core.errors import ConflictError, NotFoundError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -221,19 +222,23 @@ class InstallServiceUseCase:
     """
 
     _PLAYBOOKS = {
-        "puppet_master": "install_puppet_master.yml",
-        "wazuh_manager": "install_wazuh_manager.yml",
-        "puppet_agent":  "install_puppet_agent.yml",
-        "wazuh_agent":   "install_wazuh_agent.yml",
+        "puppet_master":           "install_puppet_master.yml",
+        "wazuh_manager":           "install_wazuh_manager.yml",
+        "wazuh_manager_colocated": "install_wazuh_manager_colocated.yml",
+        "puppet_agent":            "install_puppet_agent.yml",
+        "wazuh_agent":             "install_wazuh_agent.yml",
+        "check_health":            "check_node_health.yml",
     }
     _CONFIG_KEYS = {
-        "puppet_master": "puppet_master_host",
-        "wazuh_manager": "wazuh_manager_host",
+        "puppet_master":           "puppet_master_host",
+        "wazuh_manager":           "wazuh_manager_host",
+        "wazuh_manager_colocated": "wazuh_manager_host",
     }
     _ENROLL_ATTRS = {
-        "puppet_agent":  "puppet_enrolled",
-        "wazuh_manager": "wazuh_enrolled",
-        "wazuh_agent":   "wazuh_enrolled",
+        "puppet_agent":            "puppet_enrolled",
+        "wazuh_manager":           "wazuh_enrolled",
+        "wazuh_manager_colocated": "wazuh_enrolled",
+        "wazuh_agent":             "wazuh_enrolled",
     }
 
     def __init__(
@@ -250,13 +255,19 @@ class InstallServiceUseCase:
         self._node_repo = node_repo
         self._service = service
 
-    async def execute(self, node_id: str) -> Job:
+    async def execute(self, node_id: str, dashboard_port: int | None = None) -> Job:
         node = await self._node_repo.find_by_id(node_id)
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
 
-        config_key = self._CONFIG_KEYS.get(self._service)
         enroll_attr = self._ENROLL_ATTRS.get(self._service)
+        if enroll_attr and getattr(node, enroll_attr, False):
+            raise ConflictError(
+                f"Node '{node.hostname}' is already enrolled for {self._service}. "
+                "Remove the node and re-register to force re-installation."
+            )
+
+        config_key = self._CONFIG_KEYS.get(self._service)
         node_ip = node.ip
         node_repo = self._node_repo
         config_repo = self._config
@@ -270,7 +281,22 @@ class InstallServiceUseCase:
             host = await self._config.get("puppet_master_host")
             if host:
                 extra_vars["puppet_master_host"] = host
+        elif self._service in ("wazuh_manager", "wazuh_manager_colocated"):
+            if dashboard_port is not None:
+                extra_vars["wazuh_dashboard_port"] = dashboard_port
         elif self._service == "wazuh_agent":
+            host = await self._config.get("wazuh_manager_host")
+            if host:
+                extra_vars["wazuh_manager_host"] = host
+            settings = get_settings()
+            extra_vars["wazuh_api_user"] = settings.wazuh_api_user
+            if settings.wazuh_api_pass:
+                extra_vars["wazuh_api_pass"] = settings.wazuh_api_pass
+            extra_vars["wazuh_api_port"] = settings.wazuh_api_port
+        elif self._service == "check_health":
+            host = await self._config.get("puppet_master_host")
+            if host:
+                extra_vars["puppet_master_host"] = host
             host = await self._config.get("wazuh_manager_host")
             if host:
                 extra_vars["wazuh_manager_host"] = host
@@ -300,18 +326,70 @@ class InstallServiceUseCase:
         })
 
 
-class InspecControllerUseCase:
-    """Manages the platform-side (controller) InSpec installation.
+class DetectAgentsUseCase:
+    """Launch a read-only Ansible job that detects Puppet / Wazuh enrollment.
 
-    InSpec is agentless: it lives once on the SABC platform server and reaches
-    each registered node over SSH. This use case answers two questions:
-      1. Is InSpec installed on the controller? (and at what version)
-      2. Can InSpec actually reach a given node over SSH? (which marks the
-         node as inspec_installed = True so the compliance engine knows it
-         can run controls against it).
+    Requires become: yes on the target to read protected cert directories and
+    Wazuh logs. On success, updates node.puppet_enrolled / wazuh_enrolled by
+    scanning the job log for PUPPET_STATUS=ENROLLED / WAZUH_STATUS=ENROLLED
+    sentinel strings output by detect_agents.yml.
     """
 
-    INSPEC_BIN = "/usr/bin/inspec"
+    PLAYBOOK = "detect_agents.yml"
+
+    def __init__(
+        self,
+        start_job_uc: StartJobUseCase,
+        node_repo: INodeRepository,
+        job_repo: IJobRepository,
+    ) -> None:
+        self._start    = start_job_uc
+        self._node_repo = node_repo
+        self._job_repo  = job_repo
+
+    async def execute(self, node_id: str) -> Job:
+        node = await self._node_repo.find_by_id(node_id)
+        if not node:
+            raise NotFoundError(f"Node '{node_id}' not found")
+
+        node_repo = self._node_repo
+        job_repo  = self._job_repo
+
+        async def on_complete(job: Job, _node: Node | None) -> None:
+            if job.status != "success":
+                return
+            full_job = await job_repo.find_by_id(job.id)
+            if not full_job:
+                return
+            all_text = " ".join(entry.get("line", "") for entry in full_job.logs)
+            fresh = await node_repo.find_by_id(node_id)
+            if not fresh:
+                return
+            fresh.puppet_enrolled = "PUPPET_STATUS=ENROLLED" in all_text
+            fresh.wazuh_enrolled  = "WAZUH_STATUS=ENROLLED"  in all_text
+            fresh.updated_at = datetime.utcnow()
+            await node_repo.update(fresh)
+
+        return await self._start.execute({
+            "type":       "detect_agents",
+            "node_id":    node_id,
+            "playbook":   self.PLAYBOOK,
+            "extra_vars": {},
+            "on_complete": on_complete,
+        })
+
+
+class ScanEngineUseCase:
+    """Manages the platform-side (controller) scan engine (CINC Auditor) installation.
+
+    The scan engine is agentless: it lives once on the SABC platform server and
+    reaches each registered node over SSH. This use case answers two questions:
+      1. Is the scan engine installed on the controller? (and at what version)
+      2. Can the scan engine reach a given node over SSH? (which marks the
+         node as scan_ready = True so the compliance engine can run controls).
+    """
+
+    SCAN_BIN = "/usr/bin/cinc-auditor"
 
     def __init__(self, node_repo: INodeRepository, default_ssh_key_path: str) -> None:
         self._node_repo = node_repo
@@ -321,25 +399,25 @@ class InspecControllerUseCase:
         """Return {installed, version, executable_path}."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                self.INSPEC_BIN, "version",
+                self.SCAN_BIN, "version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode == 0:
                 version = stdout.decode().strip().splitlines()[0] if stdout else "unknown"
-                return {"installed": True, "version": version, "executable_path": self.INSPEC_BIN}
+                return {"installed": True, "version": version, "executable_path": self.SCAN_BIN}
         except (FileNotFoundError, asyncio.TimeoutError, Exception):
             pass
-        return {"installed": False, "version": None, "executable_path": self.INSPEC_BIN}
+        return {"installed": False, "version": None, "executable_path": self.SCAN_BIN}
 
     async def install_on_controller(self) -> dict:
-        """Install InSpec on the platform server via the official omnitruck script.
+        """Install CINC Auditor on the platform server via the CINC omnitruck script.
 
         Requires root (typical inside the backend container). On bare-metal
         deploys without root, returns an error with the manual install command.
         """
-        cmd = "curl -sL https://omnitruck.chef.io/install.sh | bash -s -- -P inspec"
+        cmd = "curl -sL https://omnitruck.cinc.sh/install.sh | bash -s -- -P cinc-auditor"
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
@@ -364,25 +442,16 @@ class InspecControllerUseCase:
     async def verify_node(self, node_id: str) -> dict:
         """Probe a single node over SSH and persist the result.
 
-        We deliberately use plain SSH (not `inspec detect`) for the reachability
-        check: InSpec runs over the same SSH channel that Ansible already uses,
-        so if SSH works the controller can drive InSpec controls. Plain SSH
-        also sidesteps InSpec's Ruby Net::SSH host-key check (which doesn't
-        honor the container's defaults on first connect) and the Chef license
-        prompt entirely.
+        We use plain SSH for the reachability check: the scan engine uses the
+        same SSH channel that Ansible already uses, so if SSH works the
+        controller can run compliance controls against the node.
         """
         node = await self._node_repo.find_by_id(node_id)
         if not node:
             raise NotFoundError(f"Node '{node_id}' not found")
 
-        status = await self.get_status()
-        if not status["installed"]:
-            return {
-                "node_id": node_id,
-                "hostname": node.hostname,
-                "reachable": False,
-                "error": "InSpec is not installed on the platform",
-            }
+        # Check scan engine installation status separately from SSH reachability.
+        scan_status = await self.get_status()
 
         key = node.ssh_key_path or self._default_key
         args = [
@@ -394,7 +463,7 @@ class InspecControllerUseCase:
             "-i", key,
             "-p", str(node.ssh_port),
             f"{node.ssh_user}@{node.ip}",
-            "echo INSPEC_REACHABLE",
+            "echo SCAN_REACHABLE",
         ]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -405,7 +474,7 @@ class InspecControllerUseCase:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
             out = (stdout or b"").decode(errors="replace")
             err = (stderr or b"").decode(errors="replace")
-            ok = proc.returncode == 0 and "INSPEC_REACHABLE" in out
+            ok = proc.returncode == 0 and "SCAN_REACHABLE" in out
             output = (out + "\n" + err).strip() if not ok else None
         except asyncio.TimeoutError:
             ok = False
@@ -416,16 +485,22 @@ class InspecControllerUseCase:
 
         # Always persist — the user's expectation is "click verify, see the
         # current truth", so we record this run's result unconditionally.
-        node.inspec_installed = ok
+        node.scan_ready = ok
         node.updated_at = datetime.utcnow()
         await self._node_repo.update(node)
 
-        return {
+        result: dict = {
             "node_id": node_id,
             "hostname": node.hostname,
             "reachable": ok,
             "output": output[-1500:] if output else None,
         }
+        if not scan_status["installed"]:
+            result["error"] = (
+                "CINC Auditor n'est pas installé sur la plateforme — "
+                "cliquez « Installer sur la plateforme » pour activer les scans de conformité."
+            )
+        return result
 
     async def verify_all_nodes(self) -> dict:
         """Probe every registered node in parallel; persist per-node results."""
@@ -433,7 +508,7 @@ class InspecControllerUseCase:
         if not status["installed"]:
             return {
                 "controller": status,
-                "error": "InSpec is not installed on the platform",
+                "error": "Scan engine is not installed on the platform",
                 "results": [],
             }
 

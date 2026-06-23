@@ -152,6 +152,42 @@ export async function changePassword(oldPassword, newPassword) {
   })
 }
 
+export async function updateUser(id, data) {
+  return request('PATCH', `/auth/users/${id}`, data)
+}
+
+export async function deleteUser(id) {
+  return request('DELETE', `/auth/users/${id}`)
+}
+
+export async function listUserGroups() {
+  return request('GET', '/auth/groups')
+}
+
+export async function createUserGroup(data) {
+  return request('POST', '/auth/groups', data)
+}
+
+export async function updateUserGroup(id, data) {
+  return request('PATCH', `/auth/groups/${id}`, data)
+}
+
+export async function deleteUserGroup(id) {
+  return request('DELETE', `/auth/groups/${id}`)
+}
+
+export async function getUserGroup(id) {
+  return request('GET', `/auth/groups/${id}`)
+}
+
+export async function addGroupMember(groupId, userId) {
+  return request('POST', `/auth/groups/${groupId}/members`, { user_id: userId })
+}
+
+export async function removeGroupMember(groupId, userId) {
+  return request('DELETE', `/auth/groups/${groupId}/members/${userId}`)
+}
+
 // ── Nodes ─────────────────────────────────────────────────────────────────────
 
 export async function listNodes(filters = {}) {
@@ -254,33 +290,41 @@ export async function setWazuhManagerHost(host) {
   return request('POST', '/infrastructure/wazuh-manager', { host })
 }
 
-export async function installService(service, nodeId) {
+export async function probeWazuhDashboardPort(nodeId) {
+  return request('GET', `/infrastructure/probe-dashboard-port?node_id=${encodeURIComponent(nodeId)}`)
+}
+
+export async function installService(service, nodeId, options = {}) {
   // service: 'puppet-master' | 'wazuh-manager' | 'puppet-agent' | 'wazuh-agent'
-  return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId })
+  return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId, ...options })
 }
 
 export async function checkPuppetAgentPlatform(nodeId) {
   return request('GET', `/infrastructure/puppet-agent/platform-check?node_id=${encodeURIComponent(nodeId)}`)
 }
 
-// ── InSpec (platform / controller) ──────────────────────────────────────────
-// InSpec runs only on the SABC platform server and reaches each node over SSH.
-// No InSpec install on the managed nodes.
+// ── Scan engine (platform / controller) ──────────────────────────────────────
+// CINC Auditor runs only on the SABC platform server and reaches each node
+// over SSH — no installation required on the managed nodes.
 
-export async function getInspecStatus() {
-  return request('GET', '/infrastructure/inspec/status')
+export async function getScanEngineStatus() {
+  return request('GET', '/infrastructure/scan-engine/status')
 }
 
-export async function installInspecOnController() {
-  return request('POST', '/infrastructure/inspec/install')
+export async function installScanEngineOnController() {
+  return request('POST', '/infrastructure/scan-engine/install')
 }
 
-export async function verifyInspecAllNodes() {
-  return request('POST', '/infrastructure/inspec/verify')
+export async function verifyScanEngineAllNodes() {
+  return request('POST', '/infrastructure/scan-engine/verify')
 }
 
-export async function verifyInspecNode(nodeId) {
-  return request('POST', `/infrastructure/inspec/verify/${encodeURIComponent(nodeId)}`)
+export async function verifyScanEngineNode(nodeId) {
+  return request('POST', `/infrastructure/scan-engine/verify/${encodeURIComponent(nodeId)}`)
+}
+
+export async function checkNodeHealth(nodeId) {
+  return request('POST', '/infrastructure/check-health', { node_id: nodeId })
 }
 
 // ── Compliance ────────────────────────────────────────────────────────────────
@@ -293,12 +337,20 @@ export async function getNodeCompliance(id) {
   return request('GET', `/compliance/nodes/${id}`)
 }
 
-export async function collectNodeCompliance(id) {
-  return request('POST', `/compliance/nodes/${id}/collect`)
+export async function collectNodeCompliance(id, profileId = null) {
+  return request('POST', `/compliance/nodes/${id}/collect`, profileId ? { profile_id: profileId } : undefined)
 }
 
 export async function triggerRemediation(id, description) {
   return request('POST', `/compliance/nodes/${id}/remediate`, { description })
+}
+
+export async function getAutoScanSchedule() {
+  return request('GET', '/compliance/schedule')
+}
+
+export async function setAutoScanSchedule({ enabled, interval, unit }) {
+  return request('PUT', '/compliance/schedule', { enabled, interval, unit })
 }
 
 // ── Rules ─────────────────────────────────────────────────────────────────────
@@ -328,14 +380,141 @@ export async function deleteRule(id) {
   return request('DELETE', `/rules/${id}`)
 }
 
+// ── Compliance Profiles (referentials) ─────────────────────────────────────────
+
+export async function listProfiles() {
+  return request('GET', '/profiles')
+}
+
+export async function getProfile(id) {
+  return request('GET', `/profiles/${id}`)
+}
+
+export async function createProfile(data) {
+  return request('POST', '/profiles', data)
+}
+
+export async function updateProfile(id, data) {
+  return request('PATCH', `/profiles/${id}`, data)
+}
+
+export async function deleteProfile(id) {
+  return request('DELETE', `/profiles/${id}`)
+}
+
+export async function revertProfile(id) {
+  return request('POST', `/profiles/${id}/revert`)
+}
+
+export async function addProfileControl(profileId, data) {
+  return request('POST', `/profiles/${profileId}/controls`, data)
+}
+
+export async function updateProfileControl(profileId, controlId, data) {
+  return request('PATCH', `/profiles/${profileId}/controls/${controlId}`, data)
+}
+
+export async function deleteProfileControl(profileId, controlId) {
+  return request('DELETE', `/profiles/${profileId}/controls/${controlId}`)
+}
+
+export async function searchAllControls(q, limit = 40) {
+  return request('GET', `/profiles/-/controls?q=${encodeURIComponent(q)}&limit=${limit}`)
+}
+
+export async function getControlHistory(profileId, controlId) {
+  return request('GET', `/profiles/${profileId}/controls/${controlId}/history`)
+}
+
+export async function importScanControls(profileId) {
+  return request('POST', `/profiles/${profileId}/import-scan-controls`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {
   return request('GET', `/audit?limit=${limit}`)
 }
 
+// ── Settings: TLS certificate ───────────────────────────────────────────────
+
+export async function getTlsCertificate() {
+  return request('GET', '/settings/tls/certificate')
+}
+
+export async function propagateTlsCertificate() {
+  return request('POST', '/settings/tls/certificate/propagate')
+}
+
+export async function uploadTlsCertificate(certFile, keyFile) {
+  // multipart/form-data — do NOT set Content-Type so the browser adds the
+  // multipart boundary itself. Mirrors the auth headers used by request().
+  const base = getGatewayUrl()
+  const headers = {}
+  const apiKey = getStoredApiKey()
+  const jwt = getJwt()
+  if (apiKey) headers['X-API-Key'] = apiKey
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+  const form = new FormData()
+  form.append('certificate', certFile)
+  form.append('private_key', keyFile)
+
+  const res = await fetch(`${base}/settings/tls/certificate`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  let data
+  try { data = await res.json() } catch { data = {} }
+  if (!res.ok) {
+    const msg = data?.detail || data?.error || `HTTP ${res.status}`
+    if (res.status === 401) logout()
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+  return data
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 export async function getHealth() {
   return request('GET', '/health')
+}
+
+// ── Node Groups ───────────────────────────────────────────────────────────────
+
+export async function listNodeGroups() {
+  return request('GET', '/node-groups')
+}
+
+export async function createNodeGroup(data) {
+  return request('POST', '/node-groups', data)
+}
+
+export async function updateNodeGroup(id, data) {
+  return request('PATCH', `/node-groups/${id}`, data)
+}
+
+export async function deleteNodeGroup(id) {
+  return request('DELETE', `/node-groups/${id}`)
+}
+
+export async function getNodeGroup(id) {
+  return request('GET', `/node-groups/${id}`)
+}
+
+export async function listNodeGroupFacts() {
+  return request('GET', '/node-groups/facts')
+}
+
+export async function previewNodeGroupMatches(data) {
+  return request('POST', '/node-groups/preview', data)
+}
+
+export async function addNodeToGroup(groupId, nodeId) {
+  return request('POST', `/node-groups/${groupId}/nodes`, { node_id: nodeId })
+}
+
+export async function removeNodeFromGroup(groupId, nodeId) {
+  return request('DELETE', `/node-groups/${groupId}/nodes/${nodeId}`)
 }

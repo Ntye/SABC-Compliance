@@ -15,14 +15,25 @@ from core.errors import (
 )
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceRepository,
-    JobRepository, NodeRepository, PlatformConfigRepository,
-    RuleRepository, UserRepository, create_db,
+    JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
+    ProfileRepository, RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
+from infrastructure.http.wazuh_client import WazuhRESTClient
+from infrastructure.http.puppet_nc_client import PuppetNCClient
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
     CreateUserUseCase, DecodeJwtUseCase, InitAdminUserUseCase,
     InitApiKeyUseCase, ListApiKeysUseCase, ListUsersUseCase, LoginUseCase,
-    RevokeApiKeyUseCase,
+    RevokeApiKeyUseCase, UpdateUserUseCase, DeleteUserUseCase,
+    CreateUserGroupUseCase, ListUserGroupsUseCase, GetUserGroupUseCase,
+    UpdateUserGroupUseCase, DeleteUserGroupUseCase,
+    AddUserToGroupUseCase, RemoveUserFromGroupUseCase,
+    SeedDefaultGroupsUseCase,
+)
+from modules.node_groups.usecases import (
+    CreateNodeGroupUseCase, UpdateNodeGroupUseCase, DeleteNodeGroupUseCase,
+    ListNodeGroupsUseCase, GetNodeGroupUseCase, AddNodeToGroupUseCase,
+    RemoveNodeFromGroupUseCase, ListFactsUseCase, PreviewMatchingUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -33,19 +44,25 @@ from modules.nodes.usecases import (
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
-    CancelJobUseCase, GetInfrastructureStatusUseCase, GetJobUseCase,
-    InspecControllerUseCase, InstallServiceUseCase, ListJobsUseCase,
+    CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
+    GetJobUseCase, ScanEngineUseCase, InstallServiceUseCase, ListJobsUseCase,
     SetMasterHostUseCase, StartJobUseCase,
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
     GetNodeComplianceUseCase, TriggerRemediationUseCase,
 )
+from modules.compliance.scheduler import AutoScanScheduler
+from modules.profiles.usecases import ProfileUseCases
+from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
 from interface.http.routes import jobs as jobs_routes
 from interface.http.routes import compliance as compliance_routes
+from interface.http.routes import node_groups as node_groups_routes
+from interface.http.routes import profiles as profiles_routes
+from interface.http.routes import settings as settings_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -70,7 +87,7 @@ async def lifespan(app: FastAPI):
 
     # -- Database --
     os.makedirs(os.path.dirname(settings.db_path) if os.path.dirname(settings.db_path) else "data", exist_ok=True)
-    engine, session_factory = await create_db(settings.db_path)
+    engine, session_factory = await create_db(settings.db_path, settings.database_url)
 
     # -- Repositories --
     node_repo = NodeRepository(session_factory)
@@ -80,7 +97,26 @@ async def lifespan(app: FastAPI):
     user_repo = UserRepository(session_factory)
     audit_repo = AuditRepository(session_factory)
     rule_repo = RuleRepository(session_factory)
+    profile_repo = ProfileRepository(session_factory)
     platform_config_repo = PlatformConfigRepository(session_factory)
+    group_repo = UserGroupRepository(session_factory)
+    node_group_repo = NodeGroupRepository(session_factory)
+
+    # -- External service clients --
+    wazuh_client = WazuhRESTClient(
+        host=settings.wazuh_manager_host,
+        port=settings.wazuh_api_port,
+        user=settings.wazuh_api_user,
+        password=settings.wazuh_api_pass,
+        token_refresh_seconds=settings.wazuh_token_refresh_seconds,
+    )
+    puppet_nc_client = PuppetNCClient(
+        host=settings.puppet_master_host,
+        rbac_port=settings.puppet_rbac_port,
+        admin_user=settings.puppet_admin_user,
+        admin_pass=settings.puppet_admin_pass,
+        token_rotate_seconds=settings.puppet_token_rotate_seconds,
+    )
 
     # -- Event bus --
     event_bus = EventBus()
@@ -92,11 +128,24 @@ async def lifespan(app: FastAPI):
     create_api_key_uc = CreateApiKeyUseCase(api_key_repo)
     list_api_keys_uc = ListApiKeysUseCase(api_key_repo)
     revoke_api_key_uc = RevokeApiKeyUseCase(api_key_repo)
-    login_uc = LoginUseCase(user_repo, api_key_repo, settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours)
-    init_admin_user_uc = InitAdminUserUseCase(user_repo)
+    login_uc = LoginUseCase(
+        user_repo, api_key_repo, group_repo,
+        settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours,
+    )
+    init_admin_user_uc = InitAdminUserUseCase(user_repo, group_repo)
     create_user_uc = CreateUserUseCase(user_repo)
     list_users_uc = ListUsersUseCase(user_repo)
     change_password_uc = ChangePasswordUseCase(user_repo)
+
+    update_user_uc = UpdateUserUseCase(user_repo)
+    delete_user_uc = DeleteUserUseCase(user_repo, api_key_repo)
+    create_group_uc = CreateUserGroupUseCase(group_repo)
+    list_groups_uc = ListUserGroupsUseCase(group_repo)
+    get_group_uc = GetUserGroupUseCase(group_repo)
+    update_group_uc = UpdateUserGroupUseCase(group_repo)
+    delete_group_uc = DeleteUserGroupUseCase(group_repo)
+    add_member_uc = AddUserToGroupUseCase(group_repo, user_repo)
+    remove_member_uc = RemoveUserFromGroupUseCase(group_repo, user_repo)
 
     auth_routes.set_use_cases(
         authenticate_uc=authenticate_uc,
@@ -109,6 +158,38 @@ async def lifespan(app: FastAPI):
         create_user_uc=create_user_uc,
         list_users_uc=list_users_uc,
         change_password_uc=change_password_uc,
+        update_user_uc=update_user_uc,
+        delete_user_uc=delete_user_uc,
+        create_group_uc=create_group_uc,
+        list_groups_uc=list_groups_uc,
+        get_group_uc=get_group_uc,
+        update_group_uc=update_group_uc,
+        delete_group_uc=delete_group_uc,
+        add_member_uc=add_member_uc,
+        remove_member_uc=remove_member_uc,
+    )
+
+    # -- Node group use cases --
+    list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo, node_repo)
+    get_node_group_uc = GetNodeGroupUseCase(node_group_repo, node_repo)
+    create_node_group_uc = CreateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
+    update_node_group_uc = UpdateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
+    delete_node_group_uc = DeleteNodeGroupUseCase(node_group_repo, wazuh_client, puppet_nc_client)
+    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo, wazuh_client)
+    remove_node_from_group_uc = RemoveNodeFromGroupUseCase(node_group_repo, node_repo)
+    list_facts_uc = ListFactsUseCase(node_repo)
+    preview_matching_uc = PreviewMatchingUseCase(node_repo)
+
+    node_groups_routes.set_use_cases(
+        list_uc=list_node_groups_uc,
+        get_uc=get_node_group_uc,
+        create_uc=create_node_group_uc,
+        update_uc=update_node_group_uc,
+        delete_uc=delete_node_group_uc,
+        add_node_uc=add_node_to_group_uc,
+        remove_node_uc=remove_node_from_group_uc,
+        facts_uc=list_facts_uc,
+        preview_uc=preview_matching_uc,
     )
 
     # -- WebSocket manager --
@@ -117,6 +198,10 @@ async def lifespan(app: FastAPI):
     # -- SSH + Ansible clients --
     ssh_client = SshClientAdapter(settings.ssh_key_path)
     ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path, settings.packages_dir)
+
+    # -- Job infrastructure (needed by both node and provisioning use cases) --
+    start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
+    detect_agents_uc = DetectAgentsUseCase(start_job_uc, node_repo, job_repo)
 
     # -- Node use cases --
     register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)
@@ -151,6 +236,7 @@ async def lifespan(app: FastAPI):
         check_dns_uc=check_dns_uc,
         fix_dns_uc=fix_dns_uc,
         change_identity_uc=change_identity_uc,
+        detect_agents_uc=detect_agents_uc,
     )
 
     # -- Provisioning / infrastructure use cases --
@@ -166,27 +252,31 @@ async def lifespan(app: FastAPI):
         settings.puppet_master_port,
         settings.wazuh_api_port,
     )
-    start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
     list_jobs_uc = ListJobsUseCase(job_repo)
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)
 
-    install_puppet_master_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
-    install_wazuh_manager_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
-    install_puppet_agent_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
-    install_wazuh_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
-    inspec_uc                = InspecControllerUseCase(node_repo, settings.ssh_key_path)
+    install_puppet_master_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
+    install_wazuh_manager_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
+    install_wazuh_manager_colocated_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager_colocated")
+    install_puppet_agent_uc            = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
+    install_wazuh_agent_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
+    check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
+    scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
         set_master_uc=set_master_host_uc,
         install_puppet_master_uc=install_puppet_master_uc,
         install_wazuh_manager_uc=install_wazuh_manager_uc,
+        install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
-        inspec_uc=inspec_uc,
+        check_health_uc=check_health_uc,
+        scan_engine_uc=scan_engine_uc,
         node_repo=node_repo,
         packages_dir=settings.packages_dir,
+        ssh_client=ssh_client,
     )
     jobs_routes.set_use_cases(
         list_uc=list_jobs_uc,
@@ -196,17 +286,59 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Compliance use cases --
+    # Bundled CIS profile lives at backend/scan-profiles/sabc-linux-baseline.
+    scan_profile_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "scan-profiles", "sabc-linux-baseline",
+    )
+    collect_uc = CollectNodeComplianceUseCase(
+        node_repo, compliance_repo, ssh_client,
+        default_ssh_key_path=settings.ssh_key_path,
+        profile_path=scan_profile_path,
+        scan_ctrl=scan_engine_uc,
+    )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
-        collect_uc=CollectNodeComplianceUseCase(node_repo, compliance_repo, ssh_client),
+        collect_uc=collect_uc,
         remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
+        config_repo=platform_config_repo,
     )
+
+    # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
+    auto_scan = AutoScanScheduler(collect_uc, node_repo, platform_config_repo)
+    auto_scan.start()
+
+    # -- Compliance profiles (referentials) --
+    profile_uc = ProfileUseCases(profile_repo)
+    profiles_routes.set_use_cases(profile_uc)
+
+    # -- Platform settings (TLS certificate management) --
+    tls_cert_uc = TlsCertificateUseCase(settings.tls_certs_dir)
+    distribute_cert_uc = DistributeCertificateUseCase(
+        node_repo=node_repo,
+        job_repo=job_repo,
+        ws_manager=ws_manager,
+        certs_dir=settings.tls_certs_dir,
+        ssh_key_path=settings.ssh_key_path,
+    )
+    settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
 
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
-    # -- Bootstrap --
+    # -- Bootstrap: seed default groups BEFORE init admin user --
+    try:
+        await SeedDefaultGroupsUseCase(group_repo).execute()
+    except Exception as exc:
+        logger.debug("Default group seeding: %s", exc)
+
+    # -- Bootstrap: seed the built-in SABC hardening referential --
+    try:
+        await profile_uc.seed_builtin()
+    except Exception as exc:
+        logger.debug("Profile seeding: %s", exc)
+
     try:
         user_creds = await init_admin_user_uc.execute()
         if user_creds:
@@ -234,6 +366,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    auto_scan.stop()
     await engine.dispose()
     logger.info("Shutdown complete")
 
@@ -248,7 +381,9 @@ def create_app() -> FastAPI:
 ## SABC Integrated Linux Compliance Platform
 
 Manages a fleet of Linux servers (Rocky Linux 9 + Ubuntu 22.04) with automated
-compliance enforcement across **CIS Benchmarks**, **ISO/IEC 27001**, and **PCI-DSS**.
+compliance enforcement across two frameworks: **CIS Benchmark** (built-in hardening
+baseline) and **Internal Referential** (SABC company-specific baseline, independently
+maintained and distinct from the CIS framework).
 
 ### Closed Feedback Loop
 Wazuh detects a violation → webhook → Puppet remediation → recorded result.
@@ -263,12 +398,14 @@ Two methods accepted on all protected endpoints:
             {"name": "Health", "description": "Platform health checks"},
             {"name": "Auth", "description": "Authentication — API keys and user login"},
             {"name": "Nodes", "description": "Linux server node registry"},
+            {"name": "Node Groups", "description": "Node group management with Wazuh and Puppet NC sync"},
             {"name": "Infrastructure", "description": "Puppet and Wazuh infrastructure setup"},
             {"name": "Jobs", "description": "Ansible provisioning jobs and log streaming"},
             {"name": "Compliance", "description": "Compliance reports and remediation"},
             {"name": "Rules", "description": "Puppet compliance rules library"},
             {"name": "Audit", "description": "HTTP audit log"},
             {"name": "Webhooks", "description": "Internal webhook endpoints"},
+            {"name": "Settings", "description": "Platform settings — TLS certificate management"},
         ],
     )
 
@@ -299,9 +436,12 @@ Two methods accepted on all protected endpoints:
 
     app.include_router(auth_routes.router)
     app.include_router(nodes_routes.router)
+    app.include_router(node_groups_routes.router)
     app.include_router(infrastructure_routes.router)
     app.include_router(jobs_routes.router)
     app.include_router(compliance_routes.router)
+    app.include_router(profiles_routes.router)
+    app.include_router(settings_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

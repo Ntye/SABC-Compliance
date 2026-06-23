@@ -1,0 +1,225 @@
+{
+  "info": {
+    "_postman_id": "c4d5e6f7-8a9b-4c0d-9e1f-2a3b4c5d6e7f",
+    "name": "Puppet Enterprise APIs",
+    "description": "Comprehensive collection for the Puppet Enterprise service APIs.\n\nEACH PE SERVICE LISTENS ON ITS OWN PORT\n- RBAC API .................. 4433  (rbacUrl)\n- Activity service API ....... 4433  (rbacUrl)\n- Node Classifier API ........ 4433  (rbacUrl)\n- Orchestrator API ........... 8143  (orchestratorUrl)\n- PuppetDB API ............... 8081  (puppetdbUrl)\n- Code Manager API ........... 8170  (codeManagerUrl)\n- Puppet Server / CA API ..... 8140  (puppetserverUrl)\n- Status API ................. 8140 / 4433 / 8143 (per service)\n\nAUTHENTICATION (token-based)\n1. Select the **Puppet** environment.\n2. Set `puppetHost` to the PE primary server FQDN, plus `puppetLogin` / `puppetPassword`.\n3. Run **RBAC > Generate auth token**. It stores the RBAC token in `token`.\n4. Every PE service request inherits `X-Authentication: {{token}}` from the collection auth (apikey-in-header).\n\nNOTES\n- PE uses self-signed certs from its own CA. For testing, disable SSL verification in Postman (Settings > SSL certificate verification = OFF), or add the PE CA cert.\n- PuppetDB and Puppet Server normally use client-cert (mTLS) auth. With a token + RBAC whitelist they accept `X-Authentication`; otherwise attach a client certificate in Postman (Settings > Certificates).\n- Code Manager uses its own token (set `codeManagerToken`) passed as the `X-Authentication` header on its requests, or a query param for the webhook.\n- PQL/AST queries for PuppetDB go in the `query` param (GET) or request body (POST).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-Authentication", "type": "string" },
+      { "key": "value", "value": "{{token}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "rbacUrl", "value": "https://{{puppetHost}}:{{rbacPort}}", "type": "string" },
+    { "key": "orchestratorUrl", "value": "https://{{puppetHost}}:{{orchestratorPort}}", "type": "string" },
+    { "key": "puppetdbUrl", "value": "https://{{puppetHost}}:{{puppetdbPort}}", "type": "string" },
+    { "key": "codeManagerUrl", "value": "https://{{puppetHost}}:{{codeManagerPort}}", "type": "string" },
+    { "key": "puppetserverUrl", "value": "https://{{puppetHost}}:{{puppetserverPort}}", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "environment", "value": "production", "type": "string" },
+    { "key": "certname", "value": "agent.example.com", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "RBAC API (:4433)",
+      "item": [
+        {
+          "name": "Generate auth token (POST /rbac-api/v1/auth/token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let token = '';",
+                  "try { token = (pm.response.json().token || '').trim(); } catch (e) {}",
+                  "pm.collectionVariables.set('token', token);",
+                  "pm.environment.set('token', token);",
+                  "pm.test('Got an RBAC token', function () { pm.expect(token.length).to.be.above(10); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"login\": \"{{puppetLogin}}\",\n  \"password\": \"{{puppetPassword}}\",\n  \"lifetime\": \"1h\",\n  \"label\": \"postman\"\n}" },
+            "url": "{{rbacUrl}}/rbac-api/v1/auth/token",
+            "description": "Authenticate with PE credentials and return an RBAC token. `lifetime` accepts values like 1h, 1d, or 0 for the configured max. Stored automatically in {{token}}."
+          }
+        },
+        { "name": "List tokens (GET /rbac-api/v2/tokens)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v2/tokens" } },
+        { "name": "Revoke token (DELETE /rbac-api/v2/tokens)", "request": { "method": "DELETE", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"token\": \"<token-to-revoke>\"\n}" }, "url": "{{rbacUrl}}/rbac-api/v2/tokens" } },
+        { "name": "List users (GET /rbac-api/v1/users)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/users" } },
+        { "name": "Current user (GET /rbac-api/v1/users/current)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/users/current" } },
+        { "name": "Get user (GET /rbac-api/v1/users/{uuid})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/users/{{userUuid}}" } },
+        { "name": "Create user (POST /rbac-api/v1/users)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"login\": \"jdoe\",\n  \"email\": \"jdoe@example.com\",\n  \"display_name\": \"Jane Doe\",\n  \"role_ids\": [1],\n  \"password\": \"Passw0rd!\"\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/users" } },
+        { "name": "Replace user (PUT /rbac-api/v1/users/{uuid})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"login\": \"jdoe\",\n  \"email\": \"jdoe@example.com\",\n  \"display_name\": \"Jane Doe\",\n  \"role_ids\": [1],\n  \"is_revoked\": false\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/users/{{userUuid}}" } },
+        { "name": "Delete user (DELETE /rbac-api/v1/users/{uuid})", "request": { "method": "DELETE", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/users/{{userUuid}}" } },
+        { "name": "List groups (GET /rbac-api/v1/groups)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/groups" } },
+        { "name": "Get group (GET /rbac-api/v1/groups/{uuid})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/groups/{{groupUuid}}" } },
+        { "name": "Create directory group (POST /rbac-api/v1/groups)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"login\": \"cn=admins,ou=groups,dc=example,dc=com\",\n  \"role_ids\": [1]\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/groups" } },
+        { "name": "Replace group (PUT /rbac-api/v1/groups/{uuid})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"role_ids\": [1, 2]\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/groups/{{groupUuid}}" } },
+        { "name": "Delete group (DELETE /rbac-api/v1/groups/{uuid})", "request": { "method": "DELETE", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/groups/{{groupUuid}}" } },
+        { "name": "List roles (GET /rbac-api/v1/roles)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/roles" } },
+        { "name": "Get role (GET /rbac-api/v1/roles/{rid})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/roles/1" } },
+        { "name": "Create role (POST /rbac-api/v1/roles)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"display_name\": \"Operators\",\n  \"description\": \"Run Puppet on nodes\",\n  \"permissions\": [\n    { \"object_type\": \"node_groups\", \"action\": \"view\", \"instance\": \"*\" }\n  ],\n  \"user_ids\": [],\n  \"group_ids\": []\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/roles" } },
+        { "name": "Replace role (PUT /rbac-api/v1/roles/{rid})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"display_name\": \"Operators\",\n  \"description\": \"Updated\",\n  \"permissions\": [],\n  \"user_ids\": [],\n  \"group_ids\": []\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/roles/1" } },
+        { "name": "Delete role (DELETE /rbac-api/v1/roles/{rid})", "request": { "method": "DELETE", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/roles/1" } },
+        { "name": "List permissions (GET /rbac-api/v1/permissions)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/permissions" } },
+        { "name": "List object types (GET /rbac-api/v1/types)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/types" } },
+        { "name": "Get LDAP config (GET /rbac-api/v1/ldap)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/ldap" } },
+        { "name": "Set LDAP config (PUT /rbac-api/v1/ldap)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"hostname\": \"ldap.example.com\",\n  \"port\": 636,\n  \"ssl\": true,\n  \"login\": \"cn=svc,dc=example,dc=com\",\n  \"base_dn\": \"dc=example,dc=com\",\n  \"user_lookup_attr\": \"uid\",\n  \"user_rdn\": \"ou=people\"\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/ldap" } },
+        { "name": "Test LDAP connection (POST /rbac-api/v1/ldap/test)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"login\": \"jdoe\",\n  \"password\": \"Passw0rd!\"\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/ldap/test" } },
+        { "name": "Update own password (PUT /rbac-api/v1/users/{uuid}/password)", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"current_password\": \"OldPassw0rd!\",\n  \"password\": \"NewPassw0rd!\"\n}" }, "url": "{{rbacUrl}}/rbac-api/v1/users/{{userUuid}}/password" } },
+        { "name": "Generate password reset token (POST /rbac-api/v1/users/{uuid}/password/reset)", "request": { "method": "POST", "header": [], "url": "{{rbacUrl}}/rbac-api/v1/users/{{userUuid}}/password/reset" } }
+      ]
+    },
+    {
+      "name": "Activity Service API (:4433)",
+      "item": [
+        { "name": "List events v1 (GET /activity-api/v1/events)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/activity-api/v1/events?service_id=rbac&limit=100" } },
+        { "name": "List events v2 (GET /activity-api/v2/events)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/activity-api/v2/events?service_id=classifier&offset=0&limit=100&order=desc" } }
+      ]
+    },
+    {
+      "name": "Node Classifier API (:4433)",
+      "item": [
+        { "name": "List node groups (GET /classifier-api/v1/groups)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/groups" } },
+        { "name": "List node groups v2 (GET /classifier-api/v2/groups)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v2/groups" } },
+        { "name": "Get node group (GET /classifier-api/v1/groups/{id})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}" } },
+        { "name": "Create node group (POST /classifier-api/v1/groups)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Web Servers\",\n  \"environment\": \"production\",\n  \"parent\": \"00000000-0000-4000-8000-000000000000\",\n  \"rule\": [\"and\", [\"~\", [\"fact\", \"fqdn\"], \"^web\"]],\n  \"classes\": {}\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/groups" } },
+        { "name": "Update node group (POST /classifier-api/v1/groups/{id})", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"description\": \"Updated description\"\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}" } },
+        { "name": "Replace node group (PUT /classifier-api/v1/groups/{id})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Web Servers\",\n  \"environment\": \"production\",\n  \"parent\": \"00000000-0000-4000-8000-000000000000\",\n  \"rule\": [\"and\", [\"~\", [\"fact\", \"fqdn\"], \"^web\"]],\n  \"classes\": {}\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}" } },
+        { "name": "Delete node group (DELETE /classifier-api/v1/groups/{id})", "request": { "method": "DELETE", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}" } },
+        { "name": "Pin nodes to group (POST /classifier-api/v1/groups/{id}/pin)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"nodes\": [\"{{certname}}\"]\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}/pin" } },
+        { "name": "Unpin nodes from group (POST /classifier-api/v1/groups/{id}/unpin)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"nodes\": [\"{{certname}}\"]\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/groups/{{groupId}}/unpin" } },
+        { "name": "Classify node (GET /classifier-api/v1/classified/nodes/{name})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/classified/nodes/{{certname}}" } },
+        { "name": "Explain classification (POST /classifier-api/v1/classified/nodes/{name}/explanation)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"fact\": { \"fqdn\": \"{{certname}}\" }\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/classified/nodes/{{certname}}/explanation" } },
+        { "name": "List environments (GET /classifier-api/v1/environments)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/environments" } },
+        { "name": "Get environment (GET /classifier-api/v1/environments/{environment})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/environments/{{environment}}" } },
+        { "name": "List classes (GET /classifier-api/v1/classes)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/classes" } },
+        { "name": "Classes in environment (GET /classifier-api/v1/environments/{environment}/classes)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/environments/{{environment}}/classes" } },
+        { "name": "Get node check-in (GET /classifier-api/v1/nodes/{name})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/nodes/{{certname}}" } },
+        { "name": "Trigger class update (POST /classifier-api/v1/update-classes)", "request": { "method": "POST", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/update-classes?environment={{environment}}" } },
+        { "name": "Last class update (GET /classifier-api/v1/last-class-update)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/last-class-update" } },
+        { "name": "Group children (GET /classifier-api/v1/group-children/{id})", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/classifier-api/v1/group-children/{{groupId}}" } },
+        { "name": "Validate group (POST /classifier-api/v1/validate/group)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Test\",\n  \"environment\": \"production\",\n  \"parent\": \"00000000-0000-4000-8000-000000000000\",\n  \"classes\": {}\n}" }, "url": "{{rbacUrl}}/classifier-api/v1/validate/group" } },
+        { "name": "Import hierarchy (POST /classifier-api/v1/import-hierarchy)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "[]" }, "url": "{{rbacUrl}}/classifier-api/v1/import-hierarchy" } },
+        { "name": "Classifier status (GET /status/v1/services)", "request": { "method": "GET", "header": [], "url": "{{rbacUrl}}/status/v1/services?level=debug" } }
+      ]
+    },
+    {
+      "name": "Orchestrator API (:8143)",
+      "item": [
+        { "name": "API overview (GET /orchestrator/v1)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1" } },
+        { "name": "List jobs (GET /orchestrator/v1/jobs)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/jobs?limit=20&order=desc" } },
+        { "name": "Get job (GET /orchestrator/v1/jobs/{job-id})", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/jobs/{{jobId}}" } },
+        { "name": "Job nodes (GET /orchestrator/v1/jobs/{job-id}/nodes)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/jobs/{{jobId}}/nodes" } },
+        { "name": "Job report (GET /orchestrator/v1/jobs/{job-id}/report)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/jobs/{{jobId}}/report" } },
+        { "name": "Job events (GET /orchestrator/v1/jobs/{job-id}/events)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/jobs/{{jobId}}/events" } },
+        { "name": "List tasks (GET /orchestrator/v1/tasks)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/tasks?environment={{environment}}" } },
+        { "name": "Get task metadata (GET /orchestrator/v1/tasks/{module}/{task})", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/tasks/package/install?environment={{environment}}" } },
+        { "name": "List plans (GET /orchestrator/v1/plans)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/plans?environment={{environment}}" } },
+        { "name": "Get plan metadata (GET /orchestrator/v1/plans/{module}/{plan})", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/plans/facts/init?environment={{environment}}" } },
+        { "name": "List plan jobs (GET /orchestrator/v1/plan_jobs)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/plan_jobs?limit=20" } },
+        { "name": "Get plan job (GET /orchestrator/v1/plan_jobs/{job-id})", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/plan_jobs/{{jobId}}" } },
+        { "name": "Get inventory node (GET /orchestrator/v1/inventory/{node})", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/inventory/{{certname}}" } },
+        { "name": "Check inventory (POST /orchestrator/v1/inventory)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"nodes\": [\"{{certname}}\"]\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/inventory" } },
+        { "name": "Run Puppet (POST /orchestrator/v1/command/deploy)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"environment\": \"{{environment}}\",\n  \"scope\": { \"nodes\": [\"{{certname}}\"] },\n  \"noop\": false,\n  \"no_noop\": false,\n  \"concurrency\": 50\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/deploy" } },
+        { "name": "Run task (POST /orchestrator/v1/command/task)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"environment\": \"{{environment}}\",\n  \"task\": \"package\",\n  \"params\": { \"action\": \"status\", \"name\": \"openssl\" },\n  \"scope\": { \"nodes\": [\"{{certname}}\"] }\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/task" } },
+        { "name": "Run plan (POST /orchestrator/v1/command/plan_run)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"plan_name\": \"facts\",\n  \"environment\": \"{{environment}}\",\n  \"params\": { \"nodes\": [\"{{certname}}\"] }\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/plan_run" } },
+        { "name": "Stop job (POST /orchestrator/v1/command/stop)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"job\": \"{{jobId}}\"\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/stop" } },
+        { "name": "Stop plan (POST /orchestrator/v1/command/stop_plan)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"plan_job\": \"{{jobId}}\"\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/stop_plan" } },
+        { "name": "Schedule task (POST /orchestrator/v1/command/schedule_task)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"environment\": \"{{environment}}\",\n  \"task\": \"package\",\n  \"params\": { \"action\": \"status\", \"name\": \"openssl\" },\n  \"scope\": { \"nodes\": [\"{{certname}}\"] },\n  \"scheduled_time\": \"2030-01-01T00:00:00Z\"\n}" }, "url": "{{orchestratorUrl}}/orchestrator/v1/command/schedule_task" } },
+        { "name": "List scheduled jobs (GET /orchestrator/v1/scheduled_jobs/environment_jobs)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/scheduled_jobs/environment_jobs" } },
+        { "name": "Delete scheduled job (DELETE /orchestrator/v1/scheduled_jobs/environment_jobs/{id})", "request": { "method": "DELETE", "header": [], "url": "{{orchestratorUrl}}/orchestrator/v1/scheduled_jobs/environment_jobs/{{jobId}}" } },
+        { "name": "Orchestrator status (GET /status/v1/services)", "request": { "method": "GET", "header": [], "url": "{{orchestratorUrl}}/status/v1/services?level=debug" } }
+      ]
+    },
+    {
+      "name": "PuppetDB API (:8081)",
+      "item": [
+        { "name": "PQL/AST query (GET /pdb/query/v4)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4?query=nodes[certname]{ certname ~ '.*' }" } },
+        { "name": "Query (POST /pdb/query/v4)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"query\": \"nodes { certname ~ '.*' }\"\n}" }, "url": "{{puppetdbUrl}}/pdb/query/v4" } },
+        { "name": "Nodes (GET /pdb/query/v4/nodes)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/nodes" } },
+        { "name": "Node (GET /pdb/query/v4/nodes/{certname})", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/nodes/{{certname}}" } },
+        { "name": "Node facts (GET /pdb/query/v4/nodes/{certname}/facts)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/nodes/{{certname}}/facts" } },
+        { "name": "Node resources (GET /pdb/query/v4/nodes/{certname}/resources)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/nodes/{{certname}}/resources" } },
+        { "name": "Facts (GET /pdb/query/v4/facts)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/facts" } },
+        { "name": "Fact by name (GET /pdb/query/v4/facts/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/facts/operatingsystem" } },
+        { "name": "Fact names (GET /pdb/query/v4/fact-names)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/fact-names" } },
+        { "name": "Fact contents (GET /pdb/query/v4/fact-contents)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/fact-contents" } },
+        { "name": "Fact paths (GET /pdb/query/v4/fact-paths)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/fact-paths" } },
+        { "name": "Factsets (GET /pdb/query/v4/factsets)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/factsets" } },
+        { "name": "Resources (GET /pdb/query/v4/resources)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/resources" } },
+        { "name": "Resources by type (GET /pdb/query/v4/resources/{type})", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/resources/User" } },
+        { "name": "Resource by type/title (GET /pdb/query/v4/resources/{type}/{title})", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/resources/User/root" } },
+        { "name": "Catalogs (GET /pdb/query/v4/catalogs)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/catalogs" } },
+        { "name": "Catalog by certname (GET /pdb/query/v4/catalogs/{certname})", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/catalogs/{{certname}}" } },
+        { "name": "Reports (GET /pdb/query/v4/reports)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/reports?limit=20" } },
+        { "name": "Events (GET /pdb/query/v4/events)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/events?query=[\"=\",\"certname\",\"{{certname}}\"]" } },
+        { "name": "Event counts (GET /pdb/query/v4/event-counts)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/event-counts?query=[\"=\",\"certname\",\"{{certname}}\"]&summarize_by=certname" } },
+        { "name": "Aggregate event counts (GET /pdb/query/v4/aggregate-event-counts)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/aggregate-event-counts?query=[\"=\",\"certname\",\"{{certname}}\"]&summarize_by=certname" } },
+        { "name": "Edges (GET /pdb/query/v4/edges)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/edges" } },
+        { "name": "Environments (GET /pdb/query/v4/environments)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/environments" } },
+        { "name": "Producers (GET /pdb/query/v4/producers)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/producers" } },
+        { "name": "Packages (GET /pdb/query/v4/packages)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/packages" } },
+        { "name": "Package inventory (GET /pdb/query/v4/package-inventory)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/query/v4/package-inventory/{{certname}}" } },
+        { "name": "Submit command (POST /pdb/cmd/v1)", "request": { "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"command\": \"deactivate node\",\n  \"version\": 3,\n  \"payload\": { \"certname\": \"{{certname}}\", \"producer_timestamp\": \"2030-01-01T00:00:00Z\" }\n}" }, "url": "{{puppetdbUrl}}/pdb/cmd/v1?command=deactivate_node&version=3&certname={{certname}}&checksum=<sha1>" } },
+        { "name": "Version (GET /pdb/meta/v1/version)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/meta/v1/version" } },
+        { "name": "Server time (GET /pdb/meta/v1/server-time)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/meta/v1/server-time" } },
+        { "name": "Export archive (GET /pdb/admin/v1/archive)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/pdb/admin/v1/archive" } },
+        { "name": "Metrics mbeans (GET /metrics/v1/mbeans)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/metrics/v1/mbeans" } },
+        { "name": "PuppetDB status (GET /status/v1/services)", "request": { "method": "GET", "header": [], "url": "{{puppetdbUrl}}/status/v1/services?level=debug" } }
+      ]
+    },
+    {
+      "name": "Code Manager API (:8170)",
+      "item": [
+        { "name": "Deploy environments (POST /code-manager/v1/deploys)", "request": { "auth": { "type": "apikey", "apikey": [ { "key": "key", "value": "X-Authentication", "type": "string" }, { "key": "value", "value": "{{codeManagerToken}}", "type": "string" }, { "key": "in", "value": "header", "type": "string" } ] }, "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"environments\": [\"{{environment}}\"],\n  \"wait\": true\n}" }, "url": "{{codeManagerUrl}}/code-manager/v1/deploys", "description": "Trigger a Code Manager deploy. Uses the Code Manager token (codeManagerToken), which must have code deployment permission." } },
+        { "name": "Deploy all environments (POST /code-manager/v1/deploys — deploy-all)", "request": { "auth": { "type": "apikey", "apikey": [ { "key": "key", "value": "X-Authentication", "type": "string" }, { "key": "value", "value": "{{codeManagerToken}}", "type": "string" }, { "key": "in", "value": "header", "type": "string" } ] }, "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"deploy-all\": true,\n  \"wait\": true\n}" }, "url": "{{codeManagerUrl}}/code-manager/v1/deploys" } },
+        { "name": "Deploy status (GET /code-manager/v1/deploys/status)", "request": { "auth": { "type": "apikey", "apikey": [ { "key": "key", "value": "X-Authentication", "type": "string" }, { "key": "value", "value": "{{codeManagerToken}}", "type": "string" }, { "key": "in", "value": "header", "type": "string" } ] }, "method": "GET", "header": [], "url": "{{codeManagerUrl}}/code-manager/v1/deploys/status" } },
+        { "name": "Webhook trigger (POST /code-manager/v1/webhook)", "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"ref\": \"refs/heads/production\",\n  \"repository\": { \"full_name\": \"control-repo\" }\n}" }, "url": "{{codeManagerUrl}}/code-manager/v1/webhook?type=github&token={{codeManagerToken}}", "description": "Git webhook endpoint. Authenticated via the token query param (and optionally provider HMAC). type can be github, gitlab, bitbucket, etc." } }
+      ]
+    },
+    {
+      "name": "Puppet Server / Master API (:8140)",
+      "item": [
+        { "name": "List environments (GET /puppet/v3/environments)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/environments" } },
+        { "name": "Node (GET /puppet/v3/node/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/node/{{certname}}?environment={{environment}}" } },
+        { "name": "Catalog (GET /puppet/v3/catalog/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/catalog/{{certname}}?environment={{environment}}" } },
+        { "name": "Facts (GET /puppet/v3/facts/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/facts/{{certname}}?environment={{environment}}" } },
+        { "name": "File metadata (GET /puppet/v3/file_metadata/{mount}/{path})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/file_metadata/modules/mymodule/myfile?environment={{environment}}" } },
+        { "name": "File metadatas (GET /puppet/v3/file_metadatas/{mount}/{path})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/file_metadatas/modules/mymodule?environment={{environment}}&recurse=true" } },
+        { "name": "File content (GET /puppet/v3/file_content/{mount}/{path})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/file_content/modules/mymodule/myfile?environment={{environment}}" } },
+        { "name": "Environment classes (GET /puppet/v3/environment_classes)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/environment_classes?environment={{environment}}" } },
+        { "name": "Environment modules (GET /puppet/v3/environment_modules)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/environment_modules?environment={{environment}}" } },
+        { "name": "Environment transports (GET /puppet/v3/environment_transports)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/environment_transports?environment={{environment}}" } },
+        { "name": "Status (GET /puppet/v3/status/{subject})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet/v3/status/test?environment={{environment}}" } },
+        { "name": "Flush environment cache (DELETE /puppet-admin-api/v1/environment-cache)", "request": { "method": "DELETE", "header": [], "url": "{{puppetserverUrl}}/puppet-admin-api/v1/environment-cache" } },
+        { "name": "Flush JRuby pool (DELETE /puppet-admin-api/v1/jruby-pool)", "request": { "method": "DELETE", "header": [], "url": "{{puppetserverUrl}}/puppet-admin-api/v1/jruby-pool" } },
+        { "name": "Puppet Server status (GET /status/v1/services)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/status/v1/services?level=debug" } }
+      ]
+    },
+    {
+      "name": "Puppet CA API (:8140)",
+      "item": [
+        { "name": "Get certificate (GET /puppet-ca/v1/certificate/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate/{{certname}}" } },
+        { "name": "All certificate statuses (GET /puppet-ca/v1/certificate_statuses/any)", "request": { "method": "GET", "header": [ { "key": "Accept", "value": "application/json" } ], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_statuses/any_key" } },
+        { "name": "Certificate status (GET /puppet-ca/v1/certificate_status/{name})", "request": { "method": "GET", "header": [ { "key": "Accept", "value": "application/json" } ], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_status/{{certname}}" } },
+        { "name": "Sign certificate (PUT /puppet-ca/v1/certificate_status/{name})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"desired_state\": \"signed\"\n}" }, "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_status/{{certname}}" } },
+        { "name": "Revoke certificate (PUT /puppet-ca/v1/certificate_status/{name})", "request": { "method": "PUT", "header": [ { "key": "Content-Type", "value": "application/json" } ], "body": { "mode": "raw", "raw": "{\n  \"desired_state\": \"revoked\"\n}" }, "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_status/{{certname}}" } },
+        { "name": "Clean certificate (DELETE /puppet-ca/v1/certificate_status/{name})", "request": { "method": "DELETE", "header": [], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_status/{{certname}}" } },
+        { "name": "Get CSR (GET /puppet-ca/v1/certificate_request/{name})", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_request/{{certname}}" } },
+        { "name": "Delete CSR (DELETE /puppet-ca/v1/certificate_request/{name})", "request": { "method": "DELETE", "header": [], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_request/{{certname}}" } },
+        { "name": "Get CRL (GET /puppet-ca/v1/certificate_revocation_list/ca)", "request": { "method": "GET", "header": [], "url": "{{puppetserverUrl}}/puppet-ca/v1/certificate_revocation_list/ca" } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+---
+# Read-only diagnostic health check — makes no changes.
+# Collects system, agent, and connectivity information and prints it
+# to the job log so the operator can diagnose issues from the UI.
+#
+# Vars injected from platform config:
+#   puppet_master_host  (optional)
+#   wazuh_manager_host  (optional)
+#
+- name: Node Health Check
+  hosts: target
+  become: yes
+  gather_facts: yes
+
+  vars:
+    _puppet_master: "{{ puppet_master_host | default('') }}"
+    _wazuh_manager: "{{ wazuh_manager_host | default('') }}"
+
+  tasks:
+
+    # ── System overview ────────────────────────────────────────────────────────
+    - name: "══════════════════════════════════════════════════════════════════"
+      debug:
+        msg: "  SABC NODE HEALTH CHECK — {{ ansible_fqdn }}  ({{ ansible_date_time.iso8601 }})"
+
+    - name: "── SYSTEM INFO ──────────────────────────────────────────────────"
+      debug:
+        msg:
+          - "Hostname  : {{ ansible_hostname }}"
+          - "FQDN      : {{ ansible_fqdn }}"
+          - "IP (main) : {{ ansible_default_ipv4.address | default('unknown') }}"
+          - "OS        : {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_os_family }})"
+          - "Kernel    : {{ ansible_kernel }}"
+          - "Uptime    : {{ (ansible_uptime_seconds / 3600) | int }}h {{ ((ansible_uptime_seconds % 3600) / 60) | int }}m"
+          - "vCPUs     : {{ ansible_processor_vcpus }}"
+          - "Memory    : {{ (ansible_memtotal_mb / 1024) | round(1) }} GB total, {{ (ansible_memfree_mb / 1024) | round(1) }} GB free"
+
+    - name: Check disk usage on key mount points
+      shell: df -h --output=target,pcent,used,avail,fstype 2>/dev/null | awk '!seen[$1]++ || NR==1' | column -t
+      register: _disk
+      changed_when: false
+      failed_when: false
+
+    - name: "── DISK ─────────────────────────────────────────────────────────"
+      debug:
+        msg: "{{ _disk.stdout_lines | default(['(unavailable)']) }}"
+
+    # ── SSH ───────────────────────────────────────────────────────────────────
+    - name: Gather SSH daemon and authorized-key info
+      shell: |
+        sshd_svc=$(systemctl is-active sshd 2>/dev/null)
+        [ "${sshd_svc}" != "active" ] && sshd_svc=$(systemctl is-active ssh 2>/dev/null || echo "unknown")
+        echo "sshd service : ${sshd_svc}"
+        echo "sshd port    : $(ss -tlnp 2>/dev/null | awk '/:22 /{print $4}' | head -1 || echo 'unknown')"
+        echo "Authorized keys in ~/.ssh/authorized_keys: $(wc -l < ~/.ssh/authorized_keys 2>/dev/null || echo '0')"
+      register: _ssh
+      changed_when: false
+      failed_when: false
+      become: no
+
+    - name: "── SSH ───────────────────────────────────────────────────────────"
+      debug:
+        msg: "{{ _ssh.stdout_lines | default(['(unavailable)']) }}"
+
+    # ── Puppet Agent ─────────────────────────────────────────────────────────
+    - name: Gather Puppet agent state
+      shell: |
+        PUPPET=/opt/puppetlabs/puppet/bin/puppet
+        if [ ! -f "${PUPPET}" ]; then
+          echo "Status  : NOT INSTALLED"
+        else
+          echo "Status  : INSTALLED ($(${PUPPET} --version 2>/dev/null || echo 'version unknown'))"
+          echo "Service : $(systemctl is-active puppet 2>/dev/null || echo 'unknown')"
+          CERT=$(ls /etc/puppetlabs/puppet/ssl/certs/ 2>/dev/null | grep -v '^ca\.pem$' | head -1)
+          echo "Enrolled: $([ -n "${CERT}" ] && echo "YES — cert: ${CERT}" || echo "NO — no signed cert in ssl/certs/")"
+          SUMMARY=/opt/puppetlabs/puppet/cache/state/last_run_summary.yaml
+          if [ -f "${SUMMARY}" ]; then
+            echo "Last run: $(stat -c '%y' ${SUMMARY} 2>/dev/null | cut -d. -f1)"
+            grep -E '^\s+(failed|total|corrective_change|noop):' ${SUMMARY} 2>/dev/null | head -6 | sed 's/^/  /'
+          else
+            echo "Last run: never (no last_run_summary.yaml)"
+          fi
+        fi
+      register: _puppet
+      changed_when: false
+      failed_when: false
+
+    - name: "── PUPPET AGENT ─────────────────────────────────────────────────"
+      debug:
+        msg: "{{ _puppet.stdout_lines }}"
+
+    # ── Wazuh Agent ──────────────────────────────────────────────────────────
+    - name: Gather Wazuh agent state
+      shell: |
+        if [ ! -f /var/ossec/bin/wazuh-agentd ]; then
+          echo "Status  : NOT INSTALLED"
+        else
+          VER=$(/var/ossec/bin/wazuh-control info 2>/dev/null | grep -i '^wazuh' | head -1 || echo 'version unknown')
+          echo "Status  : INSTALLED (${VER})"
+          AGENTD=$(/var/ossec/bin/wazuh-control status 2>/dev/null | grep wazuh-agentd | awk '{print $NF}')
+          echo "Daemon  : ${AGENTD:-unknown}"
+          MGR=$(grep -oP '(?<=<address>)[^<]+' /var/ossec/etc/ossec.conf 2>/dev/null | head -1)
+          echo "Manager : ${MGR:-not set}"
+          AGENT_ID=$(awk '{print $1}' /var/ossec/etc/client.keys 2>/dev/null | head -1)
+          echo "Agent ID: ${AGENT_ID:-none (not enrolled)}"
+          if grep -aq 'Connected to the server' /var/ossec/logs/ossec.log 2>/dev/null; then
+            echo "Connected: YES"
+            grep 'Connected to the server' /var/ossec/logs/ossec.log 2>/dev/null | tail -1 | sed 's/^/  Last: /'
+          else
+            echo "Connected: NO"
+            # Show last 3 relevant log lines for diagnosis
+            grep -E 'ERROR|WARNING|Connecting|Duplicate|refused|denied' /var/ossec/logs/ossec.log 2>/dev/null | tail -3 | sed 's/^/  Log: /'
+          fi
+        fi
+      register: _wazuh
+      changed_when: false
+      failed_when: false
+
+    - name: "── WAZUH AGENT ──────────────────────────────────────────────────"
+      debug:
+        msg: "{{ _wazuh.stdout_lines }}"
+
+    # ── Network connectivity ──────────────────────────────────────────────────
+    - name: Test connectivity to Puppet master
+      shell: |
+        HOST="{{ _puppet_master }}"
+        if [ -z "${HOST}" ]; then
+          echo "Puppet master: not configured on this platform"
+        else
+          echo "Puppet master: ${HOST}"
+          for port in 8140 8143; do
+            timeout 3 bash -c "echo >/dev/tcp/${HOST}/${port}" 2>/dev/null \
+              && echo "  port ${port}: OPEN" \
+              || echo "  port ${port}: UNREACHABLE (firewall or service down)"
+          done
+        fi
+      register: _puppet_net
+      changed_when: false
+      failed_when: false
+
+    - name: Test connectivity to Wazuh manager
+      shell: |
+        HOST="{{ _wazuh_manager }}"
+        if [ -z "${HOST}" ]; then
+          echo "Wazuh manager: not configured on this platform"
+        else
+          echo "Wazuh manager: ${HOST}"
+          for port in 1514 1515 55000; do
+            timeout 3 bash -c "echo >/dev/tcp/${HOST}/${port}" 2>/dev/null \
+              && echo "  port ${port}: OPEN" \
+              || echo "  port ${port}: UNREACHABLE (firewall or service down)"
+          done
+        fi
+      register: _wazuh_net
+      changed_when: false
+      failed_when: false
+
+    - name: "── NETWORK CONNECTIVITY ─────────────────────────────────────────"
+      debug:
+        msg: "{{ _puppet_net.stdout_lines + _wazuh_net.stdout_lines }}"
+
+    # ── DNS resolution ────────────────────────────────────────────────────────
+    - name: Check DNS resolution for master hostnames
+      shell: |
+        for h in "{{ _puppet_master }}" "{{ _wazuh_manager }}"; do
+          [ -z "${h}" ] && continue
+          ip=$(getent hosts "${h}" 2>/dev/null | awk '{print $1}')
+          if [ -n "${ip}" ]; then
+            echo "  ${h} → ${ip}  [OK]"
+          else
+            echo "  ${h} → CANNOT RESOLVE  [check /etc/hosts or DNS]"
+          fi
+        done
+      register: _dns
+      changed_when: false
+      failed_when: false
+
+    - name: "── DNS RESOLUTION ───────────────────────────────────────────────"
+      debug:
+        msg: "{{ _dns.stdout_lines | default(['(no masters configured)']) }}"
+
+    # ── Clock synchronisation ─────────────────────────────────────────────────
+    - name: Check NTP / clock sync
+      shell: |
+        if command -v timedatectl >/dev/null 2>&1; then
+          timedatectl status 2>/dev/null | grep -E 'Local time|synchronized|service|RTC'
+        else
+          echo "Current UTC: $(date -u)"
+        fi
+        # Chrony offset if available
+        if command -v chronyc >/dev/null 2>&1; then
+          chronyc tracking 2>/dev/null | grep -E 'System time|Stratum|Last offset' | sed 's/^/  /'
+        fi
+      register: _clock
+      changed_when: false
+      failed_when: false
+
+    - name: "── CLOCK SYNC ───────────────────────────────────────────────────"
+      debug:
+        msg: "{{ _clock.stdout_lines }}"
+
+    - name: "══════════════════════════════════════════════════════════════════"
+      debug:
+        msg: "  Health check complete — review sections above for any issues."

@@ -1,0 +1,12 @@
+# Keep shell scripts and other Linux-bound files LF-only, even when the repo is
+# cloned or built on a Windows host. Without this, git's autocrlf can rewrite
+# these with CRLF line endings, which breaks shebang resolution inside Docker
+# (e.g. "exec /docker-entrypoint.sh: no such file or directory").
+*.sh            text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# Windows-side script: keep CRLF so it edits cleanly in Windows tools.
+*.ps1           text eol=crlf
