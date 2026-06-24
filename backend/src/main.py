@@ -34,7 +34,7 @@ from modules.node_groups.usecases import (
     CreateNodeGroupUseCase, UpdateNodeGroupUseCase, DeleteNodeGroupUseCase,
     ListNodeGroupsUseCase, GetNodeGroupUseCase, AddNodeToGroupUseCase,
     RemoveNodeFromGroupUseCase, ListFactsUseCase, PreviewMatchingUseCase,
-    SeedDefaultNodeGroupsUseCase,
+    SeedDefaultNodeGroupsUseCase, SyncAllNodeGroupsUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -182,6 +182,7 @@ async def lifespan(app: FastAPI):
     list_facts_uc = ListFactsUseCase(node_repo)
     preview_matching_uc = PreviewMatchingUseCase(node_repo)
     seed_node_groups_uc = SeedDefaultNodeGroupsUseCase(node_group_repo)
+    sync_node_groups_uc = SyncAllNodeGroupsUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
 
     node_groups_routes.set_use_cases(
         list_uc=list_node_groups_uc,
@@ -194,6 +195,7 @@ async def lifespan(app: FastAPI):
         facts_uc=list_facts_uc,
         preview_uc=preview_matching_uc,
         seed_uc=seed_node_groups_uc,
+        sync_uc=sync_node_groups_uc,
     )
 
     # -- WebSocket manager --
@@ -346,11 +348,23 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Default group seeding: %s", exc)
 
-    # -- Bootstrap: seed OS-family node group hierarchy --
+    # -- Bootstrap: seed OS-family node group hierarchy, then push to PE/Wazuh
+    #    so already-registered nodes are classified. Sync is best-effort: if the
+    #    Puppet master / Wazuh manager is not yet reachable the groups stay marked
+    #    unsynced and an admin can re-run it from the UI (POST /node-groups/sync).
     try:
         n = await seed_node_groups_uc.execute()
         if n:
             logger.info("Seeded %d default node groups", n)
+        try:
+            result = await sync_node_groups_uc.execute()
+            logger.info(
+                "Node group sync: %d/%d groups, %d node memberships classified",
+                result.get("groups_synced", 0), result.get("groups_total", 0),
+                result.get("nodes_classified", 0),
+            )
+        except Exception as exc:
+            logger.debug("Node group sync (deferred to admin): %s", exc)
     except Exception as exc:
         logger.debug("Node group seeding: %s", exc)
 

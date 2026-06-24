@@ -79,12 +79,13 @@ _remove_node_uc = None
 _facts_uc = None
 _preview_uc = None
 _seed_uc = None
+_sync_uc = None
 
 
 def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_node_uc,
-                  update_uc=None, facts_uc=None, preview_uc=None, seed_uc=None):
+                  update_uc=None, facts_uc=None, preview_uc=None, seed_uc=None, sync_uc=None):
     global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc
-    global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc, _seed_uc
+    global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc, _seed_uc, _sync_uc
     _list_uc = list_uc
     _get_uc = get_uc
     _create_uc = create_uc
@@ -95,6 +96,7 @@ def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_nod
     _facts_uc = facts_uc
     _preview_uc = preview_uc
     _seed_uc = seed_uc
+    _sync_uc = sync_uc
 
 
 def _resp(g, matching=None) -> NodeGroupResponse:
@@ -116,9 +118,23 @@ def _resp(g, matching=None) -> NodeGroupResponse:
 
 @router.post("/seed-defaults", status_code=200)
 async def seed_default_groups(principal=Depends(require_admin)):
-    """Re-seed the built-in OS-family node group hierarchy (idempotent)."""
+    """Re-seed the OS-family hierarchy (idempotent) and push every group to
+    Puppet & Wazuh so already-registered nodes are classified immediately."""
     created = await _seed_uc.execute()
-    return {"created": created, "message": f"Seeded {created} new system groups"}
+    sync = await _sync_uc.execute() if _sync_uc else {}
+    return {
+        "created": created,
+        "sync": sync,
+        "message": f"Seeded {created} new groups; "
+                   f"classified {sync.get('nodes_classified', 0)} node memberships",
+    }
+
+
+@router.post("/sync", status_code=200)
+async def sync_node_groups(principal=Depends(require_admin)):
+    """Re-push all node groups to Puppet & Wazuh, assigning currently-matching
+    registered nodes. Use after enrolling nodes or when PE/Wazuh come online."""
+    return await _sync_uc.execute()
 
 
 @router.get("", response_model=list[NodeGroupResponse])

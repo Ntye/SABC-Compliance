@@ -115,29 +115,39 @@ def _validate(data: dict) -> None:
 # Built from outermost (SABC Managed) down to version-specific leaves.
 # Each node matches all groups for which its facts satisfy the rules.
 # Puppet inherits classes top-down; the most specific group wins for InSpec profile.
+#
+# IMPORTANT — matching against real facts collected by RegisterNodeUseCase._detect_os:
+#   os_family  = "Debian" | "RedHat" | "Unknown"   (exact)
+#   os_name    = os-release PRETTY_NAME (fallback NAME), e.g. "Ubuntu 22.04.3 LTS",
+#                "Debian GNU/Linux 12 (bookworm)", "CentOS Linux 7 (Core)",
+#                "Rocky Linux 9.3 (Blue Onyx)", "AlmaLinux 8.9 (Midnight Oncilla)".
+#                → distro rules MUST use the "~" (substring/regex) operator, not "=".
+#   os_version = os-release VERSION_ID, e.g. "22.04", "12", "7", "8", "9.3".
+#                → RHEL-family majors anchor on "^N" (no trailing dot) because
+#                  CentOS/Rocky may report bare "8" or "8.9".
 
 _UBUNTU_CHILDREN = [
     {"name": "Ubuntu 20.04", "parent": "Ubuntu", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_name", "operator": "~", "value": "Ubuntu"},
         {"fact": "os_version", "operator": "~", "value": r"^20\."},
     ]},
     {"name": "Ubuntu 22.04", "parent": "Ubuntu", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_name", "operator": "~", "value": "Ubuntu"},
         {"fact": "os_version", "operator": "~", "value": r"^22\."},
     ]},
     {"name": "Ubuntu 24.04", "parent": "Ubuntu", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_name", "operator": "~", "value": "Ubuntu"},
         {"fact": "os_version", "operator": "~", "value": r"^24\."},
     ]},
 ]
 
 _DEBIAN_CHILDREN = [
     {"name": "Debian 11", "parent": "Debian", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "Debian"},
+        {"fact": "os_name", "operator": "~", "value": "Debian"},
         {"fact": "os_version", "operator": "~", "value": r"^11"},
     ]},
     {"name": "Debian 12", "parent": "Debian", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "Debian"},
+        {"fact": "os_name", "operator": "~", "value": "Debian"},
         {"fact": "os_version", "operator": "~", "value": r"^12"},
     ]},
 ]
@@ -145,33 +155,33 @@ _DEBIAN_CHILDREN = [
 _ROCKY_CHILDREN = [
     {"name": "Rocky Linux 8", "parent": "Rocky Linux", "rules": [
         {"fact": "os_name", "operator": "~", "value": "Rocky"},
-        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+        {"fact": "os_version", "operator": "~", "value": r"^8"},
     ]},
     {"name": "Rocky Linux 9", "parent": "Rocky Linux", "rules": [
         {"fact": "os_name", "operator": "~", "value": "Rocky"},
-        {"fact": "os_version", "operator": "~", "value": r"^9\."},
+        {"fact": "os_version", "operator": "~", "value": r"^9"},
     ]},
 ]
 
 _CENTOS_CHILDREN = [
     {"name": "CentOS 7", "parent": "CentOS", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "CentOS"},
-        {"fact": "os_version", "operator": "~", "value": r"^7\."},
+        {"fact": "os_name", "operator": "~", "value": "CentOS"},
+        {"fact": "os_version", "operator": "~", "value": r"^7"},
     ]},
     {"name": "CentOS Stream 8", "parent": "CentOS", "rules": [
-        {"fact": "os_name", "operator": "=", "value": "CentOS"},
-        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+        {"fact": "os_name", "operator": "~", "value": "CentOS"},
+        {"fact": "os_version", "operator": "~", "value": r"^8"},
     ]},
 ]
 
 _ALMA_CHILDREN = [
     {"name": "AlmaLinux 8", "parent": "AlmaLinux", "rules": [
         {"fact": "os_name", "operator": "~", "value": "AlmaLinux"},
-        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+        {"fact": "os_version", "operator": "~", "value": r"^8"},
     ]},
     {"name": "AlmaLinux 9", "parent": "AlmaLinux", "rules": [
         {"fact": "os_name", "operator": "~", "value": "AlmaLinux"},
-        {"fact": "os_version", "operator": "~", "value": r"^9\."},
+        {"fact": "os_version", "operator": "~", "value": r"^9"},
     ]},
 ]
 
@@ -198,7 +208,7 @@ DEFAULT_NODE_GROUP_TREE = [
                         "name": "Ubuntu",
                         "description": "Ubuntu Linux servers",
                         "parent": "Debian Family",
-                        "rules": [{"fact": "os_name", "operator": "=", "value": "Ubuntu"}],
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "Ubuntu"}],
                         "inspec_profile_id": "sabc-linux-baseline",
                         "children": _UBUNTU_CHILDREN,
                     },
@@ -206,7 +216,7 @@ DEFAULT_NODE_GROUP_TREE = [
                         "name": "Debian",
                         "description": "Debian Linux servers",
                         "parent": "Debian Family",
-                        "rules": [{"fact": "os_name", "operator": "=", "value": "Debian"}],
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "Debian"}],
                         "inspec_profile_id": "sabc-linux-baseline",
                         "children": _DEBIAN_CHILDREN,
                     },
@@ -231,7 +241,7 @@ DEFAULT_NODE_GROUP_TREE = [
                         "name": "CentOS",
                         "description": "CentOS Linux servers",
                         "parent": "RedHat Family",
-                        "rules": [{"fact": "os_name", "operator": "=", "value": "CentOS"}],
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "CentOS"}],
                         "inspec_profile_id": "sabc-linux-baseline",
                         "children": _CENTOS_CHILDREN,
                     },
@@ -293,6 +303,76 @@ class SeedDefaultNodeGroupsUseCase:
             if children:
                 created += await self._seed_tree(children)
         return created
+
+
+class SyncAllNodeGroupsUseCase:
+    """Push every node group to Puppet Enterprise and Wazuh, assigning all
+    currently-matching registered nodes.
+
+    Groups are processed in ``created_at`` order which — because the seeder
+    inserts parents before children (depth-first pre-order) — guarantees a
+    parent's ``puppet_group_id`` is persisted before its children resolve
+    their PE ``parent_id``. Existing enrolled nodes are classified the moment
+    this runs: Puppet evaluates the group's rules against agent facts, and the
+    matched hostnames are explicitly assigned to the Wazuh agent group.
+    """
+    def __init__(self, repo, node_repo, wazuh_client, puppet_client):
+        self._repo = repo
+        self._node_repo = node_repo
+        self._wazuh = wazuh_client
+        self._puppet = puppet_client
+
+    async def _parent_id(self, parent_name: str):
+        if not parent_name or parent_name == "All Nodes":
+            return None
+        parent = await self._repo.find_by_name(parent_name)
+        return parent.puppet_group_id if parent else None
+
+    async def execute(self) -> dict:
+        groups = await self._repo.find_all()
+        synced = failed = 0
+        total_nodes = 0
+        for g in groups:
+            resolved = await resolve_matching(g, self._node_repo)
+            total_nodes += len(resolved["ids"])
+            wazuh_ok = puppet_ok = True
+            try:
+                await self._wazuh.create_agent_group(g.name)
+                await self._wazuh.assign_agents_to_group(g.name, resolved["hostnames"])
+            except Exception as e:
+                wazuh_ok = False
+                logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
+            try:
+                parent_id = await self._parent_id(g.parent)
+                if g.puppet_group_id:
+                    await self._puppet.update_node_group(
+                        g.puppet_group_id, name=g.name, description=g.description,
+                        environment=g.environment, match_type=g.match_type,
+                        rules=g.rules, pinned_certnames=resolved["pinned_certnames"],
+                    )
+                else:
+                    g.puppet_group_id = await self._puppet.create_node_group(
+                        g.name, g.description, environment=g.environment,
+                        parent_id=parent_id, match_type=g.match_type, rules=g.rules,
+                        pinned_certnames=resolved["pinned_certnames"],
+                    ) or None
+            except Exception as e:
+                puppet_ok = False
+                logger.warning("Puppet sync failed for '%s': %s", g.name, e)
+            g.wazuh_synced = wazuh_ok
+            g.puppet_synced = puppet_ok
+            g.updated_at = datetime.utcnow()
+            await self._repo.update(g)
+            if wazuh_ok and puppet_ok:
+                synced += 1
+            else:
+                failed += 1
+        return {
+            "groups_total": len(groups),
+            "groups_synced": synced,
+            "groups_failed": failed,
+            "nodes_classified": total_nodes,
+        }
 
 
 class CreateNodeGroupUseCase:

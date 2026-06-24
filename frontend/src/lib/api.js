@@ -522,3 +522,7 @@ export async function removeNodeFromGroup(groupId, nodeId) {
 export async function seedDefaultNodeGroups() {
   return request('POST', '/node-groups/seed-defaults')
 }
+
+export async function syncNodeGroups() {
+  return request('POST', '/node-groups/sync')
+}

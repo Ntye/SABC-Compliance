@@ -2,11 +2,12 @@ import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
   ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
-  List, Network, Layers, RefreshCw,
+  List, Network, Layers, RefreshCw, UploadCloud,
 } from 'lucide-react'
 import {
   listNodeGroups, createNodeGroup, deleteNodeGroup, listNodes,
   listNodeGroupFacts, previewNodeGroupMatches, seedDefaultNodeGroups,
+  syncNodeGroups,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -685,6 +686,7 @@ export default function NodeGroupsPage() {
   const [wizardParent, setWizardParent] = useState(null)
   const [wizardName, setWizardName] = useState(null)
   const [seeding, setSeeding] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const filtered = useMemo(() => {
     if (!groups) return []
@@ -712,12 +714,30 @@ export default function NodeGroupsPage() {
     setSeeding(true)
     try {
       const result = await seedDefaultNodeGroups()
-      toast(`${t('nodeGroups.seedDefaultsOk')} (${result.created} groups added)`, 'success')
+      const n = result.sync?.nodes_classified ?? 0
+      toast(`${t('nodeGroups.seedDefaultsOk')} (${result.created} groups added, ${n} memberships classified)`, 'success')
       refetch()
     } catch (err) {
       toast(err.message, 'error')
     } finally {
       setSeeding(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    try {
+      const r = await syncNodeGroups()
+      const ok = r.groups_synced ?? 0
+      const total = r.groups_total ?? 0
+      const nodes = r.nodes_classified ?? 0
+      toast(`${t('nodeGroups.syncOk')} — ${ok}/${total} groups, ${nodes} node memberships`,
+        r.groups_failed ? 'warning' : 'success')
+      refetch()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -755,6 +775,15 @@ export default function NodeGroupsPage() {
       <div className="flex items-start justify-between mb-1">
         <h2 className="text-[18px] font-semibold text-gray-900">{t('nodeGroups.title')}</h2>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            title={t('nodeGroups.syncTooltip')}
+            className="inline-flex items-center gap-1.5 border border-gray-200 text-gray-600 px-2.5 py-1.5 rounded-lg text-[12px] hover:bg-gray-50 disabled:opacity-50"
+          >
+            {syncing ? <Spinner size={12} /> : <UploadCloud size={12} />}
+            {t('nodeGroups.sync')}
+          </button>
           <button
             onClick={handleSeedDefaults}
             disabled={seeding}

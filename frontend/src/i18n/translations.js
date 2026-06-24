@@ -522,6 +522,9 @@ export const translations = {
       userGroupsSection: 'Custom Groups',
       seedDefaults: 'Restore defaults',
       seedDefaultsOk: 'Default groups restored',
+      sync: 'Sync to Puppet & Wazuh',
+      syncTooltip: 'Push all groups to Puppet & Wazuh and classify all registered nodes now',
+      syncOk: 'Groups synced',
     },
   },
 
@@ -1047,6 +1050,9 @@ export const translations = {
       userGroupsSection: 'Groupes personnalisés',
       seedDefaults: 'Restaurer les défauts',
       seedDefaultsOk: 'Groupes par défaut restaurés',
+      sync: 'Synchroniser vers Puppet & Wazuh',
+      syncTooltip: 'Pousser tous les groupes vers Puppet & Wazuh et classer tous les nœuds enregistrés maintenant',
+      syncOk: 'Groupes synchronisés',
     },
   },
 }
