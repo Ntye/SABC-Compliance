@@ -300,9 +300,10 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
         await conn.run_sync(metadata.create_all)
 
         if is_sqlite:
-            # ── SQLite-only idempotent column migrations ──────────────────────
-            # PostgreSQL gets a clean schema from create_all; only SQLite
-            # deployments upgrading from an older platform.db need these patches.
+            # ── SQLite idempotent column migrations ───────────────────────────
+            # SQLite does not support IF NOT EXISTS on ADD COLUMN, so we use
+            # try/except. Each statement is independent; a duplicate-column
+            # error does NOT abort the SQLite transaction.
             for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
@@ -363,6 +364,53 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 ))
             except Exception:
                 pass
+
+    if not is_sqlite:
+        # ── PostgreSQL idempotent column migrations ───────────────────────────
+        # create_all only creates missing tables; it never adds columns to an
+        # existing table. Each ALTER TABLE runs in its own transaction so a
+        # failure (e.g. column already exists — impossible with IF NOT EXISTS,
+        # but harmless) never aborts the other migrations.
+        # IF NOT EXISTS is supported since PostgreSQL 9.6 (released 2016).
+        pg_cols = [
+            ("nodes",              "fqdn",                  "TEXT"),
+            ("nodes",              "dns_resolves",          "BOOLEAN"),
+            ("nodes",              "scan_ready",            "BOOLEAN DEFAULT false"),
+            ("api_keys",           "user_id",               "TEXT"),
+            ("profile_controls",   "check_command",         "TEXT"),
+            ("user_groups",        "description",           "TEXT"),
+            ("user_groups",        "role",                  "TEXT"),
+            ("user_groups",        "permissions",           "TEXT DEFAULT '[]'"),
+            ("user_groups",        "is_default",            "BOOLEAN DEFAULT false"),
+            ("node_groups",        "parent",                "TEXT"),
+            ("node_groups",        "environment",           "TEXT"),
+            ("node_groups",        "is_environment_group",  "BOOLEAN DEFAULT false"),
+            ("node_groups",        "match_type",            "TEXT"),
+            ("node_groups",        "rules",                 "TEXT DEFAULT '[]'"),
+            ("node_groups",        "group_type",            "TEXT DEFAULT 'user'"),
+            ("node_groups",        "inspec_profile_id",     "TEXT"),
+            ("compliance_reports", "profile",               "TEXT"),
+            ("compliance_reports", "duration",              "TEXT"),
+            ("compliance_reports", "skipped_checks",        "INTEGER DEFAULT 0"),
+            ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
+            ("profiles",           "framework",             "TEXT"),
+        ]
+        for table, col, typedef in pg_cols:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typedef}")
+                    )
+            except Exception as exc:
+                logger.warning("PG migration %s.%s skipped: %s", table, col, exc)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(
+                    "UPDATE profiles SET framework = 'internal' "
+                    "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
+                ))
+        except Exception:
+            pass
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, session_factory

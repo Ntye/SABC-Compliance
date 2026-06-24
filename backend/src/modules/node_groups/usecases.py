@@ -400,6 +400,7 @@ class CreateNodeGroupUseCase:
             match_type=data.get("match_type") or "all",
             rules=data.get("rules") or [],
             node_ids=[],
+            inspec_profile_id=data.get("inspec_profile_id"),
             created_at=now,
             updated_at=now,
         )
