@@ -72,10 +72,12 @@ class SetMasterHostUseCase:
         config_repo: IPlatformConfigRepository,
         puppet_port: int,
         wazuh_port: int,
+        repoint_wazuh_agents_uc=None,
     ) -> None:
         self._config = config_repo
         self._puppet_port = puppet_port
         self._wazuh_port = wazuh_port
+        self._repoint = repoint_wazuh_agents_uc
 
     async def execute(self, service: str, host: str) -> dict:
         if service not in ("puppet", "wazuh"):
@@ -87,9 +89,22 @@ class SetMasterHostUseCase:
         key = "puppet_master_host" if service == "puppet" else "wazuh_manager_host"
         port = self._puppet_port if service == "puppet" else self._wazuh_port
 
+        old_host = await self._config.get(key)
         await self._config.set(key, host)
         reachable = await _test_tcp(host, port)
-        return {"service": service, "host": host, "port": port, "reachable": reachable}
+
+        result = {"service": service, "host": host, "port": port, "reachable": reachable}
+
+        # Changing the Wazuh manager address must follow through to every enrolled
+        # agent — otherwise they keep reporting to the old address and go dark.
+        if service == "wazuh" and self._repoint is not None and host != (old_host or ""):
+            try:
+                result["agents"] = await self._repoint.execute(new_addr=host)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Wazuh agent re-point after manager change failed: %s", exc)
+                result["agents_error"] = str(exc)
+
+        return result
 
 
 class StartJobUseCase:

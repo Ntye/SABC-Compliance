@@ -41,7 +41,8 @@ from infrastructure.ansible.adapter import AnsibleAdapter
 from modules.nodes.usecases import (
     ChangeNodeIdentityUseCase, CheckNodeDnsUseCase, DeleteNodeUseCase,
     FixNodeDnsUseCase, GetNodeUseCase, ListNodesUseCase,
-    PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase, UpdateNodeUseCase,
+    PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase,
+    RepointWazuhAgentsUseCase, UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
@@ -223,7 +224,15 @@ async def lifespan(app: FastAPI):
         puppet_master_host_env=settings.puppet_master_host,
         wazuh_manager_host_env=settings.wazuh_manager_host,
     )
-    change_identity_uc = ChangeNodeIdentityUseCase(node_repo, ssh_client)
+    repoint_wazuh_agents_uc = RepointWazuhAgentsUseCase(
+        node_repo, ssh_client, platform_config_repo,
+    )
+    change_identity_uc = ChangeNodeIdentityUseCase(
+        node_repo, ssh_client,
+        platform_config=platform_config_repo,
+        wazuh_manager_host_env=settings.wazuh_manager_host,
+        repoint_uc=repoint_wazuh_agents_uc,
+    )
 
     nodes_routes.set_use_cases(
         register_uc=register_node_uc,
@@ -251,6 +260,7 @@ async def lifespan(app: FastAPI):
         platform_config_repo,
         settings.puppet_master_port,
         settings.wazuh_api_port,
+        repoint_wazuh_agents_uc=repoint_wazuh_agents_uc,
     )
     list_jobs_uc = ListJobsUseCase(job_repo)
     get_job_uc = GetJobUseCase(job_repo)

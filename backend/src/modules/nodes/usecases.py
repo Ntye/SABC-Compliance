@@ -453,6 +453,141 @@ class FixNodeDnsUseCase:
             return None
 
 
+def _norm(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _addr_identifies_node(addr: str | None, *node_tokens: str | None) -> bool:
+    """True when a configured manager address points at this node.
+
+    The manager address may have been stored as the node's IP (the default),
+    its hostname, or its FQDN — so match against all of them, case-insensitively.
+    """
+    a = _norm(addr)
+    if not a:
+        return False
+    return a in {_norm(t) for t in node_tokens if t}
+
+
+def _build_repoint_command(new_addr: str, new_hostname: str, old_hostname: str) -> str:
+    """Idempotent remote script that re-points one Wazuh agent at the manager.
+
+    Patches the agent's ossec.conf <address>, refreshes the manager's /etc/hosts
+    mapping (exact whitespace-delimited field match so unrelated lines and
+    localhost are never touched), and restarts wazuh-agent ONLY when the address
+    actually changed — so re-running it on an already-correct agent is a no-op
+    and never causes an unnecessary telemetry gap.
+    """
+    return f"""set -e
+NEW_ADDR='{new_addr}'
+NEW_HOST='{new_hostname}'
+OLD_HOST='{old_hostname}'
+OSSEC=/var/ossec/etc/ossec.conf
+if [ ! -f "$OSSEC" ]; then echo 'REPOINT_SKIP no-ossec-conf'; exit 0; fi
+
+# Refresh the manager hostname -> IP entry in /etc/hosts so any hostname-based
+# reference keeps resolving even before external DNS propagates. Drop stale
+# lines that named the manager (old or new hostname) by exact field match, then
+# append the fresh mapping. localhost/loopback lines never match a manager name.
+awk -v h1="$OLD_HOST" -v h2="$NEW_HOST" \
+    '{{ drop=0; for(i=2;i<=NF;i++){{ if($i==h1||$i==h2) drop=1 }} if(!drop) print }}' \
+    /etc/hosts | sudo tee /etc/hosts.sabc.tmp >/dev/null
+if [ -n "$NEW_HOST" ]; then printf '%s %s\\n' "$NEW_ADDR" "$NEW_HOST" | sudo tee -a /etc/hosts.sabc.tmp >/dev/null; fi
+sudo mv /etc/hosts.sabc.tmp /etc/hosts
+
+# Patch <address> only if it differs, then bounce the agent so it reconnects.
+CUR=$(grep -oE '<address>[^<]*</address>' "$OSSEC" | head -1 | sed 's/<[^>]*>//g')
+if [ "$CUR" != "$NEW_ADDR" ]; then
+  sudo sed -i "s|<address>[^<]*</address>|<address>$NEW_ADDR</address>|g" "$OSSEC"
+  sudo systemctl restart wazuh-agent 2>/dev/null \
+    || sudo service wazuh-agent restart 2>/dev/null \
+    || sudo /var/ossec/bin/wazuh-control restart
+  echo "REPOINT_OK changed from=$CUR to=$NEW_ADDR"
+else
+  echo "REPOINT_OK unchanged addr=$NEW_ADDR"
+fi
+"""
+
+
+class RepointWazuhAgentsUseCase:
+    """Re-point every enrolled Wazuh agent at a new manager address.
+
+    When the Wazuh manager's IP/DNS changes, agents that still hold the old
+    address silently stop reporting. A manager identity change does NOT
+    invalidate agent keys (those are keyed by the agent's own name/IP at the
+    manager), so agents do NOT need to re-enroll — they only need their
+    <address> updated and the service bounced. This use case does exactly that,
+    across all agents concurrently, so the reporting gap is a single service
+    restart rather than a manual round of re-enrollments.
+    """
+
+    def __init__(
+        self,
+        node_repository: INodeRepository,
+        ssh_client: ISSHClient,
+        platform_config: IPlatformConfigRepository,
+    ) -> None:
+        self._repo = node_repository
+        self._ssh = ssh_client
+        self._config = platform_config
+
+    async def execute(
+        self,
+        new_addr: str,
+        new_hostname: str = "",
+        old_hostname: str = "",
+        exclude_node_id: str | None = None,
+    ) -> dict:
+        new_addr = (new_addr or "").strip()
+        if not new_addr:
+            raise ValidationError("new manager address is required")
+
+        nodes = await self._repo.find_all({})
+        agents = [
+            n for n in nodes
+            if n.wazuh_enrolled and n.id != exclude_node_id
+        ]
+
+        command = _build_repoint_command(new_addr, new_hostname.strip(), old_hostname.strip())
+
+        async def _one(node: Node) -> dict:
+            try:
+                stdout, stderr, rc = await self._ssh.run_command(
+                    node.ip, node.ssh_port, node.ssh_user, node.ssh_key_path, command
+                )
+                ok = rc == 0 and "REPOINT_OK" in stdout
+                restarted = "REPOINT_OK changed" in stdout
+                return {
+                    "node_id": node.id,
+                    "hostname": node.hostname,
+                    "ip": node.ip,
+                    "ok": ok,
+                    "restarted": restarted,
+                    "error": None if ok else ((stderr or stdout or "").strip() or "re-point failed"),
+                }
+            except Exception as exc:
+                return {
+                    "node_id": node.id,
+                    "hostname": node.hostname,
+                    "ip": node.ip,
+                    "ok": False,
+                    "restarted": False,
+                    "error": str(exc),
+                }
+
+        results = await asyncio.gather(*[_one(a) for a in agents]) if agents else []
+        results = list(results)
+        succeeded = [r for r in results if r["ok"]]
+        failed = [r for r in results if not r["ok"]]
+        return {
+            "new_manager_address": new_addr,
+            "agents_total": len(results),
+            "agents_repointed": len(succeeded),
+            "agents_failed": len(failed),
+            "results": results,
+        }
+
+
 class ChangeNodeIdentityUseCase:
     """
     Safely change a node's IP address and/or hostname (DNS name) and replicate
@@ -471,13 +606,26 @@ class ChangeNodeIdentityUseCase:
          b. (opt-in) Rename the server's system hostname via hostnamectl.
          c. Re-detect the FQDN and re-check DNS resolution.
          d. Persist ip/hostname/fqdn to the database (done last).
-      4. Warn — if the node is Puppet/Wazuh enrolled, the agent identity is
-         bound to the old hostname; report that re-enrollment is required.
+      4. Wazuh manager follow-through — if THIS node is the Wazuh manager,
+         update the platform's manager address and re-point every enrolled agent
+         at the new address immediately (no manual re-enrollment, single restart
+         gap). Puppet enrollment is cert-bound to the old hostname, so that still
+         surfaces as a warning.
     """
 
-    def __init__(self, node_repository: INodeRepository, ssh_client: ISSHClient) -> None:
+    def __init__(
+        self,
+        node_repository: INodeRepository,
+        ssh_client: ISSHClient,
+        platform_config: IPlatformConfigRepository | None = None,
+        wazuh_manager_host_env: str | None = None,
+        repoint_uc: "RepointWazuhAgentsUseCase | None" = None,
+    ) -> None:
         self._repo = node_repository
         self._ssh = ssh_client
+        self._config = platform_config
+        self._wazuh_env = wazuh_manager_host_env
+        self._repoint = repoint_uc
 
     async def execute(self, id_or_hostname: str, data: dict) -> dict:
         node = await _resolve_node(self._repo, id_or_hostname)
@@ -538,16 +686,23 @@ class ChangeNodeIdentityUseCase:
         node.updated_at = datetime.utcnow()
         await self._repo.update(node)
 
-        # ── 4. enrollment warnings ───────────────────────────────────────────
+        # ── 4. Wazuh manager follow-through ──────────────────────────────────
+        # If THIS node is the Wazuh manager, its address just changed underneath
+        # every agent. Update the platform's stored manager address and re-point
+        # all enrolled agents now, so they keep reporting with at most a single
+        # service-restart gap instead of silently going dark.
+        wazuh_manager_reconfig = await self._reconfigure_wazuh_manager(
+            node=node,
+            old_ip=old_ip, old_hostname=old_hostname, old_fqdn=old_fqdn,
+            new_ip=new_ip, new_hostname=new_hostname,
+            warnings=warnings,
+        )
+
+        # ── 4b. Puppet stays a manual step (cert identity is bound to hostname) ─
         if node.puppet_enrolled and new_hostname != old_hostname:
             warnings.append(
                 "Puppet agent certificate is bound to the old hostname. Re-enroll the "
                 "Puppet agent (clean the old cert on the master, then re-run enrollment)."
-            )
-        if node.wazuh_enrolled and new_hostname != old_hostname:
-            warnings.append(
-                "Wazuh agent name is bound to the old hostname. Re-enroll the Wazuh agent "
-                "so the manager registers it under the new name."
             )
 
         return {
@@ -560,7 +715,57 @@ class ChangeNodeIdentityUseCase:
             "steps": steps,
             "dns_resolves": node.dns_resolves,
             "warnings": warnings,
+            "wazuh_manager_reconfig": wazuh_manager_reconfig,
             "node": node,
+        }
+
+    async def _reconfigure_wazuh_manager(
+        self, node: Node, old_ip: str, old_hostname: str, old_fqdn: str | None,
+        new_ip: str, new_hostname: str, warnings: list[str],
+    ) -> dict | None:
+        """When the changed node is the Wazuh manager, point the platform and all
+        agents at its new address. Returns a report, or None if not the manager."""
+        if self._config is None:
+            return None
+
+        configured = await self._config.get("wazuh_manager_host") or self._wazuh_env
+        if not _addr_identifies_node(configured, old_ip, old_hostname, old_fqdn):
+            return None  # this node is not the Wazuh manager — nothing to do
+
+        # Agents connect by IP (no dependency on DNS having propagated), so the
+        # new manager address agents must use is the new IP. Keep the platform's
+        # stored manager address in lock-step.
+        new_addr = new_ip
+        try:
+            await self._config.set("wazuh_manager_host", new_addr)
+            config_updated = True
+        except Exception as exc:  # pragma: no cover - defensive
+            config_updated = False
+            warnings.append(f"Failed to update stored Wazuh manager address: {exc}")
+
+        repoint: dict | None = None
+        if self._repoint is not None:
+            try:
+                repoint = await self._repoint.execute(
+                    new_addr=new_addr,
+                    new_hostname=new_hostname,
+                    old_hostname=old_hostname,
+                    exclude_node_id=node.id,  # the manager isn't its own agent here
+                )
+                if repoint["agents_failed"]:
+                    warnings.append(
+                        f"{repoint['agents_failed']} Wazuh agent(s) could not be re-pointed "
+                        f"automatically — re-run a health check on them once reachable."
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                warnings.append(f"Automatic Wazuh agent re-point failed: {exc}")
+
+        return {
+            "is_wazuh_manager": True,
+            "old_address": configured,
+            "new_address": new_addr,
+            "config_updated": config_updated,
+            "agents": repoint,
         }
 
     async def _set_system_hostname(self, node: Node, ip: str, new_hostname: str) -> dict:

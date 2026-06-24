@@ -97,6 +97,9 @@ class ChangeIdentityResponse(BaseModel):
     steps: dict
     dns_resolves: bool | None = None
     warnings: list[str] = []
+    # Present when the changed node is the Wazuh manager: reports the new manager
+    # address and the per-agent re-point results.
+    wazuh_manager_reconfig: dict | None = None
     node: NodeResponse
 
 
