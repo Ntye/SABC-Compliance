@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from core.domain.entities import NodeGroup
-from core.errors import NotFoundError, ConflictError, ValidationError
+from core.errors import NotFoundError, ConflictError, ForbiddenError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,190 @@ def _validate(data: dict) -> None:
             raise ValidationError(f"Invalid operator '{r.get('operator')}'")
     if (data.get("match_type") or "all") not in ("all", "any"):
         raise ValidationError("match_type must be 'all' or 'any'")
+
+
+# ── Default OS-family hierarchy ───────────────────────────────────────────────
+# Built from outermost (SABC Managed) down to version-specific leaves.
+# Each node matches all groups for which its facts satisfy the rules.
+# Puppet inherits classes top-down; the most specific group wins for InSpec profile.
+
+_UBUNTU_CHILDREN = [
+    {"name": "Ubuntu 20.04", "parent": "Ubuntu", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_version", "operator": "~", "value": r"^20\."},
+    ]},
+    {"name": "Ubuntu 22.04", "parent": "Ubuntu", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_version", "operator": "~", "value": r"^22\."},
+    ]},
+    {"name": "Ubuntu 24.04", "parent": "Ubuntu", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "Ubuntu"},
+        {"fact": "os_version", "operator": "~", "value": r"^24\."},
+    ]},
+]
+
+_DEBIAN_CHILDREN = [
+    {"name": "Debian 11", "parent": "Debian", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "Debian"},
+        {"fact": "os_version", "operator": "~", "value": r"^11"},
+    ]},
+    {"name": "Debian 12", "parent": "Debian", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "Debian"},
+        {"fact": "os_version", "operator": "~", "value": r"^12"},
+    ]},
+]
+
+_ROCKY_CHILDREN = [
+    {"name": "Rocky Linux 8", "parent": "Rocky Linux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "Rocky"},
+        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+    ]},
+    {"name": "Rocky Linux 9", "parent": "Rocky Linux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "Rocky"},
+        {"fact": "os_version", "operator": "~", "value": r"^9\."},
+    ]},
+]
+
+_CENTOS_CHILDREN = [
+    {"name": "CentOS 7", "parent": "CentOS", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "CentOS"},
+        {"fact": "os_version", "operator": "~", "value": r"^7\."},
+    ]},
+    {"name": "CentOS Stream 8", "parent": "CentOS", "rules": [
+        {"fact": "os_name", "operator": "=", "value": "CentOS"},
+        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+    ]},
+]
+
+_ALMA_CHILDREN = [
+    {"name": "AlmaLinux 8", "parent": "AlmaLinux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "AlmaLinux"},
+        {"fact": "os_version", "operator": "~", "value": r"^8\."},
+    ]},
+    {"name": "AlmaLinux 9", "parent": "AlmaLinux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "AlmaLinux"},
+        {"fact": "os_version", "operator": "~", "value": r"^9\."},
+    ]},
+]
+
+DEFAULT_NODE_GROUP_TREE = [
+    {
+        "name": "SABC Managed Nodes",
+        "description": "All nodes enrolled in the SABC compliance platform",
+        "parent": "All Nodes",
+        "match_type": "any",
+        "rules": [
+            {"fact": "puppet_enrolled", "operator": "=", "value": "true"},
+            {"fact": "wazuh_enrolled", "operator": "=", "value": "true"},
+        ],
+        "inspec_profile_id": "sabc-linux-baseline",
+        "children": [
+            {
+                "name": "Debian Family",
+                "description": "Nodes running a Debian-based OS — uses apt for package management",
+                "parent": "SABC Managed Nodes",
+                "rules": [{"fact": "os_family", "operator": "=", "value": "Debian"}],
+                "inspec_profile_id": "sabc-linux-baseline",
+                "children": [
+                    {
+                        "name": "Ubuntu",
+                        "description": "Ubuntu Linux servers",
+                        "parent": "Debian Family",
+                        "rules": [{"fact": "os_name", "operator": "=", "value": "Ubuntu"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _UBUNTU_CHILDREN,
+                    },
+                    {
+                        "name": "Debian",
+                        "description": "Debian Linux servers",
+                        "parent": "Debian Family",
+                        "rules": [{"fact": "os_name", "operator": "=", "value": "Debian"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _DEBIAN_CHILDREN,
+                    },
+                ],
+            },
+            {
+                "name": "RedHat Family",
+                "description": "Nodes running a Red Hat-based OS — uses yum/dnf for package management",
+                "parent": "SABC Managed Nodes",
+                "rules": [{"fact": "os_family", "operator": "=", "value": "RedHat"}],
+                "inspec_profile_id": "sabc-linux-baseline",
+                "children": [
+                    {
+                        "name": "Rocky Linux",
+                        "description": "Rocky Linux servers",
+                        "parent": "RedHat Family",
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "Rocky"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _ROCKY_CHILDREN,
+                    },
+                    {
+                        "name": "CentOS",
+                        "description": "CentOS Linux servers",
+                        "parent": "RedHat Family",
+                        "rules": [{"fact": "os_name", "operator": "=", "value": "CentOS"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _CENTOS_CHILDREN,
+                    },
+                    {
+                        "name": "AlmaLinux",
+                        "description": "AlmaLinux servers",
+                        "parent": "RedHat Family",
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "AlmaLinux"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _ALMA_CHILDREN,
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+
+class SeedDefaultNodeGroupsUseCase:
+    """Idempotently seeds the OS-family node group hierarchy at startup.
+
+    Only writes to the local DB — does not call Wazuh or Puppet Enterprise,
+    which may not be reachable at startup. System groups appear as unsynced
+    and can be pushed to PE once the master host is configured.
+    """
+    def __init__(self, repo):
+        self._repo = repo
+
+    async def execute(self) -> int:
+        created = 0
+        created += await self._seed_tree(DEFAULT_NODE_GROUP_TREE)
+        return created
+
+    async def _seed_tree(self, entries: list[dict]) -> int:
+        created = 0
+        for entry in entries:
+            children = entry.get("children", [])
+            existing = await self._repo.find_by_name(entry["name"])
+            if not existing:
+                now = datetime.utcnow()
+                g = NodeGroup(
+                    id=str(uuid.uuid4()),
+                    name=entry["name"],
+                    description=entry.get("description"),
+                    parent=entry.get("parent", "All Nodes"),
+                    environment="production",
+                    is_environment_group=False,
+                    match_type=entry.get("match_type", "all"),
+                    rules=entry.get("rules", []),
+                    node_ids=[],
+                    group_type="system",
+                    inspec_profile_id=entry.get("inspec_profile_id"),
+                    created_at=now,
+                    updated_at=now,
+                )
+                await self._repo.save(g)
+                created += 1
+                logger.info("Seeded system node group: %s", entry["name"])
+            if children:
+                created += await self._seed_tree(children)
+        return created
 
 
 class CreateNodeGroupUseCase:
@@ -257,6 +441,8 @@ class DeleteNodeGroupUseCase:
         group = await self._repo.find_by_id(group_id)
         if not group:
             raise NotFoundError(f"Node group '{group_id}' not found")
+        if group.group_type == "system":
+            raise ForbiddenError(f"System group '{group.name}' cannot be deleted")
         try:
             await self._puppet.delete_node_group(group.puppet_group_id or "")
         except Exception as e:

@@ -518,3 +518,7 @@ export async function addNodeToGroup(groupId, nodeId) {
 export async function removeNodeFromGroup(groupId, nodeId) {
   return request('DELETE', `/node-groups/${groupId}/nodes/${nodeId}`)
 }
+
+export async function seedDefaultNodeGroups() {
+  return request('POST', '/node-groups/seed-defaults')
+}

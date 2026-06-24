@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
-  ChevronLeft, ArrowLeft, Pin, GitBranch, Check,
+  ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
+  List, Network, Layers, RefreshCw,
 } from 'lucide-react'
 import {
   listNodeGroups, createNodeGroup, deleteNodeGroup, listNodes,
-  listNodeGroupFacts, previewNodeGroupMatches,
+  listNodeGroupFacts, previewNodeGroupMatches, seedDefaultNodeGroups,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -82,7 +83,7 @@ function Stepper({ step, labels }) {
 }
 
 // ── Create wizard ─────────────────────────────────────────────────────────────
-function CreateWizard({ groups, nodes, facts, onCancel, onCreated }) {
+function CreateWizard({ groups, nodes, facts, onCancel, onCreated, defaultParent }) {
   const t = useT()
   const toast = useToast()
   const [step, setStep] = useState(1)
@@ -91,7 +92,7 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated }) {
   // Step 1 — details
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [parent, setParent] = useState('All Nodes')
+  const [parent, setParent] = useState(defaultParent || 'All Nodes')
   const [environment, setEnvironment] = useState('production')
   const [isEnvGroup, setIsEnvGroup] = useState(false)
 
@@ -127,7 +128,6 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated }) {
       (n.hostname || '').toLowerCase().includes(q) || (n.ip || '').toLowerCase().includes(q))
   }, [nodes, nodeSearch])
 
-  // Recompute matches whenever rules / match type / pins change
   const refreshMatches = useCallback(async () => {
     try {
       const ids = await previewNodeGroupMatches({
@@ -217,7 +217,14 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated }) {
                   onChange={(e) => setParent(e.target.value)}
                   className="w-full px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white"
                 >
-                  {parentOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {parentOptions.map((p) => {
+                    const g = (groups || []).find(x => x.name === p)
+                    return (
+                      <option key={p} value={p}>
+                        {p}{g?.group_type === 'system' ? ' (system)' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
               </div>
               <div>
@@ -469,6 +476,199 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated }) {
   )
 }
 
+// ── Tree node row ─────────────────────────────────────────────────────────────
+function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, initialExpanded }) {
+  const t = useT()
+  const children = useMemo(
+    () => allGroups.filter((g) => g.parent === group.name).sort((a, b) => a.name.localeCompare(b.name)),
+    [allGroups, group.name],
+  )
+  const hasChildren = children.length > 0
+  const [expanded, setExpanded] = useState(initialExpanded ?? depth < 2)
+  const isSystem = group.group_type === 'system'
+  const count = group.matching_node_ids?.length ?? 0
+
+  return (
+    <div>
+      <div
+        className={[
+          'flex items-center gap-2 py-2 pr-3 rounded-lg group hover:bg-gray-50 transition-colors',
+          isSystem ? 'text-gray-700' : 'text-gray-800',
+        ].join(' ')}
+        style={{ paddingLeft: `${8 + depth * 20}px` }}
+      >
+        {/* expand/collapse toggle */}
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 transition-transform ${!hasChildren ? 'invisible' : ''}`}
+        >
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
+
+        {/* icon */}
+        {isSystem
+          ? <Shield size={13} className="flex-shrink-0 text-blue-400" />
+          : <Server size={13} className="flex-shrink-0 text-gray-400" />
+        }
+
+        {/* name */}
+        <span className="text-[12px] font-medium truncate flex-1 min-w-0">{group.name}</span>
+
+        {/* system badge */}
+        {isSystem && (
+          <span
+            title={t('nodeGroups.systemGroupTooltip')}
+            className="flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded font-medium"
+          >
+            {t('nodeGroups.systemGroup')}
+          </span>
+        )}
+
+        {/* InSpec profile */}
+        {group.inspec_profile_id && (
+          <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded font-mono hidden xl:inline">
+            {group.inspec_profile_id}
+          </span>
+        )}
+
+        {/* node count */}
+        <span className="flex-shrink-0 text-[11px] text-gray-400 tabular-nums">
+          {count} {t('nodeGroups.nodesCount')}
+        </span>
+
+        {/* sync icons */}
+        <span className="flex-shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <SyncIcon ok={group.wazuh_synced} />
+          <SyncIcon ok={group.puppet_synced} />
+        </span>
+
+        {/* action buttons */}
+        <span className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={() => onCreateChild(group)}
+            title={t('nodeGroups.addChildGroup')}
+            className="p-1 text-gray-400 hover:text-brand hover:bg-brand/10 rounded transition-colors"
+          >
+            <Plus size={12} />
+          </button>
+          {!isSystem && (
+            <button
+              onClick={() => onDelete(group)}
+              title="Delete group"
+              className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </span>
+      </div>
+
+      {/* children */}
+      {expanded && hasChildren && (
+        <div>
+          {children.map((child) => (
+            <TreeNodeRow
+              key={child.id}
+              group={child}
+              allGroups={allGroups}
+              depth={depth + 1}
+              onDelete={onDelete}
+              onCreateChild={onCreateChild}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tree view ─────────────────────────────────────────────────────────────────
+function TreeView({ groups, onDelete, onCreateChild }) {
+  const t = useT()
+
+  // roots: groups whose parent is "All Nodes" or whose parent doesn't exist in the list
+  const groupNames = useMemo(() => new Set(groups.map((g) => g.name)), [groups])
+  const roots = useMemo(
+    () => groups
+      .filter((g) => g.parent === 'All Nodes' || !groupNames.has(g.parent))
+      .sort((a, b) => {
+        if (a.group_type === 'system' && b.group_type !== 'system') return -1
+        if (a.group_type !== 'system' && b.group_type === 'system') return 1
+        return a.name.localeCompare(b.name)
+      }),
+    [groups, groupNames],
+  )
+
+  if (roots.length === 0) {
+    return (
+      <div className="p-8 text-center text-[13px] text-gray-400 flex flex-col items-center gap-2">
+        <Network size={28} className="text-gray-200" />
+        {t('nodeGroups.noGroups')}
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-3">
+      {roots.map((g) => (
+        <TreeNodeRow
+          key={g.id}
+          group={g}
+          allGroups={groups}
+          depth={0}
+          onDelete={onDelete}
+          onCreateChild={onCreateChild}
+          initialExpanded={true}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ── Environment quick-create panel ────────────────────────────────────────────
+function EnvQuickCreate({ groups, onLaunchWizard }) {
+  const t = useT()
+  const ENV_TEMPLATES = [
+    { label: t('nodeGroups.envProd'),    name: 'Production',    icon: '🟢', color: 'green' },
+    { label: t('nodeGroups.envStaging'), name: 'Pre-Production', icon: '🟡', color: 'amber' },
+    { label: t('nodeGroups.envDev'),     name: 'Development',   icon: '🔵', color: 'blue' },
+  ]
+
+  const existingNames = useMemo(() => new Set(groups.map((g) => g.name)), [groups])
+  const managedParent = groups.find((g) => g.name === 'SABC Managed Nodes') ? 'SABC Managed Nodes' : 'All Nodes'
+
+  const btnColors = {
+    green: 'border-green-200 text-green-700 hover:bg-green-50',
+    amber: 'border-amber-200 text-amber-700 hover:bg-amber-50',
+    blue: 'border-blue-200 text-blue-700 hover:bg-blue-50',
+  }
+
+  const available = ENV_TEMPLATES.filter((e) => !existingNames.has(e.name))
+  if (available.length === 0) return null
+
+  return (
+    <div className="mt-4 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+      <div className="flex items-center gap-2 mb-2">
+        <Layers size={13} className="text-gray-400" />
+        <span className="text-[12px] font-semibold text-gray-700">{t('nodeGroups.envGroupsTitle')}</span>
+      </div>
+      <p className="text-[11px] text-gray-400 mb-3">{t('nodeGroups.envGroupsDesc')}</p>
+      <div className="flex flex-wrap gap-2">
+        {available.map((env) => (
+          <button
+            key={env.name}
+            onClick={() => onLaunchWizard(managedParent, env.name)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${btnColors[env.color]}`}
+          >
+            <Plus size={11} />
+            {env.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 export default function NodeGroupsPage() {
   const t = useT()
@@ -477,10 +677,14 @@ export default function NodeGroupsPage() {
   const { data: nodes } = useApi(listNodes)
   const { data: facts } = useApi(listNodeGroupFacts)
 
-  const [view, setView] = useState('list')
+  const [view, setView] = useState('list')          // 'list' | 'tree' | 'wizard'
+  const [displayMode, setDisplayMode] = useState('tree') // 'tree' | 'flat'
   const [query, setQuery] = useState('')
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [wizardParent, setWizardParent] = useState(null)
+  const [wizardName, setWizardName] = useState(null)
+  const [seeding, setSeeding] = useState(false)
 
   const filtered = useMemo(() => {
     if (!groups) return []
@@ -494,7 +698,7 @@ export default function NodeGroupsPage() {
     setDeleting(true)
     try {
       await deleteNodeGroup(deleteTarget.id)
-      toast(`Group "${deleteTarget.name}" deleted from platform, Wazuh, and Puppet`, 'success')
+      toast(`Group "${deleteTarget.name}" deleted`, 'success')
       setDeleteTarget(null)
       refetch()
     } catch (err) {
@@ -502,6 +706,31 @@ export default function NodeGroupsPage() {
     } finally {
       setDeleting(false)
     }
+  }
+
+  async function handleSeedDefaults() {
+    setSeeding(true)
+    try {
+      const result = await seedDefaultNodeGroups()
+      toast(`${t('nodeGroups.seedDefaultsOk')} (${result.created} groups added)`, 'success')
+      refetch()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setSeeding(false)
+    }
+  }
+
+  function openWizardForChild(parentGroup) {
+    setWizardParent(parentGroup.name)
+    setWizardName(null)
+    setView('wizard')
+  }
+
+  function openWizardWithTemplate(parentName, groupName) {
+    setWizardParent(parentName)
+    setWizardName(groupName)
+    setView('wizard')
   }
 
   if (view === 'wizard') {
@@ -513,6 +742,8 @@ export default function NodeGroupsPage() {
           facts={facts}
           onCancel={() => setView('list')}
           onCreated={() => { setView('list'); refetch() }}
+          defaultParent={wizardParent}
+          defaultName={wizardName}
         />
       </div>
     )
@@ -523,25 +754,55 @@ export default function NodeGroupsPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-1">
         <h2 className="text-[18px] font-semibold text-gray-900">{t('nodeGroups.title')}</h2>
-        <button
-          onClick={() => setView('wizard')}
-          className="inline-flex items-center gap-1.5 bg-brand text-white px-3 py-1.5 rounded-lg text-[12px] font-medium hover:bg-brand/90 transition-colors"
-        >
-          <Plus size={13} />
-          {t('nodeGroups.addGroup')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSeedDefaults}
+            disabled={seeding}
+            title={t('nodeGroups.seedDefaults')}
+            className="inline-flex items-center gap-1.5 border border-gray-200 text-gray-600 px-2.5 py-1.5 rounded-lg text-[12px] hover:bg-gray-50 disabled:opacity-50"
+          >
+            {seeding ? <Spinner size={12} /> : <RefreshCw size={12} />}
+            {t('nodeGroups.seedDefaults')}
+          </button>
+          <button
+            onClick={() => { setWizardParent(null); setWizardName(null); setView('wizard') }}
+            className="inline-flex items-center gap-1.5 bg-brand text-white px-3 py-1.5 rounded-lg text-[12px] font-medium hover:bg-brand/90 transition-colors"
+          >
+            <Plus size={13} />
+            {t('nodeGroups.addGroup')}
+          </button>
+        </div>
       </div>
       <p className="text-[12px] text-gray-400 mb-5">{t('nodeGroups.subtitle')}</p>
 
-      {/* Filter bar */}
-      <div className="relative mb-4 max-w-xs">
-        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter groups…"
-          className="w-full pl-8 pr-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 bg-white"
-        />
+      {/* Filter + view toggle */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter groups…"
+            className="w-full pl-8 pr-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 bg-white"
+          />
+        </div>
+        {/* view toggle */}
+        <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+          <button
+            onClick={() => setDisplayMode('tree')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] font-medium transition-all ${displayMode === 'tree' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            <Network size={13} />
+            {t('nodeGroups.treeView')}
+          </button>
+          <button
+            onClick={() => setDisplayMode('flat')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] font-medium transition-all ${displayMode === 'flat' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            <List size={13} />
+            {t('nodeGroups.listView')}
+          </button>
+        </div>
       </div>
 
       {loading && (
@@ -555,64 +816,98 @@ export default function NodeGroupsPage() {
       )}
 
       {!loading && !error && (
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          {filtered.length === 0 ? (
-            <div className="p-8 text-center text-[13px] text-gray-400 flex flex-col items-center gap-2">
-              <Server size={28} className="text-gray-200" />
-              {query ? 'No groups match your filter.' : t('nodeGroups.noGroups')}
-            </div>
-          ) : (
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.name')}</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.environment')}</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.matchingNodes')}</th>
-                  <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.wazuhSync')}</th>
-                  <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.puppetSync')}</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filtered.map((g) => (
-                  <tr key={g.id} className="hover:bg-gray-50/50">
-                    <td className="px-4 py-3 font-medium text-gray-800">
-                      <div className="flex items-center gap-2">
-                        <Server size={13} className="text-gray-400 flex-shrink-0" />
-                        <span>{g.name}</span>
-                        {g.parent && g.parent !== 'All Nodes' && (
-                          <span className="text-[10px] text-gray-400">⤷ {g.parent}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">{g.environment || 'production'}</td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {(g.matching_node_ids?.length ?? 0)}
-                      {g.rules?.length > 0 && (
-                        <span className="ml-1 text-[10px] text-gray-400">({g.rules.length} rule{g.rules.length !== 1 ? 's' : ''})</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.wazuh_synced} /></span></td>
-                    <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.puppet_synced} /></span></td>
-                    <td className="px-4 py-3 text-gray-400">{relativeTime(g.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1 justify-end">
-                        <button
-                          onClick={() => setDeleteTarget(g)}
-                          title="Delete group"
-                          className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <>
+          <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+            {/* ── OS-family legend ── */}
+            {displayMode === 'tree' && !query && (
+              <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/70 flex items-center gap-3 text-[11px] text-gray-500">
+                <Shield size={12} className="text-blue-400" />
+                <span>Blue shield = built-in system group (Puppet + InSpec classification) · white server = custom group</span>
+              </div>
+            )}
+
+            {displayMode === 'tree' && !query ? (
+              <TreeView
+                groups={filtered}
+                onDelete={setDeleteTarget}
+                onCreateChild={openWizardForChild}
+              />
+            ) : (
+              /* ── flat list ── */
+              filtered.length === 0 ? (
+                <div className="p-8 text-center text-[13px] text-gray-400 flex flex-col items-center gap-2">
+                  <Server size={28} className="text-gray-200" />
+                  {query ? 'No groups match your filter.' : t('nodeGroups.noGroups')}
+                </div>
+              ) : (
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.name')}</th>
+                      <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.environment')}</th>
+                      <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.matchingNodes')}</th>
+                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.wazuhSync')}</th>
+                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.puppetSync')}</th>
+                      <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
+                      <th className="px-4 py-3" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {filtered.map((g) => (
+                      <tr key={g.id} className="hover:bg-gray-50/50">
+                        <td className="px-4 py-3 font-medium text-gray-800">
+                          <div className="flex items-center gap-2">
+                            {g.group_type === 'system'
+                              ? <Shield size={13} className="text-blue-400 flex-shrink-0" />
+                              : <Server size={13} className="text-gray-400 flex-shrink-0" />
+                            }
+                            <span>{g.name}</span>
+                            {g.group_type === 'system' && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded font-medium">
+                                {t('nodeGroups.systemGroup')}
+                              </span>
+                            )}
+                            {g.parent && g.parent !== 'All Nodes' && (
+                              <span className="text-[10px] text-gray-400">⤷ {g.parent}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500">{g.environment || 'production'}</td>
+                        <td className="px-4 py-3 text-gray-500">
+                          {(g.matching_node_ids?.length ?? 0)}
+                          {g.rules?.length > 0 && (
+                            <span className="ml-1 text-[10px] text-gray-400">({g.rules.length} rule{g.rules.length !== 1 ? 's' : ''})</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.wazuh_synced} /></span></td>
+                        <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.puppet_synced} /></span></td>
+                        <td className="px-4 py-3 text-gray-400">{relativeTime(g.created_at)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1 justify-end">
+                            {g.group_type !== 'system' && (
+                              <button
+                                onClick={() => setDeleteTarget(g)}
+                                title="Delete group"
+                                className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            )}
+          </div>
+
+          {/* Environment quick-create (tree view, no filter active) */}
+          {displayMode === 'tree' && !query && groups && (
+            <EnvQuickCreate groups={groups} onLaunchWizard={openWizardWithTemplate} />
           )}
-        </div>
+        </>
       )}
 
       {/* Delete Confirmation Modal */}

@@ -271,6 +271,10 @@ class NodeGroup:
     puppet_group_id: str | None = None   # UUID from PE node classifier
     wazuh_synced: bool = False
     puppet_synced: bool = False
+    # "system" = built-in auto-seeded (non-deletable); "user" = admin-created
+    group_type: str = "user"
+    # InSpec profile to use when scanning members; child groups inherit parent's profile
+    inspec_profile_id: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

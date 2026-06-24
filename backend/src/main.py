@@ -34,6 +34,7 @@ from modules.node_groups.usecases import (
     CreateNodeGroupUseCase, UpdateNodeGroupUseCase, DeleteNodeGroupUseCase,
     ListNodeGroupsUseCase, GetNodeGroupUseCase, AddNodeToGroupUseCase,
     RemoveNodeFromGroupUseCase, ListFactsUseCase, PreviewMatchingUseCase,
+    SeedDefaultNodeGroupsUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -180,6 +181,7 @@ async def lifespan(app: FastAPI):
     remove_node_from_group_uc = RemoveNodeFromGroupUseCase(node_group_repo, node_repo)
     list_facts_uc = ListFactsUseCase(node_repo)
     preview_matching_uc = PreviewMatchingUseCase(node_repo)
+    seed_node_groups_uc = SeedDefaultNodeGroupsUseCase(node_group_repo)
 
     node_groups_routes.set_use_cases(
         list_uc=list_node_groups_uc,
@@ -191,6 +193,7 @@ async def lifespan(app: FastAPI):
         remove_node_uc=remove_node_from_group_uc,
         facts_uc=list_facts_uc,
         preview_uc=preview_matching_uc,
+        seed_uc=seed_node_groups_uc,
     )
 
     # -- WebSocket manager --
@@ -342,6 +345,14 @@ async def lifespan(app: FastAPI):
         await SeedDefaultGroupsUseCase(group_repo).execute()
     except Exception as exc:
         logger.debug("Default group seeding: %s", exc)
+
+    # -- Bootstrap: seed OS-family node group hierarchy --
+    try:
+        n = await seed_node_groups_uc.execute()
+        if n:
+            logger.info("Seeded %d default node groups", n)
+    except Exception as exc:
+        logger.debug("Node group seeding: %s", exc)
 
     # -- Bootstrap: seed the built-in SABC hardening referential --
     try:

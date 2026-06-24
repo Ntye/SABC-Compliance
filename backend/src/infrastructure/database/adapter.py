@@ -245,6 +245,8 @@ node_groups_table = Table(
     Column("puppet_group_id", Text),
     Column("wazuh_synced", Integer, default=0),
     Column("puppet_synced", Integer, default=0),
+    Column("group_type", Text, default="user"),
+    Column("inspec_profile_id", Text),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -322,7 +324,8 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                     pass
             for col, typ in [("parent", "TEXT"), ("environment", "TEXT"),
                              ("is_environment_group", "INTEGER"),
-                             ("match_type", "TEXT"), ("rules", "TEXT")]:
+                             ("match_type", "TEXT"), ("rules", "TEXT"),
+                             ("group_type", "TEXT"), ("inspec_profile_id", "TEXT")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
                 except Exception:
@@ -1265,6 +1268,8 @@ class NodeGroupRepository(INodeGroupRepository):
             puppet_group_id=row.puppet_group_id,
             wazuh_synced=bool(row.wazuh_synced),
             puppet_synced=bool(row.puppet_synced),
+            group_type=getattr(row, "group_type", None) or "user",
+            inspec_profile_id=getattr(row, "inspec_profile_id", None),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
         )
@@ -1279,6 +1284,8 @@ class NodeGroupRepository(INodeGroupRepository):
                 puppet_group_id=g.puppet_group_id,
                 wazuh_synced=int(g.wazuh_synced),
                 puppet_synced=int(g.puppet_synced),
+                group_type=g.group_type,
+                inspec_profile_id=g.inspec_profile_id,
                 created_at=_ts(g.created_at),
                 updated_at=_ts(g.updated_at),
             ))
@@ -1320,6 +1327,8 @@ class NodeGroupRepository(INodeGroupRepository):
                     puppet_group_id=g.puppet_group_id,
                     wazuh_synced=int(g.wazuh_synced),
                     puppet_synced=int(g.puppet_synced),
+                    group_type=g.group_type,
+                    inspec_profile_id=g.inspec_profile_id,
                     updated_at=_ts(g.updated_at),
                 )
             )

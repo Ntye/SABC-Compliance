@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core.errors import NotFoundError, ConflictError, ValidationError
+from core.errors import NotFoundError, ConflictError, ForbiddenError, ValidationError
 from interface.http.routes.auth import require_admin, get_current_principal
 
 router = APIRouter(prefix="/node-groups", tags=["Node Groups"])
@@ -30,6 +30,8 @@ class NodeGroupResponse(BaseModel):
     puppet_group_id: str | None = None
     wazuh_synced: bool = False
     puppet_synced: bool = False
+    group_type: str = "user"
+    inspec_profile_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -42,6 +44,7 @@ class CreateNodeGroupRequest(BaseModel):
     match_type: str = "all"
     rules: list[RuleModel] = []
     node_ids: list[str] = []
+    inspec_profile_id: str | None = None
 
 class UpdateNodeGroupRequest(BaseModel):
     description: str | None = None
@@ -75,12 +78,13 @@ _add_node_uc = None
 _remove_node_uc = None
 _facts_uc = None
 _preview_uc = None
+_seed_uc = None
 
 
 def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_node_uc,
-                  update_uc=None, facts_uc=None, preview_uc=None):
+                  update_uc=None, facts_uc=None, preview_uc=None, seed_uc=None):
     global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc
-    global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc
+    global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc, _seed_uc
     _list_uc = list_uc
     _get_uc = get_uc
     _create_uc = create_uc
@@ -90,6 +94,7 @@ def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_nod
     _remove_node_uc = remove_node_uc
     _facts_uc = facts_uc
     _preview_uc = preview_uc
+    _seed_uc = seed_uc
 
 
 def _resp(g, matching=None) -> NodeGroupResponse:
@@ -102,10 +107,19 @@ def _resp(g, matching=None) -> NodeGroupResponse:
         node_ids=g.node_ids, matching_node_ids=matching or [],
         puppet_group_id=g.puppet_group_id,
         wazuh_synced=g.wazuh_synced, puppet_synced=g.puppet_synced,
+        group_type=g.group_type,
+        inspec_profile_id=g.inspec_profile_id,
         created_at=g.created_at, updated_at=g.updated_at,
     )
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.post("/seed-defaults", status_code=200)
+async def seed_default_groups(principal=Depends(require_admin)):
+    """Re-seed the built-in OS-family node group hierarchy (idempotent)."""
+    created = await _seed_uc.execute()
+    return {"created": created, "message": f"Seeded {created} new system groups"}
+
 
 @router.get("", response_model=list[NodeGroupResponse])
 async def list_node_groups(principal=Depends(get_current_principal)):
@@ -162,6 +176,8 @@ async def delete_node_group(id: str, principal=Depends(require_admin)):
         return await _delete_uc.execute(id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/{id}/nodes")
