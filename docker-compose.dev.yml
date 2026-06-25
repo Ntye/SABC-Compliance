@@ -49,6 +49,10 @@ services:
       PLATFORM_PUBLIC_HOST: "${PLATFORM_PUBLIC_HOST:-}"
       HTTPS_PORT:          "${HTTPS_PORT:-8443}"
       TLS_CERTS_DIR:       /app/certs
+      # Offline AI assistant — reach the bundled Ollama service (started with the
+      # "ai" profile: docker compose -f docker-compose.dev.yml --profile ai up -d)
+      OLLAMA_URL:   "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
     volumes:
       - backend-data:/app/data
       - backend-keys:/app/keys
@@ -100,6 +104,28 @@ services:
         condition: service_healthy
     networks:
       - sabc-net
+
+  # ── Ollama: offline AI assistant (model baked into the image) ───────────────
+  # Behind the "ai" profile so it only runs when you ask for it:
+  #   docker compose -f docker-compose.dev.yml --profile ai up -d
+  # OLLAMA_MODEL picks which model to embed at build time.
+  ollama:
+    build:
+      context: ./deploy/ollama
+      args:
+        OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
+    image: sabc-ollama
+    container_name: sabc-ollama
+    profiles: ["ai"]
+    restart: unless-stopped
+    networks:
+      - sabc-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   postgres-data:

@@ -48,6 +48,10 @@ services:
       HTTPS_PORT:          "${HTTPS_PORT:-8443}"
       # Frontend TLS cert dir shared via the frontend-certs volume.
       TLS_CERTS_DIR:       /app/certs
+      # Offline AI assistant — reach the bundled Ollama service over the internal
+      # network. The model is baked into the sabc-ollama image (no internet).
+      OLLAMA_URL:   "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
     extra_hosts:
       # Makes host.docker.internal resolve to the Docker host on Linux.
       - "host.docker.internal:host-gateway"
@@ -72,6 +76,27 @@ services:
       start_period: 40s
     ports:
       - "${BACKEND_PORT:-3000}:3000"
+
+  # ── Ollama: offline AI assistant (model baked into the image) ───────────────
+  # The sabc-ollama image embeds the LLM weights, so this runs with no internet.
+  # Built and shipped by deploy/ship.sh alongside the other images — there is no
+  # separate command to run on the server. Behind the "ai" profile so the stack
+  # still starts cleanly if the image was not shipped (the backend degrades
+  # gracefully — the chat widget just reports the assistant as offline).
+  ollama:
+    image: sabc-ollama
+    container_name: sabc-ollama
+    profiles: ["ai"]
+    restart: unless-stopped
+    networks:
+      - sabc-net
+    # Not published to the host — only the backend talks to it over sabc-net.
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ── Frontend: React → Nginx ───────────────────────────────────────────────
   frontend:

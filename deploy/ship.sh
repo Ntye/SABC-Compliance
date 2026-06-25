@@ -12,6 +12,14 @@
 #   ./deploy/ship.sh --build-only               Build and save images locally
 #   ./deploy/ship.sh --bundle                   Build bundled image (with airgap packages)
 #
+# Offline AI assistant (Ollama):
+#   The LLM model is baked into the sabc-ollama image and shipped with the rest
+#   of the stack — no internet on the server, no separate command. Controlled by
+#   two env vars on the BUILD machine (which does need internet to fetch the model
+#   once):
+#     WITH_OLLAMA=false ./deploy/ship.sh ...          skip the assistant entirely
+#     OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ...    embed a different model
+#
 # What it does:
 #   1. Builds Docker images on your local machine
 #   2. Saves them to deploy/sabc-images.tar.gz (~200MB compressed)
@@ -118,6 +126,20 @@ build_images() {
     -t sabc-compliance-frontend:latest \
     --output "type=docker,dest=$STAGE/frontend.tar" ./frontend
 
+  # ── Ollama image with the LLM model baked in (offline AI assistant) ─────────
+  # WITH_OLLAMA=false ./deploy/ship.sh ...  skips it (smaller/faster archive).
+  # OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ...  picks a different model.
+  if [[ "${WITH_OLLAMA:-true}" == "true" ]]; then
+    local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
+    info "Building Ollama image with embedded model '${ollama_model}' (downloads on this build machine) ..."
+    docker buildx build --platform linux/amd64 \
+      --build-arg OLLAMA_MODEL="$ollama_model" \
+      -t sabc-ollama:latest \
+      --output "type=docker,dest=$STAGE/ollama.tar" deploy/ollama
+  else
+    warn "WITH_OLLAMA=false — skipping the offline AI assistant image."
+  fi
+
   # postgres is not built from a Dockerfile, but we still export it through
   # buildx (a one-line passthrough Dockerfile) rather than `docker pull` +
   # `docker save`, for the exact same reason as above — this guarantees a clean
@@ -144,7 +166,10 @@ save_images() {
   # server never needs outbound Docker Hub access).  The server extracts this and
   # `docker load`s each inner tar.
   local stage="$SCRIPT_DIR/.images"
-  tar -czf "$ARCHIVE" -C "$stage" backend.tar frontend.tar postgres.tar
+  # Include the Ollama image only when it was built (WITH_OLLAMA=true).
+  local images=(backend.tar frontend.tar postgres.tar)
+  [[ -f "$stage/ollama.tar" ]] && images+=(ollama.tar)
+  tar -czf "$ARCHIVE" -C "$stage" "${images[@]}"
   rm -rf "$stage"
 
   local size
@@ -416,7 +441,15 @@ LOAD_EOF
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
 set -e
 if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
-COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
+# Enable the "ai" profile (Ollama assistant) only when its image is actually
+# loaded — otherwise the stack starts without it and the assistant degrades
+# gracefully. This decouples the deploy from whether WITH_OLLAMA was set.
+PROFILE=""
+if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then
+  PROFILE="--profile ai"
+  echo "[ship.sh] sabc-ollama image present — enabling offline AI assistant."
+fi
+COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
 COMPOSE_FILE="$REMOTE_DIR/docker-compose.yml"
 
 # Guard: docker-compose v1 mis-handles image-only services when the file still
