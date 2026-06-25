@@ -449,6 +449,90 @@ class SyncAllNodeGroupsUseCase:
 
         synced = failed = skipped = removed = pushed = 0
 
+        _PE_ROOT = "00000000-0000-4000-8000-000000000000"
+
+        # ── Pass 0: fix groups misparented in PE ──────────────────────────────
+        # PE's POST /classifier-api/v1/groups/{id} (delta update) silently
+        # ignores changes to the ``parent`` field — it never re-parents an
+        # existing group. Groups that were first synced flat (all under root)
+        # therefore stay flat no matter how many times we call update. The fix
+        # is to delete those groups from PE (deepest first so PE doesn't refuse
+        # the delete) and let Pass 2 recreate them with the correct parent.
+        if puppet_ready:
+            try:
+                pe_groups_raw = await self._puppet.list_groups()
+            except Exception as e:
+                logger.warning("Pass 0: could not fetch PE group list — hierarchy check skipped: %s", e)
+                pe_groups_raw = []
+
+            if pe_groups_raw:
+                pe_by_id: dict[str, dict] = {g["id"]: g for g in pe_groups_raw}
+                sabc_by_pe_id: dict[str, NodeGroup] = {
+                    g.puppet_group_id: g for g in groups if g.puppet_group_id
+                }
+
+                # Identify SABC groups whose PE parent does not match expectation.
+                wrong_pe_ids: set[str] = set()
+                for g in ordered:
+                    if not g.puppet_group_id or g.puppet_group_id not in pe_by_id:
+                        continue
+                    expected = parent_pe_id(g) or _PE_ROOT
+                    actual   = pe_by_id[g.puppet_group_id].get("parent") or _PE_ROOT
+                    if actual != expected:
+                        logger.info(
+                            "Pass 0: PE group '%s' misparented (actual=%s expected=%s) — will delete and recreate",
+                            g.name, actual, expected,
+                        )
+                        wrong_pe_ids.add(g.puppet_group_id)
+
+                if wrong_pe_ids:
+                    # Build PE child index so we can cascade deletes to descendants.
+                    pe_children_idx: dict[str, list[str]] = {}
+                    for pg in pe_groups_raw:
+                        p = pg.get("parent")
+                        if p:
+                            pe_children_idx.setdefault(p, []).append(pg["id"])
+
+                    def _collect_pe_descendants(pe_id: str, out: set) -> None:
+                        for child_id in pe_children_idx.get(pe_id, []):
+                            if child_id not in out:
+                                out.add(child_id)
+                                _collect_pe_descendants(child_id, out)
+
+                    all_to_delete: set[str] = set()
+                    for pe_id in wrong_pe_ids:
+                        all_to_delete.add(pe_id)
+                        _collect_pe_descendants(pe_id, all_to_delete)
+
+                    def _pe_depth(pe_id: str) -> int:
+                        d, seen, cur = 0, set(), pe_id
+                        while True:
+                            pg = pe_by_id.get(cur)
+                            if not pg:
+                                break
+                            parent = pg.get("parent")
+                            if not parent or parent in seen:
+                                break
+                            seen.add(cur)
+                            cur = parent
+                            d += 1
+                        return d
+
+                    # Delete deepest groups first so PE never blocks on children.
+                    for pe_id in sorted(all_to_delete, key=_pe_depth, reverse=True):
+                        try:
+                            await self._puppet.delete_node_group(pe_id)
+                            logger.info("Pass 0: deleted misparented PE group %s", pe_id)
+                        except Exception as e:
+                            logger.warning("Pass 0: failed to delete PE group %s: %s", pe_id, e)
+                        sabc_g = sabc_by_pe_id.get(pe_id)
+                        if sabc_g:
+                            sabc_g.puppet_group_id = None
+                            sabc_g.puppet_synced = False
+                            pe_ids.pop(sabc_g.name, None)
+                            sabc_g.updated_at = datetime.utcnow()
+                            await self._repo.update(sabc_g)
+
         # ── Pass 1: remove now-empty system groups (children before parents) ──
         # Pass 2 owns the skipped count; this pass only deletes stale PE groups.
         for g in reversed(ordered):

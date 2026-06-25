@@ -1,8 +1,11 @@
 from __future__ import annotations
+import logging
 import time
 import uuid
 import httpx
 from core.errors import ExternalServiceError
+
+logger = logging.getLogger(__name__)
 
 # Sentinel so callers can distinguish "leave the parent unchanged" (default)
 # from "set the parent to root" (parent_id=None).
@@ -216,6 +219,29 @@ class PuppetNCClient:
                     r.raise_for_status()
             except httpx.HTTPError as e:
                 raise ExternalServiceError(f"Puppet delete node group failed: {e}") from e
+
+    async def list_groups(self) -> list[dict]:
+        """Fetch all NC groups from Puppet Enterprise.
+
+        Returns an empty list when PE is not configured; raises
+        ExternalServiceError on HTTP failures so the caller can decide whether
+        to abort or degrade gracefully.
+        """
+        await self._resolve()
+        if not self._host:
+            return []
+        try:
+            hdrs = await self._token_hdr()
+            async with httpx.AsyncClient(verify=False) as c:
+                r = await c.get(
+                    f"{self._rbac()}/classifier-api/v1/groups",
+                    headers=hdrs,
+                    timeout=15,
+                )
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPError as e:
+            raise ExternalServiceError(f"Puppet list groups failed: {e}") from e
 
     async def trigger_run(self, node_fqdn: str, description: str) -> dict:
         return {"job_id": ""}
