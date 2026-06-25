@@ -339,6 +339,42 @@ class SeedDefaultNodeGroupsUseCase:
                 await self._repo.save(g)
                 created += 1
                 logger.info("Seeded system node group: %s", entry["name"])
+            else:
+                # Repair any drift from older flat-hierarchy DB records.
+                # The parent field drives the populated() walk in sync — if it
+                # points to "All Nodes" instead of the correct tree parent the
+                # intermediate ancestors (e.g. "Debian Family") are invisible to
+                # the descendant check and the whole subtree is skipped.
+                expected_parent = entry.get("parent", "All Nodes")
+                expected_rules  = entry.get("rules", [])
+                expected_match  = entry.get("match_type", "all")
+                changed = False
+                if existing.parent != expected_parent:
+                    logger.info(
+                        "Repairing parent of system group '%s': '%s' → '%s'",
+                        entry["name"], existing.parent, expected_parent,
+                    )
+                    existing.parent = expected_parent
+                    # If the parent changed the group's position in the tree also
+                    # changed — drop the stale PE id so sync recreates it in the
+                    # correct location (PE never re-parents via delta update).
+                    if existing.puppet_group_id:
+                        logger.info(
+                            "Clearing stale puppet_group_id for '%s' so sync recreates it under the correct parent",
+                            entry["name"],
+                        )
+                        existing.puppet_group_id = None
+                        existing.puppet_synced = False
+                    changed = True
+                if existing.rules != expected_rules:
+                    existing.rules = expected_rules
+                    changed = True
+                if existing.match_type != expected_match:
+                    existing.match_type = expected_match
+                    changed = True
+                if changed:
+                    existing.updated_at = datetime.utcnow()
+                    await self._repo.update(existing)
             if children:
                 created += await self._seed_tree(children)
         return created
