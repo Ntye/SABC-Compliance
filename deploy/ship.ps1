@@ -13,6 +13,16 @@
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Rollback     # Roll back to the previous deployment
 #   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
+# Offline AI assistant (Ollama):
+#   Add -WithAI to bake the LLM model into the archive. The model is downloaded
+#   ONCE on this (internet-connected) build machine; the server needs no internet.
+#
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -WithAI
+#   $env:OLLAMA_MODEL="llama3.2:3b"; .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -WithAI
+#
+#   Without -WithAI the assistant is not built/shipped; the chat widget shows
+#   "offline" and everything else works normally.
+#
 # On first deploy a legacy SQLite database is auto-migrated to PostgreSQL
 # (runs once, before the backend boots; a marker file skips it thereafter).
 #
@@ -45,7 +55,8 @@ param(
     [switch]$Restart,        # Skip build/transfer/load: just docker compose up -d
     [switch]$BuildOnly,      # Build and save images locally, no transfer
     [switch]$Bundle,         # Use Dockerfile.bundle (airgap packages)
-    [switch]$Rollback        # Roll back to the previous deployment
+    [switch]$Rollback,       # Roll back to the previous deployment
+    [switch]$WithAI          # Embed the offline Ollama AI model in the archive
 )
 
 Set-StrictMode -Version Latest
@@ -59,7 +70,7 @@ $RemoteDir  = "/opt/sabc-compliance"
 
 # -- Validate arguments -------------------------------------------------------
 if ((-not $Target) -and (-not $BuildOnly) -and (-not $Bundle)) {
-    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server [-SshKey key.pem] [-Setup|-Update|-Start|-Restart|-BuildOnly]"
+    Write-Host "Usage: .\deploy\ship.ps1 -Target user@server [-SshKey key.pem] [-Setup|-Update|-Start|-Restart|-BuildOnly] [-WithAI]"
     exit 1
 }
 
@@ -239,6 +250,21 @@ function Build-Images {
         & docker buildx build --platform linux/amd64 -t postgres:16-alpine --output "type=docker,dest=$stage\postgres.tar" $pgctx
         if ($LASTEXITCODE -ne 0) { Fail "postgres packaging failed" }
         Remove-Item -Recurse -Force $pgctx -ErrorAction SilentlyContinue
+
+        # Ollama image with the LLM model baked in — only when -WithAI was passed.
+        # The model is downloaded HERE (on this internet-connected build machine)
+        # and committed into an image layer. The server needs no internet at all.
+        if ($WithAI) {
+            $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
+            Info "Building Ollama image with embedded model '$ollamaModel' (downloading on this build machine) ..."
+            & docker buildx build --platform linux/amd64 `
+                --build-arg "OLLAMA_MODEL=$ollamaModel" `
+                -t sabc-ollama:latest `
+                --output "type=docker,dest=$stage\ollama.tar" deploy/ollama
+            if ($LASTEXITCODE -ne 0) { Fail "Ollama image build failed" }
+        } else {
+            Info "Skipping offline AI assistant (pass -WithAI to embed it)."
+        }
     } finally {
         Pop-Location
     }
@@ -254,7 +280,10 @@ function Save-Images {
     # server never needs outbound Docker Hub access).  The server extracts this
     # and `docker load`s each inner tar.
     $stage = Join-Path $ScriptDir ".images"
-    & tar -cf $Archive -C $stage backend.tar frontend.tar postgres.tar
+    # Include the Ollama image only when it was built (-WithAI).
+    $imageTars = @("backend.tar", "frontend.tar", "postgres.tar")
+    if (Test-Path (Join-Path $stage "ollama.tar")) { $imageTars += "ollama.tar" }
+    & tar -cf $Archive -C $stage @imageTars
     if ($LASTEXITCODE -ne 0) { Fail "Bundling image archive failed" }
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 
@@ -565,7 +594,13 @@ function Start-Containers {
     $composePrefix = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir"
     $lines = @(
         'set -e',
-        "COMPOSE=`"$composePrefix`"",
+        '# Enable the "ai" profile only when the Ollama image is actually loaded.',
+        'PROFILE=""',
+        'if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then',
+        '  PROFILE="--profile ai"',
+        '  echo "[ship] sabc-ollama image present -- enabling offline AI assistant."',
+        'fi',
+        "COMPOSE=`"$composePrefix `$PROFILE`"",
         "COMPOSE_FILE=`"$RemoteDir/docker-compose.yml`"",
         '# Guard: docker-compose v1 mis-handles image-only services when the file',
         '# still declares build: contexts -- it silently skips them and STILL exits 0,',
