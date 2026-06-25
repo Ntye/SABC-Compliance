@@ -46,6 +46,14 @@ export const translations = {
       footer: 'Have a problem that is not listed? It probably belongs here once solved — ask an administrator to add it.',
       severity: { fixed: 'Fixed', action: 'Action needed', info: 'Good to know' },
     },
+    chat: {
+      title: 'AI Assistant',
+      placeholder: 'Ask me anything about the platform, Puppet, Wazuh or CIS compliance…',
+      inputPlaceholder: 'Type a message… (Enter to send)',
+      offline: 'offline',
+      notRunning: 'Ollama is not running. Start it on the server with: ollama serve',
+      error: 'Failed to get a response. Check that Ollama is running.',
+    },
     login: {
       title: 'Sign in', username: 'Username', password: 'Password',
       signingIn: 'Signing in…', signIn: 'Sign in',
@@ -596,6 +604,14 @@ export const translations = {
       noResults: 'Aucun article correspondant.',
       footer: "Un problème non listé ? Sa place est ici une fois résolu — demandez à un administrateur de l'ajouter.",
       severity: { fixed: 'Corrigé', action: 'Action requise', info: 'Bon à savoir' },
+    },
+    chat: {
+      title: 'Assistant IA',
+      placeholder: 'Posez-moi n\'importe quelle question sur la plateforme, Puppet, Wazuh ou la conformité CIS…',
+      inputPlaceholder: 'Tapez un message… (Entrée pour envoyer)',
+      offline: 'hors ligne',
+      notRunning: 'Ollama n\'est pas démarré. Lancez-le sur le serveur : ollama serve',
+      error: 'Échec de la réponse. Vérifiez qu\'Ollama est démarré.',
     },
     login: {
       title: 'Connexion', username: 'Nom d\'utilisateur', password: 'Mot de passe',

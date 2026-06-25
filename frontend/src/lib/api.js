@@ -530,3 +530,17 @@ export async function seedDefaultNodeGroups() {
 export async function syncNodeGroups() {
   return request('POST', '/node-groups/sync')
 }
+
+// ── Offline AI assistant ──────────────────────────────────────────────────────
+
+export async function assistantChat(messages, model) {
+  return request('POST', '/assistant/chat', { messages, model })
+}
+
+export async function assistantModels() {
+  return request('GET', '/assistant/models')
+}
+
+export async function assistantHealth() {
+  return request('GET', '/assistant/health')
+}

@@ -159,8 +159,12 @@ class PuppetNCClient:
     async def update_node_group(
         self, group_id, name=None, description=None, environment=None,
         parent_id=_UNSET, match_type="all", rules=None, pinned_certnames=None,
-    ) -> None:
+    ) -> bool:
         """Update an existing PE classifier group's rule/environment/metadata.
+
+        Returns True when the group was updated, False when PE returned 404
+        (the group was deleted from the console). Any other HTTP error raises
+        ExternalServiceError.
 
         When ``parent_id`` is supplied (even as ``None``) the group is
         re-parented — ``None`` means the PE root group. Omitting it leaves the
@@ -169,7 +173,7 @@ class PuppetNCClient:
         """
         await self._resolve()
         if not self._host or not group_id:
-            return
+            return True  # no-op when not configured; caller should not recreate
         hdrs = await self._token_hdr()
         payload = {"rule": self.build_rule(match_type, rules or [], pinned_certnames or [])}
         if name is not None:
@@ -188,8 +192,11 @@ class PuppetNCClient:
                     headers={**hdrs, "Content-Type": "application/json"},
                     timeout=10,
                 )
+                if r.status_code == 404:
+                    return False  # group was deleted from the PE console
                 if r.status_code not in (200, 201, 303):
                     r.raise_for_status()
+                return True
             except httpx.HTTPError as e:
                 raise ExternalServiceError(f"Puppet update node group failed: {e}") from e
 

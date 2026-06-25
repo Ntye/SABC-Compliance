@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Collection
     collector_interval_seconds: int = 300
 
+    # Offline AI assistant (Ollama)
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3"
+
     # Features
     swagger_enabled: bool = True
 

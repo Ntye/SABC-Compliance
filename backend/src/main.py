@@ -20,6 +20,7 @@ from infrastructure.database.adapter import (
 )
 from infrastructure.http.wazuh_client import WazuhRESTClient
 from infrastructure.http.puppet_nc_client import PuppetNCClient
+from infrastructure.http.ollama_client import OllamaClient
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
     CreateUserUseCase, DecodeJwtUseCase, InitAdminUserUseCase,
@@ -65,6 +66,7 @@ from interface.http.routes import compliance as compliance_routes
 from interface.http.routes import node_groups as node_groups_routes
 from interface.http.routes import profiles as profiles_routes
 from interface.http.routes import settings as settings_routes
+from interface.http.routes import assistant as assistant_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -122,6 +124,10 @@ async def lifespan(app: FastAPI):
         # DB at call time — they're written there when the operator installs the
         # master through the console, not via the startup env vars.
         config_repo=platform_config_repo,
+    )
+    ollama_client = OllamaClient(
+        base_url=settings.ollama_url,
+        model=settings.ollama_model,
     )
 
     # -- Event bus --
@@ -344,6 +350,9 @@ async def lifespan(app: FastAPI):
     )
     settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
 
+    # -- Offline AI assistant --
+    assistant_routes.set_use_cases(ollama_client=ollama_client)
+
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
 
@@ -446,6 +455,7 @@ Two methods accepted on all protected endpoints:
             {"name": "Audit", "description": "HTTP audit log"},
             {"name": "Webhooks", "description": "Internal webhook endpoints"},
             {"name": "Settings", "description": "Platform settings — TLS certificate management"},
+            {"name": "Assistant", "description": "Offline AI assistant powered by Ollama (local LLM)"},
         ],
     )
 
@@ -482,6 +492,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(compliance_routes.router)
     app.include_router(profiles_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(assistant_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

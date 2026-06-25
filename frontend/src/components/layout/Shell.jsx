@@ -2,6 +2,7 @@ import { Navigate, Outlet } from 'react-router-dom'
 import { isAuthenticated } from '../../lib/api.js'
 import Sidebar from './Sidebar.jsx'
 import Header from './Header.jsx'
+import ChatWidget from '../common/ChatWidget.jsx'
 
 export default function Shell() {
   if (!isAuthenticated()) {
@@ -17,6 +18,7 @@ export default function Shell() {
           <Outlet />
         </main>
       </div>
+      <ChatWidget />
     </div>
   )
 }

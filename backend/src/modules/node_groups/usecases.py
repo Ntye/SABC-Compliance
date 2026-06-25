@@ -490,15 +490,27 @@ class SyncAllNodeGroupsUseCase:
             try:
                 parent_id = parent_pe_id(g)
                 if g.puppet_group_id:
-                    # Pass parent_id so a group first created flat under the root
-                    # is re-parented to its correct place on this sync.
-                    await self._puppet.update_node_group(
+                    # Update the existing PE group (re-parents if needed).
+                    # Returns False when PE no longer has this group (manual deletion).
+                    found = await self._puppet.update_node_group(
                         g.puppet_group_id, name=g.name, description=g.description,
                         environment=g.environment, parent_id=parent_id,
                         match_type=g.match_type, rules=g.rules,
                         pinned_certnames=certnames,
                     )
-                else:
+                    if not found:
+                        # Group was deleted from the PE console — clear stale id
+                        # and fall through to create it in the correct position.
+                        logger.info(
+                            "PE group '%s' (id=%s) no longer exists — recreating",
+                            g.name, g.puppet_group_id,
+                        )
+                        g.puppet_group_id = None
+                        pe_ids.pop(g.name, None)
+                if not g.puppet_group_id:
+                    # New group or recreation after stale id was cleared.
+                    # parent_id was computed above and is still valid because the
+                    # topological order guarantees parents are processed first.
                     g.puppet_group_id = await self._puppet.create_node_group(
                         g.name, g.description, environment=g.environment,
                         parent_id=parent_id, match_type=g.match_type, rules=g.rules,
@@ -661,13 +673,16 @@ class UpdateNodeGroupUseCase:
             logger.warning("Wazuh group re-sync failed: %s", e)
         try:
             if group.puppet_group_id:
-                await self._puppet.update_node_group(
+                found = await self._puppet.update_node_group(
                     group.puppet_group_id, name=group.name, description=group.description,
                     environment=group.environment, parent_id=parent_id,
                     match_type=group.match_type,
                     rules=group.rules, pinned_certnames=resolved["certnames"],
                 )
-            else:
+                if not found:
+                    logger.info("PE group '%s' stale — recreating", group.name)
+                    group.puppet_group_id = None
+            if not group.puppet_group_id:
                 group.puppet_group_id = await self._puppet.create_node_group(
                     group.name, group.description, environment=group.environment,
                     parent_id=parent_id, match_type=group.match_type, rules=group.rules,
