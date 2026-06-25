@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, Lock,
+  Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, LifeBuoy, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
@@ -140,6 +140,10 @@ export default function Sidebar() {
             <NavItem path="/settings/tls"    label={t('nav.tlsCertificate')} icon={FileKey}    />
           </>
         )}
+
+        {/* HELP — solo, not collapsible */}
+        <SectionHeader label={t('nav.sectionHelp')} collapsible={false} />
+        <NavItem path="/help" label={t('nav.help')} icon={LifeBuoy} />
       </nav>
 
       {/* Footer */}

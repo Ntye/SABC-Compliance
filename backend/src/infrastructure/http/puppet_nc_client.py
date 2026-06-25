@@ -4,6 +4,10 @@ import uuid
 import httpx
 from core.errors import ExternalServiceError
 
+# Sentinel so callers can distinguish "leave the parent unchanged" (default)
+# from "set the parent to root" (parent_id=None).
+_UNSET = object()
+
 
 class PuppetNCClient:
     ROOT_GROUP = "00000000-0000-4000-8000-000000000000"
@@ -154,9 +158,15 @@ class PuppetNCClient:
 
     async def update_node_group(
         self, group_id, name=None, description=None, environment=None,
-        match_type="all", rules=None, pinned_certnames=None,
+        parent_id=_UNSET, match_type="all", rules=None, pinned_certnames=None,
     ) -> None:
-        """Update an existing PE classifier group's rule/environment/metadata."""
+        """Update an existing PE classifier group's rule/environment/metadata.
+
+        When ``parent_id`` is supplied (even as ``None``) the group is
+        re-parented — ``None`` means the PE root group. Omitting it leaves the
+        existing parent untouched. Re-parenting is how the sync repairs groups
+        that were first created flat under the root before their parent existed.
+        """
         await self._resolve()
         if not self._host or not group_id:
             return
@@ -168,6 +178,8 @@ class PuppetNCClient:
             payload["description"] = description
         if environment is not None:
             payload["environment"] = environment
+        if parent_id is not _UNSET:
+            payload["parent"] = parent_id or self.ROOT_GROUP
         async with httpx.AsyncClient(verify=False) as c:
             try:
                 r = await c.post(

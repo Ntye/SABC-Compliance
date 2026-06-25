@@ -199,6 +199,23 @@ _ALMA_CHILDREN = [
     ]},
 ]
 
+# RHEL os-release PRETTY_NAME is "Red Hat Enterprise Linux N.M (...)", so distro
+# and version rules match os_name on the "Red Hat Enterprise Linux" substring.
+_RHEL_CHILDREN = [
+    {"name": "RHEL 7", "parent": "Red Hat Enterprise Linux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "Red Hat Enterprise Linux"},
+        {"fact": "os_version", "operator": "~", "value": r"^7"},
+    ]},
+    {"name": "RHEL 8", "parent": "Red Hat Enterprise Linux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "Red Hat Enterprise Linux"},
+        {"fact": "os_version", "operator": "~", "value": r"^8"},
+    ]},
+    {"name": "RHEL 9", "parent": "Red Hat Enterprise Linux", "rules": [
+        {"fact": "os_name", "operator": "~", "value": "Red Hat Enterprise Linux"},
+        {"fact": "os_version", "operator": "~", "value": r"^9"},
+    ]},
+]
+
 DEFAULT_NODE_GROUP_TREE = [
     {
         "name": "SABC Managed Nodes",
@@ -243,6 +260,14 @@ DEFAULT_NODE_GROUP_TREE = [
                 "rules": [{"fact": "os_family", "operator": "=", "value": "RedHat"}],
                 "inspec_profile_id": "sabc-linux-baseline",
                 "children": [
+                    {
+                        "name": "Red Hat Enterprise Linux",
+                        "description": "Red Hat Enterprise Linux (RHEL) servers",
+                        "parent": "RedHat Family",
+                        "rules": [{"fact": "os_name", "operator": "~", "value": "Red Hat Enterprise Linux"}],
+                        "inspec_profile_id": "sabc-linux-baseline",
+                        "children": _RHEL_CHILDREN,
+                    },
                     {
                         "name": "Rocky Linux",
                         "description": "Rocky Linux servers",
@@ -353,12 +378,6 @@ class SyncAllNodeGroupsUseCase:
         self._wazuh = wazuh_client
         self._puppet = puppet_client
 
-    async def _parent_id(self, parent_name: str):
-        if not parent_name or parent_name == "All Nodes":
-            return None
-        parent = await self._repo.find_by_name(parent_name)
-        return parent.puppet_group_id if parent else None
-
     async def execute(self) -> dict:
         groups = await self._repo.find_all()  # created_at ascending
 
@@ -373,6 +392,8 @@ class SyncAllNodeGroupsUseCase:
         # Resolve membership for every group up front.
         resolved = {g.id: await resolve_matching(g, self._node_repo) for g in groups}
         total_nodes = sum(len(resolved[g.id]["ids"]) for g in groups)
+
+        by_name: dict[str, NodeGroup] = {g.name: g for g in groups}
 
         # Index children by parent name so we can test whole subtrees.
         children: dict[str, list[NodeGroup]] = {}
@@ -393,18 +414,44 @@ class SyncAllNodeGroupsUseCase:
             return result
 
         def should_push(g: NodeGroup) -> bool:
-            if g.group_type != "system":
-                return True
-            # Push system groups that carry classification rules (so PE's fact-based
-            # engine works even before nodes are pinned) or that have matched nodes
-            # anywhere in their subtree (for rule-less ancestor containers).
-            return bool(g.rules) or populated(g)
+            # User groups always appear; a system group is materialised in PE only
+            # when it (or a descendant) actually matches a node — so the RedHat
+            # branch shows up the moment a RHEL host is recognised, and an
+            # all-Ubuntu fleet is not littered with empty CentOS/Rocky groups.
+            # Because populated() walks descendants, every ancestor of a matched
+            # leaf is itself "populated", so the whole parent chain is created and
+            # the PE hierarchy is never left with a dangling parent.
+            return g.group_type != "system" or populated(g)
+
+        # Depth within the managed tree (parents have a smaller depth than their
+        # children) so we can process parents before children regardless of the
+        # created_at order — the PE parent must exist before a child references it.
+        def depth(g: NodeGroup) -> int:
+            d, seen, cur = 0, set(), g
+            while cur and cur.parent in by_name and cur.parent not in seen:
+                seen.add(cur.parent)
+                cur = by_name[cur.parent]
+                d += 1
+            return d
+
+        ordered = sorted(groups, key=depth)  # stable → keeps created_at order per level
+
+        # Live map of group name → PE group id, seeded from what is already in PE
+        # and updated as we create groups, so a child always resolves the *current*
+        # parent id without a stale DB read.
+        pe_ids: dict[str, str] = {g.name: g.puppet_group_id for g in groups if g.puppet_group_id}
+
+        def parent_pe_id(g: NodeGroup):
+            # None → PE root group. A managed parent resolves to its live PE id.
+            if not g.parent or g.parent == "All Nodes" or g.parent not in by_name:
+                return None
+            return pe_ids.get(g.parent)
 
         synced = failed = skipped = removed = pushed = 0
 
         # ── Pass 1: remove now-empty system groups (children before parents) ──
         # Pass 2 owns the skipped count; this pass only deletes stale PE groups.
-        for g in reversed(groups):
+        for g in reversed(ordered):
             if should_push(g) or g.group_type != "system":
                 continue
             if not g.puppet_group_id and not g.wazuh_synced:
@@ -418,6 +465,7 @@ class SyncAllNodeGroupsUseCase:
                 await self._wazuh.delete_agent_group(g.name)
             except Exception as e:
                 logger.warning("Wazuh remove empty group '%s' failed: %s", g.name, e)
+            pe_ids.pop(g.name, None)
             g.puppet_group_id = None
             g.puppet_synced = False
             g.wazuh_synced = False
@@ -426,7 +474,7 @@ class SyncAllNodeGroupsUseCase:
             removed += 1
 
         # ── Pass 2: create/update populated groups (parents before children) ──
-        for g in groups:
+        for g in ordered:
             if not should_push(g):
                 skipped += 1
                 continue
@@ -440,12 +488,15 @@ class SyncAllNodeGroupsUseCase:
                 wazuh_ok = False
                 logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
             try:
-                parent_id = await self._parent_id(g.parent)
+                parent_id = parent_pe_id(g)
                 if g.puppet_group_id:
+                    # Pass parent_id so a group first created flat under the root
+                    # is re-parented to its correct place on this sync.
                     await self._puppet.update_node_group(
                         g.puppet_group_id, name=g.name, description=g.description,
-                        environment=g.environment, match_type=g.match_type,
-                        rules=g.rules, pinned_certnames=certnames,
+                        environment=g.environment, parent_id=parent_id,
+                        match_type=g.match_type, rules=g.rules,
+                        pinned_certnames=certnames,
                     )
                 else:
                     g.puppet_group_id = await self._puppet.create_node_group(
@@ -453,6 +504,8 @@ class SyncAllNodeGroupsUseCase:
                         parent_id=parent_id, match_type=g.match_type, rules=g.rules,
                         pinned_certnames=certnames,
                     ) or None
+                if g.puppet_group_id:
+                    pe_ids[g.name] = g.puppet_group_id
             except Exception as e:
                 puppet_ok = False
                 logger.warning("Puppet sync failed for '%s': %s", g.name, e)
@@ -590,8 +643,15 @@ class UpdateNodeGroupUseCase:
         await self._resync(group)
         return group
 
+    async def _parent_id(self, parent_name: str):
+        if not parent_name or parent_name == "All Nodes":
+            return None
+        parent = await self._repo.find_by_name(parent_name)
+        return parent.puppet_group_id if parent else None
+
     async def _resync(self, group: NodeGroup) -> None:
         resolved = await resolve_matching(group, self._node_repo)
+        parent_id = await self._parent_id(group.parent)
         wazuh_ok = puppet_ok = True
         try:
             await self._wazuh.create_agent_group(group.name)
@@ -603,13 +663,14 @@ class UpdateNodeGroupUseCase:
             if group.puppet_group_id:
                 await self._puppet.update_node_group(
                     group.puppet_group_id, name=group.name, description=group.description,
-                    environment=group.environment, match_type=group.match_type,
+                    environment=group.environment, parent_id=parent_id,
+                    match_type=group.match_type,
                     rules=group.rules, pinned_certnames=resolved["certnames"],
                 )
             else:
                 group.puppet_group_id = await self._puppet.create_node_group(
                     group.name, group.description, environment=group.environment,
-                    match_type=group.match_type, rules=group.rules,
+                    parent_id=parent_id, match_type=group.match_type, rules=group.rules,
                     pinned_certnames=resolved["certnames"],
                 ) or None
         except Exception as e:
