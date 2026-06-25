@@ -28,6 +28,11 @@ class SetHostRequest(BaseModel):
     host: str
 
 
+class SetPuppetCredentialsRequest(BaseModel):
+    admin_user: str = "admin"
+    admin_password: str
+
+
 class InstallRequest(BaseModel):
     node_id: str
 
@@ -57,6 +62,7 @@ _scan_engine_uc = None
 _node_repo = None
 _packages_dir: str = ""
 _ssh_client = None
+_config_repo = None
 
 
 def set_use_cases(
@@ -72,13 +78,14 @@ def set_use_cases(
     packages_dir: str = "",
     install_wazuh_manager_colocated_uc=None,
     ssh_client=None,
+    config_repo=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
     global _install_wazuh_manager_colocated_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
-    global _node_repo, _packages_dir, _ssh_client
+    global _node_repo, _packages_dir, _ssh_client, _config_repo
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -91,6 +98,7 @@ def set_use_cases(
     _node_repo = node_repo
     _packages_dir = packages_dir
     _ssh_client = ssh_client
+    _config_repo = config_repo
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -172,6 +180,27 @@ async def set_wazuh_manager(
         return await _set_master_uc.execute("wazuh", body.host)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/puppet-credentials", summary="Set Puppet Enterprise RBAC credentials")
+async def set_puppet_credentials(
+    body: SetPuppetCredentialsRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Store the PE console admin username and password used by SABC to
+    authenticate against the RBAC API for node-group classification.
+
+    Call this whenever the PE console admin password changes — the stored
+    credentials are used by every subsequent node-group sync.
+    """
+    if not _config_repo:
+        raise HTTPException(status_code=503, detail="Config repository not available")
+    password = body.admin_password.strip()
+    if not password:
+        raise HTTPException(status_code=422, detail="admin_password is required")
+    await _config_repo.set("pe_console_password", password)
+    await _config_repo.set("pe_admin_user", body.admin_user.strip() or "admin")
+    return {"message": "Puppet Enterprise credentials updated", "admin_user": body.admin_user}
 
 
 @router.post("/install/puppet-master", response_model=JobRef, status_code=202, summary="Install Puppet master on a node")

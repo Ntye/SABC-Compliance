@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle, CheckCircle, ChevronDown, Cpu, Link, RefreshCw,
+  AlertTriangle, CheckCircle, ChevronDown, Cpu, KeyRound, Link, RefreshCw,
   Search, Server, ShieldCheck, XCircle,
 } from 'lucide-react'
 import {
   getInfrastructureStatus, installService, listNodes,
-  setPuppetMasterHost, setWazuhManagerHost, jobWsUrl,
+  setPuppetMasterHost, setWazuhManagerHost, setPuppetCredentials, jobWsUrl,
   checkPuppetAgentPlatform, probeWazuhDashboardPort,
   getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
   checkNodeHealth,
@@ -180,6 +180,60 @@ function ConnectForm({ service, onSave, onCancel, t }) {
           className="flex-1 px-3 py-2 text-[12px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
         />
         <button onClick={handleSave} disabled={saving || !host.trim()} className={btn(true)}>
+          {saving && <Spinner size={13} />}
+          {saving ? t('infra.saving') : t('common.save')}
+        </button>
+        <button onClick={onCancel} className={btn(false)}>{t('common.cancel')}</button>
+      </div>
+    </div>
+  )
+}
+
+// ── PE credentials form ───────────────────────────────────────────────────────
+
+function PuppetCredentialsForm({ onSave, onCancel, t }) {
+  const [user, setUser]     = useState('admin')
+  const [pass, setPass]     = useState('')
+  const [saving, setSaving] = useState(false)
+  const toast = useToast()
+
+  async function handleSave() {
+    if (!pass.trim()) return
+    setSaving(true)
+    try {
+      await setPuppetCredentials(user.trim() || 'admin', pass.trim())
+      toast(t('infra.credentialsSaved'), 'success')
+      onSave()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
+        {t('infra.setPECredentials')}
+      </p>
+      <p className="text-[11px] text-gray-500">{t('infra.credentialsHint')}</p>
+      <div className="flex gap-2">
+        <input
+          value={user}
+          onChange={(e) => setUser(e.target.value)}
+          placeholder="admin"
+          className="w-28 px-3 py-2 text-[12px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+        />
+        <input
+          autoFocus
+          type="password"
+          value={pass}
+          onChange={(e) => setPass(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+          placeholder={t('infra.pePassword')}
+          className="flex-1 px-3 py-2 text-[12px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+        />
+        <button onClick={handleSave} disabled={saving || !pass.trim()} className={btn(true)}>
           {saving && <Spinner size={13} />}
           {saving ? t('infra.saving') : t('common.save')}
         </button>
@@ -370,10 +424,13 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
 // ── Tab 1: Masters & Managers ─────────────────────────────────────────────────
 
 function MasterCard({ service, status, nodes, onJobStarted, t }) {
-  const [showConnect, setShowConnect] = useState(false)
-  const [showInstall, setShowInstall] = useState(false)
+  const [showConnect, setShowConnect]   = useState(false)
+  const [showInstall, setShowInstall]   = useState(false)
+  const [showCreds,   setShowCreds]     = useState(false)
   const isPuppet      = service === 'puppet'
   const masterService = isPuppet ? 'puppet-master' : 'wazuh-manager'
+
+  function closeAll() { setShowConnect(false); setShowInstall(false); setShowCreds(false) }
 
   return (
     <>
@@ -404,19 +461,28 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
 
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => { setShowConnect(!showConnect); setShowInstall(false) }}
+            onClick={() => { setShowConnect(!showConnect); setShowInstall(false); setShowCreds(false) }}
             className={btnSm(false)}
           >
             <Link size={11} />
             {status?.configured ? t('infra.changeHost') : t('infra.connectExisting')}
           </button>
           <button
-            onClick={() => { setShowInstall(true); setShowConnect(false) }}
+            onClick={() => { setShowInstall(true); closeAll() }}
             className={btnSm(status?.configured ? false : true)}
           >
             <Server size={11} />
             {t('infra.installOnNode')}
           </button>
+          {isPuppet && (
+            <button
+              onClick={() => { setShowCreds(!showCreds); setShowConnect(false); setShowInstall(false) }}
+              className={btnSm(false)}
+            >
+              <KeyRound size={11} />
+              {t('infra.setPECredentials')}
+            </button>
+          )}
         </div>
 
         {showConnect && (
@@ -424,6 +490,14 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
             service={service}
             onSave={() => { setShowConnect(false) }}
             onCancel={() => setShowConnect(false)}
+            t={t}
+          />
+        )}
+
+        {isPuppet && showCreds && (
+          <PuppetCredentialsForm
+            onSave={() => setShowCreds(false)}
+            onCancel={() => setShowCreds(false)}
             t={t}
           />
         )}

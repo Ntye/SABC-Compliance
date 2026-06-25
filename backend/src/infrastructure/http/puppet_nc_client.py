@@ -39,7 +39,8 @@ class PuppetNCClient:
             return
         try:
             host = await self._config.get("puppet_master_host")
-            pw = await self._config.get("pe_console_password")
+            pw   = await self._config.get("pe_console_password")
+            user = await self._config.get("pe_admin_user")
         except Exception:
             return  # config store unreachable — keep whatever we already have
         host = host or self._env_host
@@ -48,7 +49,15 @@ class PuppetNCClient:
             self._host = host
             self._token = None
             self._token_ts = 0.0
-        self._pass = pw or self._env_pass
+        if user:
+            self._user = user
+        if pw and pw != self._pass:
+            # Password changed — drop cached token so next call re-auths.
+            self._pass = pw
+            self._token = None
+            self._token_ts = 0.0
+        elif not pw:
+            self._pass = self._env_pass
 
     async def is_configured(self) -> bool:
         """True when a Puppet master host is known (from config DB or env)."""

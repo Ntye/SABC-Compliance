@@ -286,6 +286,10 @@ export async function setPuppetMasterHost(host) {
   return request('POST', '/infrastructure/puppet-master', { host })
 }
 
+export async function setPuppetCredentials(adminUser, adminPassword) {
+  return request('POST', '/infrastructure/puppet-credentials', { admin_user: adminUser, admin_password: adminPassword })
+}
+
 export async function setWazuhManagerHost(host) {
   return request('POST', '/infrastructure/wazuh-manager', { host })
 }
