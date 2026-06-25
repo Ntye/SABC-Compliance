@@ -12,6 +12,12 @@
 #   ./deploy/ship.sh --build-only               Build and save images locally
 #   ./deploy/ship.sh --bundle                   Build bundled image (with airgap packages)
 #
+# Partial service updates (faster — only rebuilds and restarts one container):
+#   ./deploy/ship.sh user@ec2-ip --backend-only          Rebuild and redeploy only the backend
+#   ./deploy/ship.sh user@ec2-ip --frontend-only         Rebuild and redeploy only the frontend
+#   ./deploy/ship.sh user@ec2-ip --update --backend-only Transfer existing archive, restart backend
+#   ./deploy/ship.sh user@ec2-ip --update --frontend-only Transfer existing archive, restart frontend
+#
 # Offline AI assistant (Ollama):
 #   Opt in with --with-ai to bake the LLM model into the archive. The model is
 #   downloaded ONCE on this (internet-connected) build machine and committed into
@@ -52,23 +58,31 @@ BUILD_ONLY=false
 BUNDLE=false
 DO_ROLLBACK=false
 WITH_AI=false          # opt-in: --with-ai embeds the Ollama model in the archive
+BACKEND_ONLY=false     # rebuild/transfer/restart only the backend service
+FRONTEND_ONLY=false    # rebuild/transfer/restart only the frontend service
 
 for arg in "$@"; do
   case "$arg" in
-    --setup)       DO_SETUP=true ;;
-    --update)      DO_UPDATE=true ;;
-    --deploy-only) DEPLOY_ONLY=true ;;
-    --build-only)  BUILD_ONLY=true ;;
-    --bundle)      BUNDLE=true ;;
-    --rollback)    DO_ROLLBACK=true ;;
-    --with-ai)     WITH_AI=true ;;
-    -*)            echo "Unknown flag: $arg"; exit 1 ;;
-    *)             TARGET="$arg" ;;
+    --setup)          DO_SETUP=true ;;
+    --update)         DO_UPDATE=true ;;
+    --deploy-only)    DEPLOY_ONLY=true ;;
+    --build-only)     BUILD_ONLY=true ;;
+    --bundle)         BUNDLE=true ;;
+    --rollback)       DO_ROLLBACK=true ;;
+    --with-ai)        WITH_AI=true ;;
+    --backend-only)   BACKEND_ONLY=true ;;
+    --frontend-only)  FRONTEND_ONLY=true ;;
+    -*)               echo "Unknown flag: $arg"; exit 1 ;;
+    *)                TARGET="$arg" ;;
   esac
 done
 
+if [[ "$BACKEND_ONLY" == true && "$FRONTEND_ONLY" == true ]]; then
+  fail "--backend-only and --frontend-only cannot be combined"
+fi
+
 if [[ -z "$TARGET" && "$BUILD_ONLY" == false && "$BUNDLE" == false ]]; then
-  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--rollback|--build-only|--bundle] [--with-ai]"
+  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--rollback|--build-only|--bundle] [--with-ai] [--backend-only|--frontend-only]"
   exit 1
 fi
 
@@ -109,54 +123,56 @@ build_images() {
   rm -rf "$STAGE"
   mkdir -p "$STAGE"
 
-  if [[ "$BUNDLE" == true ]]; then
-    # docker-compose.yml references sabc-compliance-backend:latest, so tag the
-    # bundled (airgap-packages) image :latest — otherwise the loaded image never
-    # matches the compose file and the backend fails with "image not found".
-    info "Building bundled backend image (with airgap packages) ..."
-    docker buildx build --platform linux/amd64 \
-      -f backend/Dockerfile.bundle -t sabc-compliance-backend:latest \
-      --output "type=docker,dest=$STAGE/backend.tar" backend/
-  else
-    info "Building backend image ..."
-    docker buildx build --platform linux/amd64 \
-      -t sabc-compliance-backend:latest \
-      --output "type=docker,dest=$STAGE/backend.tar" ./backend
+  if [[ "$FRONTEND_ONLY" == false ]]; then
+    if [[ "$BUNDLE" == true ]]; then
+      # docker-compose.yml references sabc-compliance-backend:latest, so tag the
+      # bundled (airgap-packages) image :latest — otherwise the loaded image never
+      # matches the compose file and the backend fails with "image not found".
+      info "Building bundled backend image (with airgap packages) ..."
+      docker buildx build --platform linux/amd64 \
+        -f backend/Dockerfile.bundle -t sabc-compliance-backend:latest \
+        --output "type=docker,dest=$STAGE/backend.tar" backend/
+    else
+      info "Building backend image ..."
+      docker buildx build --platform linux/amd64 \
+        -t sabc-compliance-backend:latest \
+        --output "type=docker,dest=$STAGE/backend.tar" ./backend
+    fi
   fi
 
-  info "Building frontend image ..."
-  docker buildx build --platform linux/amd64 \
-    --build-arg VITE_API_BASE=/api \
-    -t sabc-compliance-frontend:latest \
-    --output "type=docker,dest=$STAGE/frontend.tar" ./frontend
+  if [[ "$BACKEND_ONLY" == false ]]; then
+    info "Building frontend image ..."
+    docker buildx build --platform linux/amd64 \
+      --build-arg VITE_API_BASE=/api \
+      -t sabc-compliance-frontend:latest \
+      --output "type=docker,dest=$STAGE/frontend.tar" ./frontend
+  fi
 
   # ── Ollama image with the LLM model baked in (offline AI assistant) ─────────
-  # Only built when --with-ai was passed. Downloads the model on THIS machine
-  # once; the server never needs internet.
-  # Use OLLAMA_MODEL=llama3.2:3b to embed a larger/better model.
-  if [[ "$WITH_AI" == "true" ]]; then
+  # Only built when --with-ai was passed and not a frontend-only update.
+  if [[ "$WITH_AI" == "true" && "$FRONTEND_ONLY" == false ]]; then
     local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
     info "Building Ollama image with embedded model '${ollama_model}' (downloading on this build machine) ..."
     docker buildx build --platform linux/amd64 \
       --build-arg OLLAMA_MODEL="$ollama_model" \
       -t sabc-ollama:latest \
       --output "type=docker,dest=$STAGE/ollama.tar" deploy/ollama
-  else
+  elif [[ "$FRONTEND_ONLY" == false ]]; then
     info "Skipping offline AI assistant (pass --with-ai to embed it)."
   fi
 
-  # postgres is not built from a Dockerfile, but we still export it through
-  # buildx (a one-line passthrough Dockerfile) rather than `docker pull` +
-  # `docker save`, for the exact same reason as above — this guarantees a clean
-  # single-arch docker-archive that the server can load with no Docker Hub access.
-  info "Packaging postgres:16-alpine for linux/amd64 ..."
-  local pgctx="$STAGE/pgctx"
-  mkdir -p "$pgctx"
-  echo 'FROM postgres:16-alpine' > "$pgctx/Dockerfile"
-  docker buildx build --platform linux/amd64 \
-    -t postgres:16-alpine \
-    --output "type=docker,dest=$STAGE/postgres.tar" "$pgctx"
-  rm -rf "$pgctx"
+  # postgres is only needed for full deploys — for partial updates the database
+  # container is already running on the server and must not be replaced.
+  if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
+    info "Packaging postgres:16-alpine for linux/amd64 ..."
+    local pgctx="$STAGE/pgctx"
+    mkdir -p "$pgctx"
+    echo 'FROM postgres:16-alpine' > "$pgctx/Dockerfile"
+    docker buildx build --platform linux/amd64 \
+      -t postgres:16-alpine \
+      --output "type=docker,dest=$STAGE/postgres.tar" "$pgctx"
+    rm -rf "$pgctx"
+  fi
 
   ok "Image archives built (linux/amd64)"
 }
@@ -167,13 +183,17 @@ save_images() {
 
   # build_images already exported each image as a self-contained, loadable
   # docker-archive tar under $STAGE.  Bundle those per-image tars into the single
-  # gzipped artifact the rest of the pipeline ships (postgres is included so the
-  # server never needs outbound Docker Hub access).  The server extracts this and
-  # `docker load`s each inner tar.
+  # gzipped artifact the rest of the pipeline ships.  For partial deploys only
+  # the relevant image(s) are included — postgres is omitted because the server
+  # has it running already and reloading it would restart the database.
   local stage="$SCRIPT_DIR/.images"
-  # Include the Ollama image only when it was built (WITH_OLLAMA=true).
-  local images=(backend.tar frontend.tar postgres.tar)
-  [[ -f "$stage/ollama.tar" ]] && images+=(ollama.tar)
+  local images=()
+  [[ "$FRONTEND_ONLY" == false ]] && images+=(backend.tar)
+  [[ "$BACKEND_ONLY" == false ]] && images+=(frontend.tar)
+  if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
+    images+=(postgres.tar)
+    [[ -f "$stage/ollama.tar" ]] && images+=(ollama.tar)
+  fi
   tar -czf "$ARCHIVE" -C "$stage" "${images[@]}"
   rm -rf "$stage"
 
@@ -617,7 +637,88 @@ IPEOF
   echo ""
 }
 
+# ── Partial service deploy ────────────────────────────────────────────────────
+# Loads the just-transferred image archive and restarts a single compose
+# service without touching postgres or any other running container.
+deploy_service() {
+  local svc="$1"   # compose service name: "backend" or "frontend"
+  local ctr="sabc-${svc}"
+
+  info "Loading ${svc} image on $TARGET ..."
+  if ! remote "sudo bash -s -- '$REMOTE_DIR'" << 'LOAD_SVC_EOF'
+set -e
+rd="$1"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+tar -xzf "$rd/sabc-images.tar.gz" -C "$tmp"
+for f in "$tmp"/*.tar; do
+  echo "Loading $(basename "$f") ..."
+  docker load -i "$f"
+done
+LOAD_SVC_EOF
+  then
+    fail "${svc} image load failed"
+  fi
+
+  info "Restarting ${svc} container (keeping all other services running) ..."
+  set +e
+  ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << RESTART_SVC_EOF
+set -e
+if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
+PROFILE=""
+if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then PROFILE="--profile ai"; fi
+COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
+\$COMPOSE up -d --no-deps $svc
+sleep 8
+st=\$(docker inspect -f '{{.State.Status}}' $ctr 2>/dev/null || echo absent)
+if [ "\$st" != "running" ]; then
+  echo "[ship.sh] ERROR: $ctr is not running (status: \$st)"
+  docker logs --tail 40 $ctr 2>&1 || true
+  exit 1
+fi
+echo "[ship.sh] $ctr is running."
+RESTART_SVC_EOF
+  _svc_rc=$?
+  set -e
+  if [[ $_svc_rc -ne 0 ]]; then
+    fail "${svc} deployment failed — check logs above"
+  fi
+  ok "${svc} updated and running!"
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
+
+# ── Partial deploy: --backend-only / --frontend-only ─────────────────────────
+if [[ "$BACKEND_ONLY" == true || "$FRONTEND_ONLY" == true ]]; then
+  svc=$( [[ "$BACKEND_ONLY" == true ]] && echo backend || echo frontend )
+
+  if [[ "$DO_ROLLBACK" == true ]]; then
+    do_rollback
+    exit 0
+  fi
+
+  if [[ "$DEPLOY_ONLY" == true ]]; then
+    if ! remote "test -f $REMOTE_DIR/sabc-images.tar.gz && test -f $REMOTE_DIR/docker-compose.yml"; then
+      fail "Remote files missing in $REMOTE_DIR — run without --deploy-only first to transfer them"
+    fi
+    deploy_service "$svc"
+    exit 0
+  fi
+
+  if [[ "$DO_UPDATE" == true ]]; then
+    [ ! -f "$ARCHIVE" ] && fail "No archive at $ARCHIVE — run without --update first to build"
+    transfer
+    deploy_service "$svc"
+    exit 0
+  fi
+
+  if [[ "$DO_SETUP" == true ]]; then setup_ec2; fi
+  build_images
+  save_images
+  transfer
+  deploy_service "$svc"
+  exit 0
+fi
 
 if [[ "$BUILD_ONLY" == true || "$BUNDLE" == true ]]; then
   build_images

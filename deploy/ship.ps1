@@ -13,6 +13,12 @@
 #   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Rollback     # Roll back to the previous deployment
 #   .\deploy\ship.ps1 -BuildOnly                                 # Build and save locally only
 #
+# Partial service updates (faster — only rebuilds and restarts one container):
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -BackendOnly          Rebuild and redeploy only the backend
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -FrontendOnly         Rebuild and redeploy only the frontend
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update -BackendOnly  Transfer existing archive, restart backend
+#   .\deploy\ship.ps1 -Target ubuntu@192.168.1.50 -Update -FrontendOnly Transfer existing archive, restart frontend
+#
 # Offline AI assistant (Ollama):
 #   Add -WithAI to bake the LLM model into the archive. The model is downloaded
 #   ONCE on this (internet-connected) build machine; the server needs no internet.
@@ -56,11 +62,18 @@ param(
     [switch]$BuildOnly,      # Build and save images locally, no transfer
     [switch]$Bundle,         # Use Dockerfile.bundle (airgap packages)
     [switch]$Rollback,       # Roll back to the previous deployment
-    [switch]$WithAI          # Embed the offline Ollama AI model in the archive
+    [switch]$WithAI,         # Embed the offline Ollama AI model in the archive
+    [switch]$BackendOnly,    # Rebuild/transfer/restart only the backend service
+    [switch]$FrontendOnly    # Rebuild/transfer/restart only the frontend service
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($BackendOnly -and $FrontendOnly) {
+    Write-Host "!! -BackendOnly and -FrontendOnly cannot be used together" -ForegroundColor Red
+    exit 1
+}
 
 # -- Paths --------------------------------------------------------------------
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -222,39 +235,30 @@ function Build-Images {
         if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-        if ($Bundle) {
-            # docker-compose.yml references :latest, so tag the bundled (airgap-
-            # packages) image :latest -- otherwise the loaded image never matches
-            # the compose file and the backend fails with "image not found".
-            Info "Building bundled backend image (airgap packages) ..."
-            & docker buildx build --platform linux/amd64 -f backend/Dockerfile.bundle -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" backend/
-            if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
-        } else {
-            Info "Building backend image ..."
-            & docker buildx build --platform linux/amd64 -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" ./backend
-            if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
+        if (-not $FrontendOnly) {
+            if ($Bundle) {
+                # docker-compose.yml references :latest, so tag the bundled (airgap-
+                # packages) image :latest -- otherwise the loaded image never matches
+                # the compose file and the backend fails with "image not found".
+                Info "Building bundled backend image (airgap packages) ..."
+                & docker buildx build --platform linux/amd64 -f backend/Dockerfile.bundle -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" backend/
+                if ($LASTEXITCODE -ne 0) { Fail "Bundle build failed" }
+            } else {
+                Info "Building backend image ..."
+                & docker buildx build --platform linux/amd64 -t sabc-compliance-backend:latest --output "type=docker,dest=$stage\backend.tar" ./backend
+                if ($LASTEXITCODE -ne 0) { Fail "Backend build failed" }
+            }
         }
 
-        Info "Building frontend image ..."
-        & docker buildx build --platform linux/amd64 --build-arg "VITE_API_BASE=/api" -t sabc-compliance-frontend:latest --output "type=docker,dest=$stage\frontend.tar" ./frontend
-        if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
+        if (-not $BackendOnly) {
+            Info "Building frontend image ..."
+            & docker buildx build --platform linux/amd64 --build-arg "VITE_API_BASE=/api" -t sabc-compliance-frontend:latest --output "type=docker,dest=$stage\frontend.tar" ./frontend
+            if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
+        }
 
-        # postgres is not built from a Dockerfile, but we still export it through
-        # buildx (a one-line passthrough Dockerfile) rather than `docker pull` +
-        # `docker save`, for the same reason as above -- this guarantees a clean
-        # single-arch archive the server can load with no Docker Hub access.
-        Info "Packaging postgres:16-alpine for linux/amd64 ..."
-        $pgctx = Join-Path $stage "pgctx"
-        New-Item -ItemType Directory -Force -Path $pgctx | Out-Null
-        Set-Content -Path (Join-Path $pgctx "Dockerfile") -Value "FROM postgres:16-alpine" -Encoding ASCII
-        & docker buildx build --platform linux/amd64 -t postgres:16-alpine --output "type=docker,dest=$stage\postgres.tar" $pgctx
-        if ($LASTEXITCODE -ne 0) { Fail "postgres packaging failed" }
-        Remove-Item -Recurse -Force $pgctx -ErrorAction SilentlyContinue
-
-        # Ollama image with the LLM model baked in — only when -WithAI was passed.
-        # The model is downloaded HERE (on this internet-connected build machine)
-        # and committed into an image layer. The server needs no internet at all.
-        if ($WithAI) {
+        # Ollama image with the LLM model baked in — only when -WithAI was passed
+        # and this is not a frontend-only update (Ollama is used by the backend).
+        if ($WithAI -and (-not $FrontendOnly)) {
             $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
             Info "Building Ollama image with embedded model '$ollamaModel' (downloading on this build machine) ..."
             & docker buildx build --platform linux/amd64 `
@@ -262,8 +266,20 @@ function Build-Images {
                 -t sabc-ollama:latest `
                 --output "type=docker,dest=$stage\ollama.tar" deploy/ollama
             if ($LASTEXITCODE -ne 0) { Fail "Ollama image build failed" }
-        } else {
+        } elseif (-not $FrontendOnly) {
             Info "Skipping offline AI assistant (pass -WithAI to embed it)."
+        }
+
+        # postgres is only needed for full deploys — for partial updates the
+        # database container is already running and must not be replaced.
+        if ((-not $BackendOnly) -and (-not $FrontendOnly)) {
+            Info "Packaging postgres:16-alpine for linux/amd64 ..."
+            $pgctx = Join-Path $stage "pgctx"
+            New-Item -ItemType Directory -Force -Path $pgctx | Out-Null
+            Set-Content -Path (Join-Path $pgctx "Dockerfile") -Value "FROM postgres:16-alpine" -Encoding ASCII
+            & docker buildx build --platform linux/amd64 -t postgres:16-alpine --output "type=docker,dest=$stage\postgres.tar" $pgctx
+            if ($LASTEXITCODE -ne 0) { Fail "postgres packaging failed" }
+            Remove-Item -Recurse -Force $pgctx -ErrorAction SilentlyContinue
         }
     } finally {
         Pop-Location
@@ -275,14 +291,17 @@ function Build-Images {
 function Save-Images {
     Info "Saving images to $Archive ..."
     # Build-Images already exported each image as a self-contained, loadable
-    # docker-archive tar under .images.  Bundle those per-image tars into the
-    # single archive the rest of the pipeline ships (postgres included so the
-    # server never needs outbound Docker Hub access).  The server extracts this
-    # and `docker load`s each inner tar.
+    # docker-archive tar under .images.  Bundle the relevant per-image tars into
+    # the single archive the pipeline ships.  For partial deploys only the
+    # updated image is included — postgres is omitted to avoid reloading it.
     $stage = Join-Path $ScriptDir ".images"
-    # Include the Ollama image only when it was built (-WithAI).
-    $imageTars = @("backend.tar", "frontend.tar", "postgres.tar")
-    if (Test-Path (Join-Path $stage "ollama.tar")) { $imageTars += "ollama.tar" }
+    $imageTars = @()
+    if (-not $FrontendOnly) { $imageTars += "backend.tar" }
+    if (-not $BackendOnly)  { $imageTars += "frontend.tar" }
+    if ((-not $BackendOnly) -and (-not $FrontendOnly)) {
+        $imageTars += "postgres.tar"
+        if (Test-Path (Join-Path $stage "ollama.tar")) { $imageTars += "ollama.tar" }
+    }
     & tar -cf $Archive -C $stage @imageTars
     if ($LASTEXITCODE -ne 0) { Fail "Bundling image archive failed" }
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
@@ -715,16 +734,105 @@ function Deploy-Platform {
     Start-Containers
 }
 
+# -- Partial service deploy ---------------------------------------------------
+# Loads the transferred image archive and restarts ONE compose service without
+# touching postgres or any other running container.
+function Deploy-Service {
+    param([string]$Svc)   # compose service name: "backend" or "frontend"
+    $Ctr = "sabc-$Svc"
+
+    Info "Loading $Svc image on $Target ..."
+    $loadCmd = "bash -c 'set -e; d=`$(mktemp -d); tar -xf $RemoteDir/sabc-images.tar -C `$d; for f in `$d/*.tar; do docker load -i `$f; done; rm -rf `$d'"
+    Invoke-Sudo $loadCmd -AllowFail
+    if ($LASTEXITCODE -ne 0) { Fail "$Svc image load failed" }
+
+    Info "Restarting $Svc container (keeping all other services running) ..."
+    $compose = Get-ComposeCmd
+    $composePrefix = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir"
+    $lines = @(
+        'set -e',
+        'PROFILE=""',
+        'if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then PROFILE="--profile ai"; fi',
+        "COMPOSE=`"$composePrefix `$PROFILE`"",
+        "`$COMPOSE up -d --no-deps $Svc",
+        'sleep 8',
+        "st=`$(docker inspect -f '{{.State.Status}}' $Ctr 2>/dev/null || echo absent)",
+        "if [ `"`$st`" != `"running`" ]; then",
+        "  echo `"[ship] ERROR: $Ctr is not running (status: `$st)`"",
+        "  docker logs --tail 40 $Ctr 2>&1 || true",
+        '  exit 1',
+        'fi',
+        "echo `"[ship] $Ctr is running.`"",
+        'exit 0'
+    )
+    $tmpScript = [System.IO.Path]::GetTempFileName() + ".sh"
+    if ($SudoPassword -ne "") {
+        $sudoCmd = "sudo -S bash -s"
+        $scriptContent = ((@($SudoPassword) + $lines) -join "`n") + "`n"
+    } else {
+        $sudoCmd = "sudo bash -s"
+        $scriptContent = ($lines -join "`n") + "`n"
+    }
+    [System.IO.File]::WriteAllText($tmpScript, $scriptContent.Replace("`r", ""), [System.Text.Encoding]::ASCII)
+    if ($UsePlink) {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -i $SshKey -batch $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & $PlinkExe -ssh -pw $SshPassword -batch $Target $sudoCmd }
+    } else {
+        if ($SshKey) { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no -i $SshKey $Target $sudoCmd }
+        else         { Get-Content -Raw $tmpScript | & ssh -o StrictHostKeyChecking=no $Target $sudoCmd }
+    }
+    $svcExit = $LASTEXITCODE
+    Remove-Item $tmpScript -ErrorAction SilentlyContinue
+    if ($svcExit -ne 0) { Fail "$Svc deployment failed -- check logs above" }
+    Ok "$Svc updated and running!"
+    Show-URLs
+}
+
 # -- Main ---------------------------------------------------------------------
 #
 #  Flag summary:
-#    (none)     Full deploy: build -> save -> transfer -> load -> start
-#    -Setup     Install Docker on server first, then full deploy
-#    -Update    Images already saved locally  -> transfer -> load -> start
-#    -Start     Files already on server       -> load -> start
-#    -Restart   Images already loaded         -> docker compose up -d only
-#    -BuildOnly Build and save locally, print manual instructions
+#    (none)       Full deploy: build -> save -> transfer -> load -> start
+#    -Setup       Install Docker on server first, then full deploy
+#    -Update      Images already saved locally  -> transfer -> load -> start
+#    -Start       Files already on server       -> load -> start
+#    -Restart     Images already loaded         -> docker compose up -d only
+#    -BuildOnly   Build and save locally, print manual instructions
+#    -BackendOnly Build/transfer/restart only the backend
+#    -FrontendOnly Build/transfer/restart only the frontend
 #
+
+# -- Partial deploy: -BackendOnly / -FrontendOnly -----------------------------
+if ($BackendOnly -or $FrontendOnly) {
+    $svc = if ($BackendOnly) { "backend" } else { "frontend" }
+
+    if ($Rollback) { Invoke-Rollback; exit 0 }
+
+    if ($Restart) {
+        Info "Restarting $svc on $Target (image already loaded) ..."
+        Deploy-Service $svc
+        exit 0
+    }
+
+    if ($Start) {
+        Info "Loading and starting $svc on $Target (archive already transferred) ..."
+        Deploy-Service $svc
+        exit 0
+    }
+
+    if ($Update) {
+        if (-not (Test-Path $Archive)) { Fail "No archive at $Archive -- run without -Update first to build." }
+        Transfer-Files
+        Deploy-Service $svc
+        exit 0
+    }
+
+    if ($Setup) { Setup-Server }
+    Build-Images
+    Save-Images
+    Transfer-Files
+    Deploy-Service $svc
+    exit 0
+}
 
 if ($BuildOnly -or $Bundle) {
     Build-Images
