@@ -13,13 +13,15 @@
 #   ./deploy/ship.sh --bundle                   Build bundled image (with airgap packages)
 #
 # Offline AI assistant (Ollama):
-#   The LLM model is baked into the sabc-ollama image and shipped with the rest
-#   of the stack — no internet on the server, no separate command. Controlled by
-#   two env vars on the BUILD machine (which does need internet to fetch the model
-#   once):
-#     WITH_OLLAMA=false ./deploy/ship.sh ...          skip the assistant entirely
-#     OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ...    embed a different model
+#   Opt in with --with-ai to bake the LLM model into the archive. The model is
+#   downloaded ONCE on this (internet-connected) build machine and committed into
+#   an image layer — the server needs no internet at all.
 #
+#   ./deploy/ship.sh user@ec2-ip --with-ai                 embed the default model (llama3.2:1b)
+#   OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ... --with-ai  embed a larger model
+#
+#   Without --with-ai the assistant image is not built/shipped and the chat
+#   widget simply shows "offline" — everything else works normally.
 # What it does:
 #   1. Builds Docker images on your local machine
 #   2. Saves them to deploy/sabc-images.tar.gz (~200MB compressed)
@@ -49,6 +51,7 @@ DEPLOY_ONLY=false
 BUILD_ONLY=false
 BUNDLE=false
 DO_ROLLBACK=false
+WITH_AI=false          # opt-in: --with-ai embeds the Ollama model in the archive
 
 for arg in "$@"; do
   case "$arg" in
@@ -58,13 +61,14 @@ for arg in "$@"; do
     --build-only)  BUILD_ONLY=true ;;
     --bundle)      BUNDLE=true ;;
     --rollback)    DO_ROLLBACK=true ;;
+    --with-ai)     WITH_AI=true ;;
     -*)            echo "Unknown flag: $arg"; exit 1 ;;
     *)             TARGET="$arg" ;;
   esac
 done
 
 if [[ -z "$TARGET" && "$BUILD_ONLY" == false && "$BUNDLE" == false ]]; then
-  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--rollback|--build-only|--bundle]"
+  echo "Usage: ./deploy/ship.sh user@ec2-ip [--setup|--update|--deploy-only|--rollback|--build-only|--bundle] [--with-ai]"
   exit 1
 fi
 
@@ -127,17 +131,18 @@ build_images() {
     --output "type=docker,dest=$STAGE/frontend.tar" ./frontend
 
   # ── Ollama image with the LLM model baked in (offline AI assistant) ─────────
-  # WITH_OLLAMA=false ./deploy/ship.sh ...  skips it (smaller/faster archive).
-  # OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ...  picks a different model.
-  if [[ "${WITH_OLLAMA:-true}" == "true" ]]; then
+  # Only built when --with-ai was passed. Downloads the model on THIS machine
+  # once; the server never needs internet.
+  # Use OLLAMA_MODEL=llama3.2:3b to embed a larger/better model.
+  if [[ "$WITH_AI" == "true" ]]; then
     local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
-    info "Building Ollama image with embedded model '${ollama_model}' (downloads on this build machine) ..."
+    info "Building Ollama image with embedded model '${ollama_model}' (downloading on this build machine) ..."
     docker buildx build --platform linux/amd64 \
       --build-arg OLLAMA_MODEL="$ollama_model" \
       -t sabc-ollama:latest \
       --output "type=docker,dest=$STAGE/ollama.tar" deploy/ollama
   else
-    warn "WITH_OLLAMA=false — skipping the offline AI assistant image."
+    info "Skipping offline AI assistant (pass --with-ai to embed it)."
   fi
 
   # postgres is not built from a Dockerfile, but we still export it through
