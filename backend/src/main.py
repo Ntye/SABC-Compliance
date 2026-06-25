@@ -53,6 +53,7 @@ from modules.compliance.usecases import (
     GetNodeComplianceUseCase, TriggerRemediationUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
+from modules.compliance.wazuh_webhook import ReceiveWazuhAlertUseCase
 from modules.profiles.usecases import ProfileUseCases
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
@@ -63,6 +64,7 @@ from interface.http.routes import compliance as compliance_routes
 from interface.http.routes import node_groups as node_groups_routes
 from interface.http.routes import profiles as profiles_routes
 from interface.http.routes import settings as settings_routes
+from interface.http.routes import webhooks as webhooks_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -262,6 +264,7 @@ async def lifespan(app: FastAPI):
     install_puppet_agent_uc            = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
     install_wazuh_agent_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
     check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
+    configure_wazuh_remediation_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_remediation")
     scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
@@ -270,6 +273,7 @@ async def lifespan(app: FastAPI):
         install_puppet_master_uc=install_puppet_master_uc,
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
+        configure_wazuh_remediation_uc=configure_wazuh_remediation_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
         check_health_uc=check_health_uc,
@@ -296,12 +300,32 @@ async def lifespan(app: FastAPI):
         profile_path=scan_profile_path,
         scan_ctrl=scan_engine_uc,
     )
+    remediate_uc = TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client)
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
         collect_uc=collect_uc,
-        remediate_uc=TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client),
+        remediate_uc=remediate_uc,
         config_repo=platform_config_repo,
+    )
+
+    # -- Wazuh webhook receiver: closes the detection → remediation loop --
+    # Wazuh detects a violation → POST /api/webhooks/wazuh → Puppet enforcement
+    # over SSH → automatic compliance re-scan → live WebSocket + event-bus updates.
+    receive_wazuh_uc = ReceiveWazuhAlertUseCase(
+        node_repo=node_repo,
+        compliance_repo=compliance_repo,
+        remediate_uc=remediate_uc,
+        collect_uc=collect_uc,
+        event_bus=event_bus,
+        ws_manager=ws_manager,
+        min_level=settings.wazuh_webhook_min_level,
+        rescan=settings.wazuh_webhook_rescan,
+    )
+    webhooks_routes.set_use_cases(
+        receive_wazuh_uc=receive_wazuh_uc,
+        webhook_secret=settings.wazuh_webhook_secret,
+        allowed_source_ips=settings.wazuh_webhook_source_ip,
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
@@ -441,6 +465,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(compliance_routes.router)
     app.include_router(profiles_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(webhooks_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

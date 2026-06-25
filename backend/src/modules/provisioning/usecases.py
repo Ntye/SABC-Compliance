@@ -228,6 +228,8 @@ class InstallServiceUseCase:
         "puppet_agent":            "install_puppet_agent.yml",
         "wazuh_agent":             "install_wazuh_agent.yml",
         "check_health":            "check_node_health.yml",
+        # Configure the Wazuh→Puppet closed remediation loop on the manager node.
+        "wazuh_remediation":       "configure_wazuh_remediation.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master":           "puppet_master_host",
@@ -290,6 +292,35 @@ class InstallServiceUseCase:
             if settings.wazuh_api_pass:
                 extra_vars["wazuh_api_pass"] = settings.wazuh_api_pass
             extra_vars["wazuh_api_port"] = settings.wazuh_api_port
+        elif self._service == "wazuh_remediation":
+            import os
+
+            settings = get_settings()
+            secret = settings.wazuh_webhook_secret
+            if not secret:
+                raise ValidationError(
+                    "wazuh_webhook_secret is not configured on the platform. Set it "
+                    "(env WAZUH_WEBHOOK_SECRET) before wiring the remediation loop."
+                )
+            public_host = (
+                os.environ.get("PLATFORM_PUBLIC_HOST", "").strip()
+                or os.environ.get("HOST_IP", "").strip()
+                or settings.host_ip
+            )
+            if not public_host:
+                raise ValidationError(
+                    "Cannot derive the platform webhook URL: set PLATFORM_PUBLIC_HOST "
+                    "(or HOST_IP) so the Wazuh manager can reach the platform."
+                )
+            try:
+                https_port = int(os.environ.get("HTTPS_PORT", "8443") or "8443")
+            except ValueError:
+                https_port = 8443
+            extra_vars["sabc_webhook_url"] = (
+                f"https://{public_host}:{https_port}/api/webhooks/wazuh"
+            )
+            extra_vars["sabc_webhook_secret"] = secret
+            extra_vars["sabc_min_level"] = settings.wazuh_webhook_min_level
         elif self._service == "check_health":
             host = await self._config.get("puppet_master_host")
             if host:

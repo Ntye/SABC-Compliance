@@ -1,0 +1,162 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Configure the Wazuh → SABC closed remediation loop (manager side).
+#
+# Installs the `custom-sabc` integration into the running Wazuh manager container
+# and registers an <integration> block in ossec.conf so the manager forwards
+# matching alerts to the platform webhook:
+#
+#     Wazuh alert (level >= N)
+#        └─▶ integrator → custom-sabc → POST https://<platform>/api/webhooks/wazuh
+#               └─▶ platform → Puppet enforcement → compliance re-scan
+#
+# Idempotent and self-healing: re-running updates the scripts, refreshes the
+# ossec.conf block in place (marker-delimited), and restarts the manager only
+# when something actually changed.
+#
+# Required extra-vars (injected by the platform):
+#   sabc_webhook_url     e.g. https://platform.example.com:8443/api/webhooks/wazuh
+#   sabc_webhook_secret  the shared secret (== backend wazuh_webhook_secret)
+# Optional:
+#   sabc_min_level       minimum Wazuh rule level to forward (default 7)
+#   wazuh_manager_name   container name/filter (default: wazuh-manager)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Configure Wazuh closed-loop remediation integration
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    sabc_min_level: 7
+    wazuh_manager_name: wazuh-manager
+    _integration_dir: /var/ossec/integrations
+    _ossec_conf: /var/ossec/etc/ossec.conf
+    _marker: "SABC-COMPLIANCE REMEDIATION INTEGRATION"
+
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - sabc_webhook_url is defined and sabc_webhook_url | length > 0
+          - sabc_webhook_secret is defined and sabc_webhook_secret | length > 0
+        fail_msg: >-
+          sabc_webhook_url and sabc_webhook_secret are required. Pass them as
+          extra-vars (the secret must match the backend's wazuh_webhook_secret).
+
+  tasks:
+    # ── Locate the running manager container ─────────────────────────────────
+    - name: Resolve the Wazuh manager container name
+      shell: |
+        docker ps --filter "name={{ wazuh_manager_name }}" --format '{{ "{{" }}.Names{{ "}}" }}' | head -n1
+      register: _mgr
+      changed_when: false
+
+    - name: Abort if the manager container is not running
+      fail:
+        msg: "No running container matching '{{ wazuh_manager_name }}'. Is the Wazuh stack up?"
+      when: _mgr.stdout | trim | length == 0
+
+    - name: Set manager container fact
+      set_fact:
+        manager_ctr: "{{ _mgr.stdout | trim }}"
+
+    # ── Install the integration scripts into the container ───────────────────
+    - name: Stage integration scripts on the controller-managed host
+      copy:
+        src: "../files/wazuh-integration/{{ item }}"
+        dest: "/tmp/sabc-{{ item }}"
+        mode: "0644"
+      loop:
+        - custom-sabc
+        - custom-sabc.py
+      register: _staged
+
+    - name: Copy integration scripts into the manager container
+      command: >-
+        docker cp /tmp/sabc-{{ item }} {{ manager_ctr }}:{{ _integration_dir }}/{{ item }}
+      loop:
+        - custom-sabc
+        - custom-sabc.py
+      register: _cp
+      changed_when: true
+
+    - name: Set ownership and permissions on the integration scripts
+      command: >-
+        docker exec {{ manager_ctr }} sh -c
+        "chown root:wazuh {{ _integration_dir }}/custom-sabc {{ _integration_dir }}/custom-sabc.py &&
+         chmod 750 {{ _integration_dir }}/custom-sabc {{ _integration_dir }}/custom-sabc.py"
+      changed_when: true
+
+    - name: Remove staged temp files
+      file:
+        path: "/tmp/sabc-{{ item }}"
+        state: absent
+      loop:
+        - custom-sabc
+        - custom-sabc.py
+
+    # ── Register the <integration> block in ossec.conf ───────────────────────
+    # Edit on the host (robust, marker-based blockinfile) then copy back, rather
+    # than mutating the file in place inside the container.
+    - name: Create a host work directory
+      tempfile:
+        state: directory
+        suffix: sabc-ossec
+      register: _workdir
+
+    - name: Copy ossec.conf out of the container
+      command: docker cp {{ manager_ctr }}:{{ _ossec_conf }} {{ _workdir.path }}/ossec.conf
+      changed_when: false
+
+    - name: Upsert the SABC <integration> block (idempotent, marker-delimited)
+      blockinfile:
+        path: "{{ _workdir.path }}/ossec.conf"
+        marker: "<!-- {mark} {{ _marker }} -->"
+        insertbefore: "</ossec_config>"
+        block: |
+          <integration>
+            <name>custom-sabc</name>
+            <hook_url>{{ sabc_webhook_url }}</hook_url>
+            <level>{{ sabc_min_level }}</level>
+            <api_key>{{ sabc_webhook_secret }}</api_key>
+            <alert_format>json</alert_format>
+          </integration>
+      register: _conf_edit
+
+    - name: Copy the updated ossec.conf back into the container
+      when: _conf_edit is changed
+      command: docker cp {{ _workdir.path }}/ossec.conf {{ manager_ctr }}:{{ _ossec_conf }}
+      changed_when: true
+
+    - name: Fix ossec.conf ownership and permissions in the container
+      when: _conf_edit is changed
+      command: >-
+        docker exec {{ manager_ctr }} sh -c
+        "chown root:wazuh {{ _ossec_conf }} && chmod 660 {{ _ossec_conf }}"
+      changed_when: true
+
+    - name: Remove the host work directory
+      file:
+        path: "{{ _workdir.path }}"
+        state: absent
+
+    # ── Restart the manager so the integrator picks up the change ────────────
+    - name: Restart the Wazuh manager (only when config or scripts changed)
+      command: docker restart {{ manager_ctr }}
+      when: (_conf_edit is changed) or (_cp is changed)
+
+    - name: Wait for the manager to come back up
+      command: docker exec {{ manager_ctr }} /var/ossec/bin/wazuh-control status
+      register: _status
+      retries: 12
+      delay: 5
+      until: _status.rc == 0
+      changed_when: false
+      when: (_conf_edit is changed) or (_cp is changed)
+
+    - name: Summary
+      debug:
+        msg: >-
+          SABC remediation integration active on {{ manager_ctr }} →
+          forwarding Wazuh alerts (level >= {{ sabc_min_level }}) to
+          {{ sabc_webhook_url }}.

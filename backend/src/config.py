@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     wazuh_reg_port: int = 1515
     wazuh_agent_port: int = 1514
     wazuh_webhook_source_ip: str | None = None
+    # Shared secret presented by Wazuh's integrator in the X-Wazuh-Webhook-Token
+    # header. When unset the webhook is DISABLED (closed by default) — no alert is
+    # ever processed without an explicitly configured secret.
+    wazuh_webhook_secret: str | None = None
+    # Only alerts at or above this Wazuh rule level trigger the active-response
+    # remediation loop. Wazuh levels: 7+ ≈ important, 10+ ≈ high, 12+ ≈ critical.
+    wazuh_webhook_min_level: int = 7
+    # Re-run a compliance scan on the node after remediation completes, so the
+    # dashboard reflects the post-enforcement state automatically.
+    wazuh_webhook_rescan: bool = True
     wazuh_token_refresh_seconds: int = 840
 
     # Collection

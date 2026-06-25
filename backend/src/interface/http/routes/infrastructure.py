@@ -46,6 +46,7 @@ _set_master_uc = None
 _install_puppet_master_uc = None
 _install_wazuh_manager_uc = None
 _install_wazuh_manager_colocated_uc = None
+_configure_wazuh_remediation_uc = None
 _install_puppet_agent_uc = None
 _install_wazuh_agent_uc = None
 _check_health_uc = None
@@ -66,10 +67,11 @@ def set_use_cases(
     node_repo=None,
     packages_dir: str = "",
     install_wazuh_manager_colocated_uc=None,
+    configure_wazuh_remediation_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
-    global _install_wazuh_manager_colocated_uc
+    global _install_wazuh_manager_colocated_uc, _configure_wazuh_remediation_uc
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir
@@ -78,6 +80,7 @@ def set_use_cases(
     _install_puppet_master_uc = install_puppet_master_uc
     _install_wazuh_manager_uc = install_wazuh_manager_uc
     _install_wazuh_manager_colocated_uc = install_wazuh_manager_colocated_uc
+    _configure_wazuh_remediation_uc = configure_wazuh_remediation_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
     _install_wazuh_agent_uc = install_wazuh_agent_uc
     _check_health_uc = check_health_uc
@@ -210,6 +213,28 @@ async def install_wazuh_manager_colocated(
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/configure/wazuh-remediation", response_model=JobRef, status_code=202, summary="Wire the Wazuh→Puppet closed remediation loop on the manager node")
+async def configure_wazuh_remediation(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Install the `custom-sabc` integration on the Wazuh manager so it forwards
+    alerts to the platform webhook, closing the detection → remediation loop.
+
+    Derives the webhook URL from PLATFORM_PUBLIC_HOST/HTTPS_PORT and the shared
+    secret from the platform's wazuh_webhook_secret — both must be configured.
+    """
+    if _configure_wazuh_remediation_uc is None:
+        raise HTTPException(status_code=503, detail="Remediation configuration use case not configured")
+    try:
+        job = await _configure_wazuh_remediation_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/install/puppet-agent", response_model=JobRef, status_code=202, summary="Install Puppet agent on a node")

@@ -478,7 +478,12 @@ class TriggerRemediationUseCase:
         self._repo = compliance_repo
         self._ssh = ssh
 
-    async def execute(self, id_or_hostname: str, description: str | None = None) -> dict:
+    async def execute(
+        self,
+        id_or_hostname: str,
+        description: str | None = None,
+        wazuh_alert_id: str | None = None,
+    ) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
         event = RemediationEvent(
@@ -486,6 +491,7 @@ class TriggerRemediationUseCase:
             node_id=node.id,
             puppet_job_id="ssh-puppet-run",
             triggered_at=datetime.utcnow(),
+            wazuh_alert_id=wazuh_alert_id,
         )
 
         if not node.puppet_enrolled:
@@ -493,7 +499,8 @@ class TriggerRemediationUseCase:
             event.completed_at = datetime.utcnow()
             await self._repo.save_remediation(event)
             return {
-                "id": event.id, "outcome": event.outcome, "resources_fixed": 0,
+                "id": event.id, "node_id": node.id, "wazuh_alert_id": wazuh_alert_id,
+                "outcome": event.outcome, "resources_fixed": 0,
                 "message": "Node has no Puppet agent — nothing to enforce. Enroll Puppet first.",
             }
 
@@ -508,7 +515,10 @@ class TriggerRemediationUseCase:
             event.outcome = "failed"
             event.completed_at = datetime.utcnow()
             await self._repo.update_remediation(event)
-            return {"id": event.id, "outcome": "failed", "resources_fixed": 0, "message": str(exc)}
+            return {
+                "id": event.id, "node_id": node.id, "wazuh_alert_id": wazuh_alert_id,
+                "outcome": "failed", "resources_fixed": 0, "message": str(exc),
+            }
 
         out = stdout or ""
         # Count enforced resources from the run output
@@ -525,6 +535,8 @@ class TriggerRemediationUseCase:
 
         return {
             "id": event.id,
+            "node_id": node.id,
+            "wazuh_alert_id": wazuh_alert_id,
             "outcome": event.outcome,
             "resources_fixed": event.resources_fixed,
             "message": "Puppet enforcement run complete.",
