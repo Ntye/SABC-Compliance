@@ -86,10 +86,21 @@ def _certname(node) -> str:
 
 
 async def resolve_matching(group: NodeGroup, node_repo) -> dict:
-    """Return {ids, hostnames, pinned_certnames} for pinned ∪ rule-matched nodes."""
+    """Resolve which registered nodes belong to a group.
+
+    Returns:
+        ids              node ids of pinned ∪ rule-matched nodes
+        hostnames        their hostnames (for Wazuh agent assignment)
+        pinned_certnames certnames of *explicitly pinned* nodes only
+        certnames        certnames of *all* matched nodes (pinned ∪ rule)
+
+    ``certnames`` is what we pin into the Puppet classifier rule so every node
+    the platform considers a member is explicitly classified into the PE group
+    — without relying on PE re-deriving membership from agent facts.
+    """
     all_nodes = await node_repo.find_all({})
     pinned_set = set(group.node_ids or [])
-    matched_ids, hostnames, pinned_certs = set(), [], []
+    matched_ids, hostnames, pinned_certs, certnames = set(), [], [], []
     for n in all_nodes:
         is_pinned = n.id in pinned_set
         is_rule = node_matches(n, group.rules, group.match_type)
@@ -98,7 +109,10 @@ async def resolve_matching(group: NodeGroup, node_repo) -> dict:
         if is_pinned or is_rule:
             matched_ids.add(n.id)
             hostnames.append(n.hostname)
-    return {"ids": list(matched_ids), "hostnames": hostnames, "pinned_certnames": pinned_certs}
+            certnames.append(_certname(n))
+    return {"ids": list(matched_ids), "hostnames": hostnames,
+            "pinned_certnames": pinned_certs, "certnames": certnames}
+
 
 
 def _validate(data: dict) -> None:
@@ -306,15 +320,32 @@ class SeedDefaultNodeGroupsUseCase:
 
 
 class SyncAllNodeGroupsUseCase:
-    """Push every node group to Puppet Enterprise and Wazuh, assigning all
-    currently-matching registered nodes.
+    """Reconcile node groups with Puppet Enterprise and Wazuh.
 
-    Groups are processed in ``created_at`` order which — because the seeder
-    inserts parents before children (depth-first pre-order) — guarantees a
-    parent's ``puppet_group_id`` is persisted before its children resolve
-    their PE ``parent_id``. Existing enrolled nodes are classified the moment
-    this runs: Puppet evaluates the group's rules against agent facts, and the
-    matched hostnames are explicitly assigned to the Wazuh agent group.
+    Only groups that actually contain nodes are materialised in the Puppet
+    console — the auto-seeded OS-family tree would otherwise litter PE with
+    empty distro/version groups (e.g. RedHat/CentOS on an all-Ubuntu fleet).
+    The reconciliation rule is:
+
+      * A **user** group (admin-created) is always pushed — the admin made it
+        on purpose and expects to see it even before nodes match.
+      * A **system** group (auto-seeded) is pushed only when its subtree holds
+        at least one matching node. "Subtree" is walked by parent pointers, so
+        an otherwise-empty ancestor (e.g. "SABC Managed Nodes") is still
+        created whenever one of its descendants is populated — the PE hierarchy
+        never ends up with a dangling ``parent_id``.
+      * A system group that *was* created in PE but is now empty is removed
+        from the console (children first) so the view stays clean.
+
+    Every matched node is pinned into the PE rule by certname, so the nodes the
+    platform considers members are explicitly classified into the group rather
+    than relying on PE re-deriving membership from agent facts.
+
+    Create/update runs parent-first (``created_at`` ascending — the seeder
+    inserts parents before children) so a parent's ``puppet_group_id`` exists
+    before a child resolves its ``parent_id``. Removal runs child-first
+    (reverse order) because PE refuses to delete a group that still has
+    children.
     """
     def __init__(self, repo, node_repo, wazuh_client, puppet_client):
         self._repo = repo
@@ -329,16 +360,70 @@ class SyncAllNodeGroupsUseCase:
         return parent.puppet_group_id if parent else None
 
     async def execute(self) -> dict:
-        groups = await self._repo.find_all()
-        synced = failed = 0
-        total_nodes = 0
+        groups = await self._repo.find_all()  # created_at ascending
+
+        # Resolve membership for every group up front.
+        resolved = {g.id: await resolve_matching(g, self._node_repo) for g in groups}
+        total_nodes = sum(len(resolved[g.id]["ids"]) for g in groups)
+
+        # Index children by parent name so we can test whole subtrees.
+        children: dict[str, list[NodeGroup]] = {}
         for g in groups:
-            resolved = await resolve_matching(g, self._node_repo)
-            total_nodes += len(resolved["ids"])
+            children.setdefault(g.parent, []).append(g)
+
+        # A group is "populated" if it — or any descendant — matches a node.
+        _pop_cache: dict[str, bool] = {}
+
+        def populated(g: NodeGroup) -> bool:
+            if g.id in _pop_cache:
+                return _pop_cache[g.id]
+            _pop_cache[g.id] = False  # break any pathological parent cycle
+            result = bool(resolved[g.id]["ids"]) or any(
+                populated(c) for c in children.get(g.name, [])
+            )
+            _pop_cache[g.id] = result
+            return result
+
+        def should_push(g: NodeGroup) -> bool:
+            # User groups always appear; system groups only when populated.
+            return g.group_type != "system" or populated(g)
+
+        synced = failed = skipped = removed = 0
+
+        # ── Pass 1: remove now-empty system groups (children before parents) ──
+        # Pass 2 owns the skipped count; this pass only deletes stale PE groups.
+        for g in reversed(groups):
+            if should_push(g) or g.group_type != "system":
+                continue
+            if not g.puppet_group_id and not g.wazuh_synced:
+                continue
+            try:
+                if g.puppet_group_id:
+                    await self._puppet.delete_node_group(g.puppet_group_id)
+            except Exception as e:
+                logger.warning("Puppet remove empty group '%s' failed: %s", g.name, e)
+            try:
+                await self._wazuh.delete_agent_group(g.name)
+            except Exception as e:
+                logger.warning("Wazuh remove empty group '%s' failed: %s", g.name, e)
+            g.puppet_group_id = None
+            g.puppet_synced = False
+            g.wazuh_synced = False
+            g.updated_at = datetime.utcnow()
+            await self._repo.update(g)
+            removed += 1
+
+        # ── Pass 2: create/update populated groups (parents before children) ──
+        for g in groups:
+            if not should_push(g):
+                skipped += 1
+                continue
+            certnames = resolved[g.id]["certnames"]
+            hostnames = resolved[g.id]["hostnames"]
             wazuh_ok = puppet_ok = True
             try:
                 await self._wazuh.create_agent_group(g.name)
-                await self._wazuh.assign_agents_to_group(g.name, resolved["hostnames"])
+                await self._wazuh.assign_agents_to_group(g.name, hostnames)
             except Exception as e:
                 wazuh_ok = False
                 logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
@@ -348,13 +433,13 @@ class SyncAllNodeGroupsUseCase:
                     await self._puppet.update_node_group(
                         g.puppet_group_id, name=g.name, description=g.description,
                         environment=g.environment, match_type=g.match_type,
-                        rules=g.rules, pinned_certnames=resolved["pinned_certnames"],
+                        rules=g.rules, pinned_certnames=certnames,
                     )
                 else:
                     g.puppet_group_id = await self._puppet.create_node_group(
                         g.name, g.description, environment=g.environment,
                         parent_id=parent_id, match_type=g.match_type, rules=g.rules,
-                        pinned_certnames=resolved["pinned_certnames"],
+                        pinned_certnames=certnames,
                     ) or None
             except Exception as e:
                 puppet_ok = False
@@ -367,10 +452,13 @@ class SyncAllNodeGroupsUseCase:
                 synced += 1
             else:
                 failed += 1
+
         return {
             "groups_total": len(groups),
             "groups_synced": synced,
             "groups_failed": failed,
+            "groups_skipped": skipped,
+            "groups_removed": removed,
             "nodes_classified": total_nodes,
         }
 
@@ -433,7 +521,7 @@ class CreateNodeGroupUseCase:
                 group.name, group.description,
                 environment=group.environment, parent_id=parent_id,
                 match_type=group.match_type, rules=group.rules,
-                pinned_certnames=resolved["pinned_certnames"],
+                pinned_certnames=resolved["certnames"],
             )
         except Exception as e:
             puppet_ok = False
@@ -496,13 +584,13 @@ class UpdateNodeGroupUseCase:
                 await self._puppet.update_node_group(
                     group.puppet_group_id, name=group.name, description=group.description,
                     environment=group.environment, match_type=group.match_type,
-                    rules=group.rules, pinned_certnames=resolved["pinned_certnames"],
+                    rules=group.rules, pinned_certnames=resolved["certnames"],
                 )
             else:
                 group.puppet_group_id = await self._puppet.create_node_group(
                     group.name, group.description, environment=group.environment,
                     match_type=group.match_type, rules=group.rules,
-                    pinned_certnames=resolved["pinned_certnames"],
+                    pinned_certnames=resolved["certnames"],
                 ) or None
         except Exception as e:
             puppet_ok = False

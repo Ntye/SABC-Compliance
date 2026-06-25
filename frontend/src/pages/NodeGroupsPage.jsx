@@ -729,10 +729,13 @@ export default function NodeGroupsPage() {
     try {
       const r = await syncNodeGroups()
       const ok = r.groups_synced ?? 0
-      const total = r.groups_total ?? 0
       const nodes = r.nodes_classified ?? 0
-      toast(`${t('nodeGroups.syncOk')} — ${ok}/${total} groups, ${nodes} node memberships`,
-        r.groups_failed ? 'warning' : 'success')
+      const removed = r.groups_removed ?? 0
+      // Only populated groups are pushed to Puppet; empty ones are skipped and
+      // any previously-created empty groups are removed from the PE console.
+      let msg = `${t('nodeGroups.syncOk')} — ${ok} ${t('nodeGroups.syncPushed')}, ${nodes} ${t('nodeGroups.syncMemberships')}`
+      if (removed) msg += `, ${removed} ${t('nodeGroups.syncRemoved')}`
+      toast(msg, r.groups_failed ? 'warning' : 'success')
       refetch()
     } catch (err) {
       toast(err.message, 'error')
