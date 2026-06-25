@@ -385,8 +385,12 @@ class SyncAllNodeGroupsUseCase:
             return result
 
         def should_push(g: NodeGroup) -> bool:
-            # User groups always appear; system groups only when populated.
-            return g.group_type != "system" or populated(g)
+            if g.group_type != "system":
+                return True
+            # Push system groups that carry classification rules (so PE's fact-based
+            # engine works even before nodes are pinned) or that have matched nodes
+            # anywhere in their subtree (for rule-less ancestor containers).
+            return bool(g.rules) or populated(g)
 
         synced = failed = skipped = removed = 0
 
