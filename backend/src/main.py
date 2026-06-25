@@ -118,6 +118,10 @@ async def lifespan(app: FastAPI):
         admin_user=settings.puppet_admin_user,
         admin_pass=settings.puppet_admin_pass,
         token_rotate_seconds=settings.puppet_token_rotate_seconds,
+        # Resolve the master host + PE console password from the platform-config
+        # DB at call time — they're written there when the operator installs the
+        # master through the console, not via the startup env vars.
+        config_repo=platform_config_repo,
     )
 
     # -- Event bus --

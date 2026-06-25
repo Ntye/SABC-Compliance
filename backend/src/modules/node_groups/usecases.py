@@ -362,6 +362,14 @@ class SyncAllNodeGroupsUseCase:
     async def execute(self) -> dict:
         groups = await self._repo.find_all()  # created_at ascending
 
+        # Is a Puppet master actually configured? If not, the classifier client
+        # silently no-ops and we must NOT report groups as synced to PE.
+        puppet_ready = False
+        try:
+            puppet_ready = await self._puppet.is_configured()
+        except Exception as e:
+            logger.warning("Puppet readiness check failed: %s", e)
+
         # Resolve membership for every group up front.
         resolved = {g.id: await resolve_matching(g, self._node_repo) for g in groups}
         total_nodes = sum(len(resolved[g.id]["ids"]) for g in groups)
@@ -392,7 +400,7 @@ class SyncAllNodeGroupsUseCase:
             # anywhere in their subtree (for rule-less ancestor containers).
             return bool(g.rules) or populated(g)
 
-        synced = failed = skipped = removed = 0
+        synced = failed = skipped = removed = pushed = 0
 
         # ── Pass 1: remove now-empty system groups (children before parents) ──
         # Pass 2 owns the skipped count; this pass only deletes stale PE groups.
@@ -448,6 +456,12 @@ class SyncAllNodeGroupsUseCase:
             except Exception as e:
                 puppet_ok = False
                 logger.warning("Puppet sync failed for '%s': %s", g.name, e)
+            # A configured master that produced no group id means the push was a
+            # silent no-op — don't let it masquerade as a successful sync.
+            if puppet_ready and not g.puppet_group_id:
+                puppet_ok = False
+            elif g.puppet_group_id:
+                pushed += 1
             g.wazuh_synced = wazuh_ok
             g.puppet_synced = puppet_ok
             g.updated_at = datetime.utcnow()
@@ -463,7 +477,9 @@ class SyncAllNodeGroupsUseCase:
             "groups_failed": failed,
             "groups_skipped": skipped,
             "groups_removed": removed,
+            "groups_pushed": pushed,
             "nodes_classified": total_nodes,
+            "puppet_configured": puppet_ready,
         }
 
 

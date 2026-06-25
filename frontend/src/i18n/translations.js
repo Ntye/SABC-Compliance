@@ -528,6 +528,7 @@ export const translations = {
       syncPushed: 'pushed',
       syncMemberships: 'node memberships',
       syncRemoved: 'empty groups removed',
+      syncNoPuppet: 'No Puppet master configured — node groups were not pushed to the Puppet console. Install or set the Puppet master under Infrastructure first.',
     },
   },
 
@@ -1059,6 +1060,7 @@ export const translations = {
       syncPushed: 'poussés',
       syncMemberships: 'appartenances de nœuds',
       syncRemoved: 'groupes vides supprimés',
+      syncNoPuppet: "Aucun serveur Puppet configuré — les groupes de nœuds n'ont pas été poussés vers la console Puppet. Installez ou définissez d'abord le serveur Puppet dans Infrastructure.",
     },
   },
 }

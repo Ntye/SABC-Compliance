@@ -8,17 +8,52 @@ from core.errors import ExternalServiceError
 class PuppetNCClient:
     ROOT_GROUP = "00000000-0000-4000-8000-000000000000"
 
-    def __init__(self, host, rbac_port=4433, admin_user="admin", admin_pass=None, token_rotate_seconds=43200):
+    def __init__(self, host, rbac_port=4433, admin_user="admin", admin_pass=None,
+                 token_rotate_seconds=43200, config_repo=None):
         self._host = host
+        self._env_host = host
         self._port = rbac_port
         self._user = admin_user
         self._pass = admin_pass
+        self._env_pass = admin_pass
         self._rotate = token_rotate_seconds
+        self._config = config_repo
         self._token = None
         self._token_ts = 0.0
 
     def _rbac(self):
         return f"https://{self._host}:{self._port}"
+
+    async def _resolve(self) -> None:
+        """Refresh host + admin password from the platform-config DB.
+
+        The Puppet master host and PE console password are written to platform
+        config when the operator installs the master through the SABC console
+        (``SetMasterHostUseCase`` / ``InstallServiceUseCase``). The classifier
+        client must therefore read them at call time — relying on the startup
+        env vars alone leaves ``self._host`` empty in that (normal) workflow,
+        and every API call silently no-ops. Env values remain the fallback for
+        deployments that pre-seed credentials via ``.env``.
+        """
+        if not self._config:
+            return
+        try:
+            host = await self._config.get("puppet_master_host")
+            pw = await self._config.get("pe_console_password")
+        except Exception:
+            return  # config store unreachable — keep whatever we already have
+        host = host or self._env_host
+        if host and host != self._host:
+            # Master re-pointed: drop the cached token so we re-auth on the new host.
+            self._host = host
+            self._token = None
+            self._token_ts = 0.0
+        self._pass = pw or self._env_pass
+
+    async def is_configured(self) -> bool:
+        """True when a Puppet master host is known (from config DB or env)."""
+        await self._resolve()
+        return bool(self._host)
 
     async def _token_hdr(self) -> dict:
         if self._token and (time.time() - self._token_ts) < self._rotate:
@@ -79,6 +114,7 @@ class PuppetNCClient:
         self, name, description=None, environment="production",
         parent_id=None, match_type="all", rules=None, pinned_certnames=None,
     ) -> str:
+        await self._resolve()
         if not self._host:
             return ""
         hdrs = await self._token_hdr()
@@ -112,6 +148,7 @@ class PuppetNCClient:
         match_type="all", rules=None, pinned_certnames=None,
     ) -> None:
         """Update an existing PE classifier group's rule/environment/metadata."""
+        await self._resolve()
         if not self._host or not group_id:
             return
         hdrs = await self._token_hdr()
@@ -136,6 +173,7 @@ class PuppetNCClient:
                 raise ExternalServiceError(f"Puppet update node group failed: {e}") from e
 
     async def delete_node_group(self, puppet_group_id: str) -> None:
+        await self._resolve()
         if not self._host or not puppet_group_id:
             return
         hdrs = await self._token_hdr()
@@ -164,6 +202,7 @@ class PuppetNCClient:
         return {}
 
     async def health(self) -> dict:
+        await self._resolve()
         if not self._host:
             return {"status": "not_configured"}
         try:

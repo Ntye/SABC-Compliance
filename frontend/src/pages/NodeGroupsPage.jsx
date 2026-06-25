@@ -728,6 +728,13 @@ export default function NodeGroupsPage() {
     setSyncing(true)
     try {
       const r = await syncNodeGroups()
+      // If no Puppet master is configured the classifier client no-ops, so
+      // nothing reaches the PE console — surface that instead of a false success.
+      if (r.puppet_configured === false) {
+        toast(t('nodeGroups.syncNoPuppet'), 'warning')
+        refetch()
+        return
+      }
       const ok = r.groups_synced ?? 0
       const nodes = r.nodes_classified ?? 0
       const removed = r.groups_removed ?? 0
