@@ -166,6 +166,16 @@ build_images() {
         --output "type=docker,dest=$STAGE/ollama-runtime.tar" "$ollactx"
       rm -rf "$ollactx"
 
+      # Package alpine for model extraction and volume probe (server is airgapped).
+      info "Packaging alpine:latest for linux/amd64 ..."
+      local alpinectx="$STAGE/alpinectx"
+      mkdir -p "$alpinectx"
+      echo 'FROM alpine:latest' > "$alpinectx/Dockerfile"
+      docker buildx build --platform linux/amd64 \
+        -t alpine:latest \
+        --output "type=docker,dest=$STAGE/alpine.tar" "$alpinectx"
+      rm -rf "$alpinectx"
+
       if [[ "$WITH_AI" == "true" ]]; then
         local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
         info "Pulling Ollama model '${ollama_model}' on this build machine ..."
@@ -219,7 +229,10 @@ save_images() {
   if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
     images+=(postgres.tar)
     # Ollama runtime image (not the model — that is sent as a separate archive)
-    [[ -f "$stage/ollama-runtime.tar" ]] && images+=(ollama-runtime.tar)
+    if [[ -f "$stage/ollama-runtime.tar" ]]; then
+      images+=(ollama-runtime.tar)
+      [[ -f "$stage/alpine.tar" ]] && images+=(alpine.tar)
+    fi
   fi
   tar -czf "$ARCHIVE" -C "$stage" "${images[@]}"
   rm -rf "$stage"

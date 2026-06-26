@@ -271,6 +271,15 @@ function Build-Images {
             if ($LASTEXITCODE -ne 0) { Fail "Ollama runtime packaging failed" }
             Remove-Item -Recurse -Force $ollactx -ErrorAction SilentlyContinue
 
+            # Package alpine for model extraction and volume probe (server is airgapped).
+            Info "Packaging alpine:latest for linux/amd64 ..."
+            $alpinectx = Join-Path $stage "alpinectx"
+            New-Item -ItemType Directory -Force -Path $alpinectx | Out-Null
+            Set-Content -Path (Join-Path $alpinectx "Dockerfile") -Value "FROM alpine:latest" -Encoding ASCII
+            & docker buildx build --platform linux/amd64 -t "alpine:latest" --output "type=docker,dest=$stage\alpine.tar" $alpinectx
+            if ($LASTEXITCODE -ne 0) { Fail "alpine packaging failed" }
+            Remove-Item -Recurse -Force $alpinectx -ErrorAction SilentlyContinue
+
             if ($WithAI) {
                 $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
                 Info "Pulling Ollama model '$ollamaModel' on this build machine ..."
@@ -327,7 +336,10 @@ function Save-Images {
     if ((-not $BackendOnly) -and (-not $FrontendOnly)) {
         $imageTars += "postgres.tar"
         # Ollama runtime image (model is a separate archive, not a Docker image tar)
-        if (Test-Path (Join-Path $stage "ollama-runtime.tar")) { $imageTars += "ollama-runtime.tar" }
+        if (Test-Path (Join-Path $stage "ollama-runtime.tar")) {
+            $imageTars += "ollama-runtime.tar"
+            if (Test-Path (Join-Path $stage "alpine.tar")) { $imageTars += "alpine.tar" }
+        }
     }
     & tar -cf $Archive -C $stage @imageTars
     if ($LASTEXITCODE -ne 0) { Fail "Bundling image archive failed" }
