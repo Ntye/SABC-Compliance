@@ -57,23 +57,25 @@ DEPLOY_ONLY=false
 BUILD_ONLY=false
 BUNDLE=false
 DO_ROLLBACK=false
-WITH_AI=false          # opt-in: --with-ai embeds the Ollama model in the archive
+WITH_AI=false          # pull model on this machine; archive for server
+AI_MODELS=""           # path to a pre-downloaded model archive (from get-model.sh)
 BACKEND_ONLY=false     # rebuild/transfer/restart only the backend service
 FRONTEND_ONLY=false    # rebuild/transfer/restart only the frontend service
 
 for arg in "$@"; do
   case "$arg" in
-    --setup)          DO_SETUP=true ;;
-    --update)         DO_UPDATE=true ;;
-    --deploy-only)    DEPLOY_ONLY=true ;;
-    --build-only)     BUILD_ONLY=true ;;
-    --bundle)         BUNDLE=true ;;
-    --rollback)       DO_ROLLBACK=true ;;
-    --with-ai)        WITH_AI=true ;;
-    --backend-only)   BACKEND_ONLY=true ;;
-    --frontend-only)  FRONTEND_ONLY=true ;;
-    -*)               echo "Unknown flag: $arg"; exit 1 ;;
-    *)                TARGET="$arg" ;;
+    --setup)            DO_SETUP=true ;;
+    --update)           DO_UPDATE=true ;;
+    --deploy-only)      DEPLOY_ONLY=true ;;
+    --build-only)       BUILD_ONLY=true ;;
+    --bundle)           BUNDLE=true ;;
+    --rollback)         DO_ROLLBACK=true ;;
+    --with-ai)          WITH_AI=true ;;
+    --ai-models=*)      AI_MODELS="${arg#--ai-models=}" ;;
+    --backend-only)     BACKEND_ONLY=true ;;
+    --frontend-only)    FRONTEND_ONLY=true ;;
+    -*)                 echo "Unknown flag: $arg"; exit 1 ;;
+    *)                  TARGET="$arg" ;;
   esac
 done
 
@@ -148,17 +150,41 @@ build_images() {
       --output "type=docker,dest=$STAGE/frontend.tar" ./frontend
   fi
 
-  # ── Ollama image with the LLM model baked in (offline AI assistant) ─────────
-  # Only built when --with-ai was passed and not a frontend-only update.
-  if [[ "$WITH_AI" == "true" && "$FRONTEND_ONLY" == false ]]; then
-    local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
-    info "Building Ollama image with embedded model '${ollama_model}' (downloading on this build machine) ..."
-    docker buildx build --platform linux/amd64 \
-      --build-arg OLLAMA_MODEL="$ollama_model" \
-      -t sabc-ollama:latest \
-      --output "type=docker,dest=$STAGE/ollama.tar" deploy/ollama
-  elif [[ "$FRONTEND_ONLY" == false ]]; then
-    info "Skipping offline AI assistant (pass --with-ai to embed it)."
+  # ── Ollama runtime + model (offline AI assistant) ────────────────────────────
+  # --with-ai       : pull model on THIS machine then archive it for transfer
+  # --ai-models=TAR : use a pre-downloaded archive from deploy/get-model.sh
+  # Neither         : skip; chat widget degrades gracefully on the server
+  if [[ "$FRONTEND_ONLY" == false ]]; then
+    if [[ "$WITH_AI" == "true" || -n "$AI_MODELS" ]]; then
+      # Package the stock ollama/ollama runtime (server has no internet).
+      info "Packaging ollama/ollama:latest runtime for linux/amd64 ..."
+      local ollactx="$STAGE/ollactx"
+      mkdir -p "$ollactx"
+      echo 'FROM ollama/ollama:latest' > "$ollactx/Dockerfile"
+      docker buildx build --platform linux/amd64 \
+        -t ollama/ollama:latest \
+        --output "type=docker,dest=$STAGE/ollama-runtime.tar" "$ollactx"
+      rm -rf "$ollactx"
+
+      if [[ "$WITH_AI" == "true" ]]; then
+        local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
+        info "Pulling Ollama model '${ollama_model}' on this build machine ..."
+        local model_tmp="$STAGE/ollama-model-data"
+        mkdir -p "$model_tmp"
+        docker run --rm --platform linux/amd64 \
+          -v "${model_tmp}:/root/.ollama" \
+          ollama/ollama:latest pull "${ollama_model}"
+        info "Archiving model files ..."
+        tar -czf "$SCRIPT_DIR/ollama-models.tar.gz" -C "$model_tmp" .
+        rm -rf "$model_tmp"
+        ok "Model archive: $SCRIPT_DIR/ollama-models.tar.gz"
+      else
+        cp "$AI_MODELS" "$SCRIPT_DIR/ollama-models.tar.gz"
+        ok "Using model archive: $AI_MODELS"
+      fi
+    else
+      info "Skipping offline AI assistant (pass --with-ai or --ai-models=<file> to include it)."
+    fi
   fi
 
   # postgres is only needed for full deploys — for partial updates the database
@@ -192,7 +218,8 @@ save_images() {
   [[ "$BACKEND_ONLY" == false ]] && images+=(frontend.tar)
   if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
     images+=(postgres.tar)
-    [[ -f "$stage/ollama.tar" ]] && images+=(ollama.tar)
+    # Ollama runtime image (not the model — that is sent as a separate archive)
+    [[ -f "$stage/ollama-runtime.tar" ]] && images+=(ollama-runtime.tar)
   fi
   tar -czf "$ARCHIVE" -C "$stage" "${images[@]}"
   rm -rf "$stage"
@@ -339,6 +366,14 @@ else
 fi
 PUBIP_EOF
 
+  # Transfer Ollama model archive if one was prepared (by --with-ai or --ai-models).
+  # This is a separate file from sabc-images.tar.gz — it contains raw model data
+  # that gets extracted into a Docker volume on the server, not loaded as an image.
+  if [ -f "$SCRIPT_DIR/ollama-models.tar.gz" ]; then
+    info "Transferring Ollama model archive ..."
+    scp -o StrictHostKeyChecking=no "$SCRIPT_DIR/ollama-models.tar.gz" "$TARGET:$REMOTE_DIR/"
+  fi
+
   ok "Files transferred"
 }
 
@@ -466,13 +501,28 @@ LOAD_EOF
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << DEPLOY_EOF
 set -e
 if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
-# Enable the "ai" profile (Ollama assistant) only when its image is actually
-# loaded — otherwise the stack starts without it and the assistant degrades
-# gracefully. This decouples the deploy from whether WITH_OLLAMA was set.
+
+# If an Ollama model archive was transferred, extract it into the named volume
+# so the stock ollama/ollama container can serve it. Idempotent — re-running
+# overwrites with the same (or newer) model files.
+if [ -f "$REMOTE_DIR/ollama-models.tar.gz" ]; then
+  echo "[ship.sh] Extracting Ollama model files into Docker volume ..."
+  docker volume create sabc-ollama-models 2>/dev/null || true
+  docker run --rm \
+    -v sabc-ollama-models:/root/.ollama \
+    -v "$REMOTE_DIR/ollama-models.tar.gz:/src/models.tar.gz" \
+    alpine tar -xzf /src/models.tar.gz -C /root/.ollama
+  echo "[ship.sh] Ollama model files extracted."
+fi
+
+# Enable the "ai" profile when the models volume has been populated.
 PROFILE=""
-if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then
-  PROFILE="--profile ai"
-  echo "[ship.sh] sabc-ollama image present — enabling offline AI assistant."
+if docker volume inspect sabc-ollama-models >/dev/null 2>&1; then
+  if docker run --rm -v sabc-ollama-models:/m alpine \
+      sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then
+    PROFILE="--profile ai"
+    echo "[ship.sh] Ollama model volume found — enabling offline AI assistant."
+  fi
 fi
 COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
 COMPOSE_FILE="$REMOTE_DIR/docker-compose.yml"
@@ -666,7 +716,9 @@ LOAD_SVC_EOF
 set -e
 if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
 PROFILE=""
-if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then PROFILE="--profile ai"; fi
+if docker volume inspect sabc-ollama-models >/dev/null 2>&1; then
+  if docker run --rm -v sabc-ollama-models:/m alpine sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then PROFILE="--profile ai"; fi
+fi
 COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
 \$COMPOSE up -d --no-deps $svc
 sleep 8

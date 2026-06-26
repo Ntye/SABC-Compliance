@@ -105,27 +105,30 @@ services:
     networks:
       - sabc-net
 
-  # ── Ollama: offline AI assistant (model baked into the image) ───────────────
+  # ── Ollama: offline AI assistant ─────────────────────────────────────────────
   # Behind the "ai" profile so it only runs when you ask for it:
   #   docker compose -f docker-compose.dev.yml --profile ai up -d
-  # OLLAMA_MODEL picks which model to embed at build time.
+  # Model weights live in the ollama-models volume. Populate it once with:
+  #   ./deploy/get-model.sh          # downloads llama3.2:1b to deploy/ollama-models.tar.gz
+  #   docker volume create ollama-models
+  #   docker run --rm -v ollama-models:/dest \
+  #     -v ./deploy/ollama-models.tar.gz:/src/m.tar.gz \
+  #     alpine tar -xzf /src/m.tar.gz -C /dest
   ollama:
-    build:
-      context: ./deploy/ollama
-      args:
-        OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
-    image: sabc-ollama
+    image: ollama/ollama:latest
     container_name: sabc-ollama
     profiles: ["ai"]
     restart: unless-stopped
     networks:
       - sabc-net
+    volumes:
+      - ollama-models:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
 
 volumes:
   postgres-data:
@@ -133,6 +136,7 @@ volumes:
   backend-keys:
   frontend-node-modules:
   frontend-certs:
+  ollama-models:
 
 networks:
   sabc-net:

@@ -62,9 +62,10 @@ param(
     [switch]$BuildOnly,      # Build and save images locally, no transfer
     [switch]$Bundle,         # Use Dockerfile.bundle (airgap packages)
     [switch]$Rollback,       # Roll back to the previous deployment
-    [switch]$WithAI,         # Embed the offline Ollama AI model in the archive
-    [switch]$BackendOnly,    # Rebuild/transfer/restart only the backend service
-    [switch]$FrontendOnly    # Rebuild/transfer/restart only the frontend service
+    [switch]$WithAI,         # Pull model on this machine; archive for server
+    [string]$AiModels = "", # Path to pre-downloaded model archive (from get-model.sh)
+    [switch]$BackendOnly,   # Rebuild/transfer/restart only the backend service
+    [switch]$FrontendOnly   # Rebuild/transfer/restart only the frontend service
 )
 
 Set-StrictMode -Version Latest
@@ -256,18 +257,40 @@ function Build-Images {
             if ($LASTEXITCODE -ne 0) { Fail "Frontend build failed" }
         }
 
-        # Ollama image with the LLM model baked in — only when -WithAI was passed
-        # and this is not a frontend-only update (Ollama is used by the backend).
-        if ($WithAI -and (-not $FrontendOnly)) {
-            $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
-            Info "Building Ollama image with embedded model '$ollamaModel' (downloading on this build machine) ..."
+        # Ollama runtime + model — only when -WithAI or -AiModels was passed and
+        # this is not a frontend-only update (Ollama is used by the backend).
+        if ((-not $FrontendOnly) -and ($WithAI -or ($AiModels -ne ""))) {
+            # Package the stock ollama/ollama runtime (server has no internet).
+            Info "Packaging ollama/ollama:latest runtime for linux/amd64 ..."
+            $ollactx = Join-Path $stage "ollactx"
+            New-Item -ItemType Directory -Force -Path $ollactx | Out-Null
+            Set-Content -Path (Join-Path $ollactx "Dockerfile") -Value "FROM ollama/ollama:latest" -Encoding ASCII
             & docker buildx build --platform linux/amd64 `
-                --build-arg "OLLAMA_MODEL=$ollamaModel" `
-                -t sabc-ollama:latest `
-                --output "type=docker,dest=$stage\ollama.tar" deploy/ollama
-            if ($LASTEXITCODE -ne 0) { Fail "Ollama image build failed" }
+                -t "ollama/ollama:latest" `
+                --output "type=docker,dest=$stage\ollama-runtime.tar" $ollactx
+            if ($LASTEXITCODE -ne 0) { Fail "Ollama runtime packaging failed" }
+            Remove-Item -Recurse -Force $ollactx -ErrorAction SilentlyContinue
+
+            if ($WithAI) {
+                $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
+                Info "Pulling Ollama model '$ollamaModel' on this build machine ..."
+                $modelTmp = Join-Path $stage "ollama-model-data"
+                New-Item -ItemType Directory -Force -Path $modelTmp | Out-Null
+                & docker run --rm --platform linux/amd64 `
+                    -v "${modelTmp}:/root/.ollama" `
+                    "ollama/ollama:latest" pull $ollamaModel
+                if ($LASTEXITCODE -ne 0) { Fail "Ollama model pull failed" }
+                Info "Archiving model files ..."
+                & tar -czf (Join-Path $ScriptDir "ollama-models.tar.gz") -C $modelTmp .
+                if ($LASTEXITCODE -ne 0) { Fail "Model archive failed" }
+                Remove-Item -Recurse -Force $modelTmp -ErrorAction SilentlyContinue
+                Ok "Model archive: $(Join-Path $ScriptDir 'ollama-models.tar.gz')"
+            } else {
+                Copy-Item $AiModels (Join-Path $ScriptDir "ollama-models.tar.gz") -Force
+                Ok "Using model archive: $AiModels"
+            }
         } elseif (-not $FrontendOnly) {
-            Info "Skipping offline AI assistant (pass -WithAI to embed it)."
+            Info "Skipping offline AI assistant (pass -WithAI or -AiModels to include it)."
         }
 
         # postgres is only needed for full deploys — for partial updates the
@@ -300,7 +323,8 @@ function Save-Images {
     if (-not $BackendOnly)  { $imageTars += "frontend.tar" }
     if ((-not $BackendOnly) -and (-not $FrontendOnly)) {
         $imageTars += "postgres.tar"
-        if (Test-Path (Join-Path $stage "ollama.tar")) { $imageTars += "ollama.tar" }
+        # Ollama runtime image (model is a separate archive, not a Docker image tar)
+        if (Test-Path (Join-Path $stage "ollama-runtime.tar")) { $imageTars += "ollama-runtime.tar" }
     }
     & tar -cf $Archive -C $stage @imageTars
     if ($LASTEXITCODE -ne 0) { Fail "Bundling image archive failed" }
@@ -531,6 +555,12 @@ function Transfer-Files {
 
     Invoke-Sudo "mkdir -p $RemoteDir/backend/packages"
     Invoke-Sudo "chown -R `$(id -un):`$(id -gn) $RemoteDir"
+
+    # Transfer Ollama model archive if one was prepared (-WithAI or -AiModels).
+    $modelArchive = Join-Path $ScriptDir "ollama-models.tar.gz"
+    if (Test-Path $modelArchive) {
+        Send-File $modelArchive "$RemoteDir/ollama-models.tar.gz"
+    }
     Ok "Files transferred"
 }
 
@@ -613,11 +643,24 @@ function Start-Containers {
     $composePrefix = "$compose -f $RemoteDir/docker-compose.yml --project-directory $RemoteDir"
     $lines = @(
         'set -e',
-        '# Enable the "ai" profile only when the Ollama image is actually loaded.',
+        '# Extract Ollama model archive into the named volume if it was transferred.',
+        "if [ -f `"$RemoteDir/ollama-models.tar.gz`" ]; then",
+        '  echo "[ship] Extracting Ollama model files into Docker volume ..."',
+        '  docker volume create sabc-ollama-models 2>/dev/null || true',
+        '  docker run --rm \',
+        "    -v sabc-ollama-models:/root/.ollama \\",
+        "    -v `"$RemoteDir/ollama-models.tar.gz:/src/models.tar.gz`" \\",
+        '    alpine tar -xzf /src/models.tar.gz -C /root/.ollama',
+        '  echo "[ship] Ollama model files extracted."',
+        'fi',
+        '# Enable the "ai" profile when the models volume is populated.',
         'PROFILE=""',
-        'if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then',
-        '  PROFILE="--profile ai"',
-        '  echo "[ship] sabc-ollama image present -- enabling offline AI assistant."',
+        'if docker volume inspect sabc-ollama-models >/dev/null 2>&1; then',
+        '  if docker run --rm -v sabc-ollama-models:/m alpine \',
+        "      sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then",
+        '    PROFILE="--profile ai"',
+        '    echo "[ship] Ollama model volume found -- enabling offline AI assistant."',
+        '  fi',
         'fi',
         "COMPOSE=`"$composePrefix `$PROFILE`"",
         "COMPOSE_FILE=`"$RemoteDir/docker-compose.yml`"",
@@ -752,7 +795,7 @@ function Deploy-Service {
     $lines = @(
         'set -e',
         'PROFILE=""',
-        'if docker image inspect sabc-ollama:latest >/dev/null 2>&1; then PROFILE="--profile ai"; fi',
+        'if docker volume inspect sabc-ollama-models >/dev/null 2>&1 && docker run --rm -v sabc-ollama-models:/m alpine sh -c '"'"'ls /m/models/blobs/ 2>/dev/null | grep -qc .'"'"' 2>/dev/null; then PROFILE="--profile ai"; fi',
         "COMPOSE=`"$composePrefix `$PROFILE`"",
         "`$COMPOSE up -d --no-deps $Svc",
         'sleep 8',

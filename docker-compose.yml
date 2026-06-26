@@ -77,26 +77,27 @@ services:
     ports:
       - "${BACKEND_PORT:-3000}:3000"
 
-  # ── Ollama: offline AI assistant (model baked into the image) ───────────────
-  # The sabc-ollama image embeds the LLM weights, so this runs with no internet.
-  # Built and shipped by deploy/ship.sh alongside the other images — there is no
-  # separate command to run on the server. Behind the "ai" profile so the stack
-  # still starts cleanly if the image was not shipped (the backend degrades
-  # gracefully — the chat widget just reports the assistant as offline).
+  # ── Ollama: offline AI assistant ─────────────────────────────────────────────
+  # Uses the stock ollama/ollama image; model weights live in the ollama-models
+  # named volume, loaded by ship.sh --with-ai or --ai-models (or manually via
+  # deploy/get-model.sh). Behind the "ai" profile so the stack starts cleanly
+  # when no model has been transferred — the chat widget degrades gracefully.
   ollama:
-    image: sabc-ollama
+    image: ollama/ollama:latest
     container_name: sabc-ollama
     profiles: ["ai"]
     restart: unless-stopped
     networks:
       - sabc-net
+    volumes:
+      - ollama-models:/root/.ollama
     # Not published to the host — only the backend talks to it over sabc-net.
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
 
   # ── Frontend: React → Nginx ───────────────────────────────────────────────
   frontend:
@@ -119,6 +120,7 @@ volumes:
   backend-data:
   backend-keys:
   frontend-certs:
+  ollama-models:
 
 networks:
   sabc-net:
