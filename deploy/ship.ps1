@@ -795,7 +795,7 @@ function Deploy-Service {
     $lines = @(
         'set -e',
         'PROFILE=""',
-        'if docker volume inspect sabc-ollama-models >/dev/null 2>&1 && docker run --rm -v sabc-ollama-models:/m alpine sh -c '"'"'ls /m/models/blobs/ 2>/dev/null | grep -qc .'"'"' 2>/dev/null; then PROFILE="--profile ai"; fi',
+        "if docker volume inspect sabc-ollama-models >/dev/null 2>&1 && docker run --rm -v sabc-ollama-models:/m alpine sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then PROFILE=`"--profile ai`"; fi",
         "COMPOSE=`"$composePrefix `$PROFILE`"",
         "`$COMPOSE up -d --no-deps $Svc",
         'sleep 8',
