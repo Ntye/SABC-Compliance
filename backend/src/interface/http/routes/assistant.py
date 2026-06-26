@@ -42,7 +42,9 @@ async def chat(body: ChatRequest):
         msgs = [{"role": "system", "content": _SYSTEM_PROMPT}]
         msgs += [{"role": m.role, "content": m.content} for m in body.messages]
         reply = await _ollama.chat(msgs, model=body.model)
-        return {"reply": reply, "model": body.model or _ollama._model}
+        # Report the model actually used (may be an auto-resolved substitute).
+        used = body.model or _ollama._resolved_model or _ollama._model
+        return {"reply": reply, "model": used}
     except ExternalServiceError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
