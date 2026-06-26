@@ -286,7 +286,10 @@ function Build-Images {
                 Remove-Item -Recurse -Force $modelTmp -ErrorAction SilentlyContinue
                 Ok "Model archive: $(Join-Path $ScriptDir 'ollama-models.tar.gz')"
             } else {
-                Copy-Item $AiModels (Join-Path $ScriptDir "ollama-models.tar.gz") -Force
+                $aiDest = Join-Path $ScriptDir "ollama-models.tar.gz"
+                $aiSrc  = (Resolve-Path $AiModels).Path
+                $aiDstR = if (Test-Path $aiDest) { (Resolve-Path $aiDest).Path } else { "" }
+                if ($aiSrc -ne $aiDstR) { Copy-Item $aiSrc $aiDest -Force }
                 Ok "Using model archive: $AiModels"
             }
         } elseif (-not $FrontendOnly) {
