@@ -528,16 +528,7 @@ if [ -f "$REMOTE_DIR/ollama-models.tar.gz" ]; then
   echo "[ship.sh] Ollama model files extracted."
 fi
 
-# Enable the "ai" profile when the models volume has been populated.
-PROFILE=""
-if docker volume inspect sabc-ollama-models >/dev/null 2>&1; then
-  if docker run --rm -v sabc-ollama-models:/m alpine \
-      sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then
-    PROFILE="--profile ai"
-    echo "[ship.sh] Ollama model volume found — enabling offline AI assistant."
-  fi
-fi
-COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
+COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
 COMPOSE_FILE="$REMOTE_DIR/docker-compose.yml"
 
 # Guard: docker-compose v1 mis-handles image-only services when the file still
@@ -728,11 +719,7 @@ LOAD_SVC_EOF
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo bash -s" << RESTART_SVC_EOF
 set -e
 if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin="docker-compose"; fi
-PROFILE=""
-if docker volume inspect sabc-ollama-models >/dev/null 2>&1; then
-  if docker run --rm -v sabc-ollama-models:/m alpine sh -c 'ls /m/models/blobs/ 2>/dev/null | grep -qc .' 2>/dev/null; then PROFILE="--profile ai"; fi
-fi
-COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR \$PROFILE"
+COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
 \$COMPOSE up -d --no-deps $svc
 sleep 8
 st=\$(docker inspect -f '{{.State.Status}}' $ctr 2>/dev/null || echo absent)
