@@ -1,0 +1,21 @@
+#!/bin/sh
+# Wazuh integrator wrapper for the SABC Compliance Platform integration.
+#
+# The Wazuh integrator daemon executes the script whose name matches the
+# <name>custom-sabc</name> entry in ossec.conf, passing:
+#   $1 = alert file   $2 = api_key   $3 = hook_url
+#
+# It runs the companion Python module with Wazuh's bundled interpreter so no
+# system Python is required inside the manager container.
+WPYTHON_BIN="framework/python/bin/python3"
+SCRIPT_PATH="$(dirname "$0")"
+
+if [ -x "${SCRIPT_PATH}/../${WPYTHON_BIN}" ]; then
+    PYTHON="${SCRIPT_PATH}/../${WPYTHON_BIN}"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+else
+    PYTHON="python"
+fi
+
+exec "${PYTHON}" "${SCRIPT_PATH}/custom-sabc.py" "$@"
