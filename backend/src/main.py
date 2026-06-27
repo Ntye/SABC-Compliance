@@ -50,7 +50,7 @@ from modules.nodes.usecases import (
 from modules.provisioning.usecases import (
     CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
     GetJobUseCase, ScanEngineUseCase, InstallServiceUseCase, ListJobsUseCase,
-    SetMasterHostUseCase, StartJobUseCase,
+    SetMasterHostUseCase, StartJobUseCase, SwitchPuppetEditionUseCase,
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
@@ -310,6 +310,7 @@ async def lifespan(app: FastAPI):
     check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
     configure_wazuh_remediation_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_remediation")
     configure_puppet_core_enc_uc       = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_core_enc")
+    switch_puppet_edition_uc           = SwitchPuppetEditionUseCase(start_job_uc, platform_config_repo, node_repo, configure_puppet_core_enc_uc)
     scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
@@ -320,6 +321,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
         configure_wazuh_remediation_uc=configure_wazuh_remediation_uc,
         configure_puppet_core_enc_uc=configure_puppet_core_enc_uc,
+        switch_puppet_edition_uc=switch_puppet_edition_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
         check_health_uc=check_health_uc,

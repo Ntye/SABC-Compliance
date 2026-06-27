@@ -378,6 +378,69 @@ class InstallServiceUseCase:
         })
 
 
+class SwitchPuppetEditionUseCase:
+    """Switch the Puppet master between Enterprise (PE Advanced) and Core.
+
+    One action does the whole switch:
+      1. records the new edition in platform config (so node-group sync routes to
+         the right classifier — RBAC/NC API for PE, ENC for Core);
+      2. (re)installs the master with the chosen edition via
+         install_puppet_master.yml, purging the opposite edition first (PE and
+         Core cannot coexist);
+      3. for Core, configures the External Node Classifier on the master once
+         puppetserver is up, so classification works immediately.
+
+    Switching regenerates the master CA, so agents must re-enroll afterwards.
+    """
+
+    def __init__(self, start_job_uc, config_repo, node_repo, configure_enc_uc=None):
+        self._start = start_job_uc
+        self._config = config_repo
+        self._node_repo = node_repo
+        self._configure_enc = configure_enc_uc
+
+    async def execute(self, node_id: str, target_edition: str) -> Job:
+        edition = (target_edition or "").strip().lower()
+        if edition not in ("enterprise", "core"):
+            raise ValidationError("edition must be 'enterprise' or 'core'")
+        node = await self._node_repo.find_by_id(node_id)
+        if not node:
+            raise NotFoundError(f"Node '{node_id}' not found")
+
+        # Persist the edition up front so a sync that races the install still
+        # targets the right backend (it no-ops gracefully until the master is up).
+        await self._config.set("puppet_edition", edition)
+
+        extra_vars: dict = {"puppet_edition": edition, "purge_other_edition": True}
+        if edition == "enterprise":
+            pw = await self._config.get("pe_console_password")
+            if pw:
+                extra_vars["pe_console_password"] = pw
+
+        config_repo = self._config
+        node_ip = node.ip
+        configure_enc = self._configure_enc
+
+        async def on_complete(job: Job, _node: Node | None) -> None:
+            if job.status != "success":
+                return
+            await config_repo.set("puppet_master_host", node_ip)
+            # For Core, enable the ENC on the freshly-installed master.
+            if edition == "core" and configure_enc is not None:
+                try:
+                    await configure_enc.execute(node_id)
+                except Exception:
+                    pass
+
+        return await self._start.execute({
+            "type": f"switch_puppet_{edition}",
+            "node_id": node_id,
+            "playbook": "install_puppet_master.yml",
+            "extra_vars": extra_vars,
+            "on_complete": on_complete,
+        })
+
+
 class DetectAgentsUseCase:
     """Launch a read-only Ansible job that detects Puppet / Wazuh enrollment.
 

@@ -39,6 +39,11 @@ class SetPuppetEditionRequest(BaseModel):
     edition: str
 
 
+class SwitchPuppetEditionRequest(BaseModel):
+    edition: str        # "enterprise" | "core"
+    node_id: str        # the master node to (re)install with this edition
+
+
 class InstallRequest(BaseModel):
     node_id: str
 
@@ -71,6 +76,7 @@ _packages_dir: str = ""
 _ssh_client = None
 _config_repo = None
 _configure_puppet_core_enc_uc = None
+_switch_puppet_edition_uc = None
 
 
 def set_use_cases(
@@ -89,6 +95,7 @@ def set_use_cases(
     config_repo=None,
     configure_wazuh_remediation_uc=None,
     configure_puppet_core_enc_uc=None,
+    switch_puppet_edition_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
@@ -96,7 +103,7 @@ def set_use_cases(
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir, _ssh_client, _config_repo
-    global _configure_puppet_core_enc_uc
+    global _configure_puppet_core_enc_uc, _switch_puppet_edition_uc
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -112,6 +119,7 @@ def set_use_cases(
     _ssh_client = ssh_client
     _config_repo = config_repo
     _configure_puppet_core_enc_uc = configure_puppet_core_enc_uc
+    _switch_puppet_edition_uc = switch_puppet_edition_uc
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -251,6 +259,30 @@ async def set_puppet_edition(
         raise HTTPException(status_code=422, detail="edition must be 'enterprise' or 'core'")
     await _config_repo.set("puppet_edition", edition)
     return {"message": f"Puppet edition set to '{edition}'", "edition": edition}
+
+
+@router.post("/puppet-edition/switch", response_model=JobRef, status_code=202,
+             summary="Switch the master between Puppet Enterprise and Puppet Core")
+async def switch_puppet_edition(
+    body: SwitchPuppetEditionRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """One-button edition switch: records the new edition, (re)installs the
+    master with it (purging the opposite edition — PE and Core cannot coexist),
+    and for Core auto-configures the ENC once puppetserver is up.
+
+    Enterprise requires a PE installer tarball under packages/puppet-master/;
+    Core installs from the bundled packages or the public Puppet repo. Switching
+    regenerates the master CA, so agents must re-enroll afterwards."""
+    if _switch_puppet_edition_uc is None:
+        raise HTTPException(status_code=503, detail="Edition switching not available")
+    try:
+        job = await _switch_puppet_edition_uc.execute(body.node_id, body.edition)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/configure/puppet-core-enc", response_model=JobRef, status_code=202,

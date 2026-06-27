@@ -26,6 +26,14 @@
     pe_console_password: "SABCPuppet2025!"
     # packages_dir is injected by AnsibleAdapter (absolute path to backend/packages/)
     puppet_pkg_dir: "{{ packages_dir }}/puppet-master"
+    # Edition control (injected by the platform when switching editions):
+    #   ""           auto-detect from the artifacts present (legacy behaviour)
+    #   "enterprise" force Puppet Enterprise (requires a PE tarball)
+    #   "core"       force open-source Puppet Core (never uses the PE tarball)
+    puppet_edition: ""
+    # When true, cleanly remove the *opposite* edition before installing — this
+    # is what makes switching PE ⇄ Core work (the two cannot coexist).
+    purge_other_edition: false
 
   # ── Bootstrap: ensure a MODERN Python (>=3.8) before gathering facts ───────
   # Fresh/minimal cloud images may ship without python3 at all, OR with a
@@ -125,16 +133,58 @@
       become: no
       failed_when: false
 
+    - name: Fail early if forcing Enterprise without a PE tarball
+      fail:
+        msg: >-
+          puppet_edition=enterprise was requested but no Puppet Enterprise
+          installer tarball (puppet-enterprise-*.tar.gz) was found in
+          {{ puppet_pkg_dir }}. PE is commercial and cannot be installed from a
+          public package repo — download the PE tarball and place it there.
+      when: puppet_edition == 'enterprise' and pe_tarball.files | length == 0
+
     - name: Determine installation mode
       set_fact:
         install_mode: >-
-          {{ 'tarball'   if pe_tarball.files          | length > 0
+          {{ 'tarball'   if puppet_edition == 'enterprise'
+             else 'packages' if (puppet_edition == 'core' and puppet_offline_pkgs.files | length > 0)
+             else 'online'   if puppet_edition == 'core'
+             else 'tarball'   if pe_tarball.files          | length > 0
              else 'packages' if puppet_offline_pkgs.files | length > 0
              else 'online' }}
 
     - name: Report installation mode
       debug:
-        msg: "Installation mode: {{ install_mode | upper }} ({{ puppet_pkg_dir }})"
+        msg: >-
+          Installation mode: {{ install_mode | upper }}
+          (edition={{ puppet_edition | default('auto') }},
+          purge_other={{ purge_other_edition }}, dir={{ puppet_pkg_dir }})
+
+    # ── Switch cleanup: remove Puppet Enterprise before installing Core ─────────
+    # PE installs pe-puppetserver/pe-* and its own CA under /opt/puppetlabs. When
+    # switching to open-source Puppet Core those must go first, or puppetserver
+    # and the PE services fight over ports 8140/8143 and the CA. The PE
+    # uninstaller is the supported way to tear PE down.
+    - name: Uninstall Puppet Enterprise before switching to Puppet Core
+      shell: |
+        set +e
+        # Stop PE services if present so the uninstaller/cleanup is unobstructed.
+        for svc in pe-puppetserver pe-puppetdb pe-console-services \
+                   pe-orchestration-services pe-nginx pe-postgresql; do
+          systemctl stop "$svc" 2>/dev/null
+        done
+        # Supported teardown: purge packages (-p) and databases (-d).
+        if [ -x /opt/puppetlabs/bin/puppet-enterprise-uninstaller ]; then
+          /opt/puppetlabs/bin/puppet-enterprise-uninstaller -y -p -d
+        fi
+        exit 0
+      args:
+        executable: /bin/bash
+      register: pe_uninstall
+      changed_when: "'Uninstalling' in (pe_uninstall.stdout | default(''))"
+      when:
+        - install_mode != 'tarball'
+        - purge_other_edition | bool
+      ignore_errors: yes
 
     # ── PREFLIGHT (resources — warn only, never block) ────────────────────────
     # Puppet Enterprise (tarball) realistically wants ~6 GB+ RAM; open-source
