@@ -23,7 +23,7 @@
 #   downloaded ONCE on this (internet-connected) build machine and committed into
 #   an image layer — the server needs no internet at all.
 #
-#   ./deploy/ship.sh user@ec2-ip --with-ai                 embed the default model (llama3.2:1b)
+#   ./deploy/ship.sh user@ec2-ip --with-ai                 embed the default model (llama3.2:3b)
 #   OLLAMA_MODEL=llama3.2:3b ./deploy/ship.sh ... --with-ai  embed a larger model
 #
 #   Without --with-ai the assistant image is not built/shipped and the chat
@@ -177,7 +177,7 @@ build_images() {
       rm -rf "$alpinectx"
 
       if [[ "$WITH_AI" == "true" ]]; then
-        local ollama_model="${OLLAMA_MODEL:-llama3.2:1b}"
+        local ollama_model="${OLLAMA_MODEL:-llama3.2:3b}"
         info "Pulling Ollama model '${ollama_model}' on this build machine ..."
         local model_tmp="$STAGE/ollama-model-data"
         mkdir -p "$model_tmp"

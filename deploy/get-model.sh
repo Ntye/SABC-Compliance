@@ -8,9 +8,9 @@
 # the airgap server later.  The server itself needs no internet at all.
 #
 # Usage:
-#   ./deploy/get-model.sh                          # llama3.2:1b → deploy/ollama-models.tar.gz
+#   ./deploy/get-model.sh                          # llama3.2:3b → deploy/ollama-models.tar.gz
 #   ./deploy/get-model.sh llama3.2:3b              # larger / better model
-#   ./deploy/get-model.sh llama3.2:1b /tmp/ai.tar.gz  # custom output path
+#   ./deploy/get-model.sh llama3.2:3b /tmp/ai.tar.gz  # custom output path
 #
 # After running, deploy the model to the server with:
 #   ./deploy/ship.sh user@server --ai-models=./deploy/ollama-models.tar.gz
@@ -27,7 +27,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-MODEL="${1:-llama3.2:1b}"
+MODEL="${1:-llama3.2:3b}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT="${2:-$SCRIPT_DIR/ollama-models.tar.gz}"
 

@@ -8,9 +8,9 @@
 # the airgap server later.  The server itself needs no internet at all.
 #
 # Usage:
-#   .\deploy\get-model.ps1                                # llama3.2:1b -> deploy\ollama-models.tar.gz
+#   .\deploy\get-model.ps1                                # llama3.2:3b -> deploy\ollama-models.tar.gz
 #   .\deploy\get-model.ps1 -Model llama3.2:3b             # larger / better model
-#   .\deploy\get-model.ps1 -Model llama3.2:1b -Output C:\tmp\ai.tar.gz
+#   .\deploy\get-model.ps1 -Model llama3.2:3b -Output C:\tmp\ai.tar.gz
 #
 # After running, deploy the model to the server with:
 #   .\deploy\ship.ps1 -Target user@server -AiModels .\deploy\ollama-models.tar.gz
@@ -28,7 +28,7 @@
 # =============================================================================
 
 param(
-    [string]$Model  = "llama3.2:1b",
+    [string]$Model  = "llama3.2:3b",
     [string]$Output = ""              # defaults to deploy\ollama-models.tar.gz
 )
 

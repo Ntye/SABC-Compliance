@@ -52,7 +52,7 @@ services:
       # Offline AI assistant — reach the bundled Ollama service (started with the
       # "ai" profile: docker compose -f docker-compose.dev.yml --profile ai up -d)
       OLLAMA_URL:   "http://ollama:11434"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
     volumes:
       - backend-data:/app/data
       - backend-keys:/app/keys
@@ -109,7 +109,7 @@ services:
   # Behind the "ai" profile so it only runs when you ask for it:
   #   docker compose -f docker-compose.dev.yml --profile ai up -d
   # Model weights live in the ollama-models volume. Populate it once with:
-  #   ./deploy/get-model.sh          # downloads llama3.2:1b to deploy/ollama-models.tar.gz
+  #   ./deploy/get-model.sh          # downloads llama3.2:3b to deploy/ollama-models.tar.gz
   #   docker volume create ollama-models
   #   docker run --rm -v ollama-models:/dest \
   #     -v ./deploy/ollama-models.tar.gz:/src/m.tar.gz \

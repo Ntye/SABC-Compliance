@@ -22,11 +22,11 @@
 FROM ollama/ollama:latest
 
 # Which model to embed. Small models keep the shipped archive manageable:
-#   llama3.2:1b   ≈ 1.3 GB   (default — fast, decent EN, basic FR)
+#   llama3.2:3b   ≈ 1.3 GB   (default — fast, decent EN, basic FR)
 #   llama3.2:3b   ≈ 2.0 GB   (better French)
 #   qwen2.5:3b    ≈ 1.9 GB   (strong multilingual)
 #   llama3.1:8b   ≈ 4.7 GB   (best quality, heavier to ship)
-ARG OLLAMA_MODEL=llama3.2:1b
+ARG OLLAMA_MODEL=llama3.2:3b
 ENV OLLAMA_MODEL=${OLLAMA_MODEL}
 
 # Store weights in a plain image directory rather than the default

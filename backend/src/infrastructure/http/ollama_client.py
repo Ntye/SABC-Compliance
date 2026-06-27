@@ -18,7 +18,7 @@ class OllamaClient:
     The configured model name (OLLAMA_MODEL) is treated as a *preference*,
     not a hard requirement.  If that exact tag is not loaded on the server,
     the client automatically falls back to another available model — first a
-    same-family match (e.g. ``llama3.2:1b`` → ``llama3.2:2b``), then any
+    same-family match (e.g. ``llama3.2:3b`` → ``llama3.2:2b``), then any
     loaded model.  This means the chat assistant keeps working regardless of
     which exact tag an operator happened to load, so a model-tag mismatch can
     never silently break the chatbot again.

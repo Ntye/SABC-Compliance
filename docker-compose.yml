@@ -51,7 +51,7 @@ services:
       # Offline AI assistant — reach the bundled Ollama service over the internal
       # network. The model is baked into the sabc-ollama image (no internet).
       OLLAMA_URL:   "http://ollama:11434"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:1b}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
     extra_hosts:
       # Makes host.docker.internal resolve to the Docker host on Linux.
       - "host.docker.internal:host-gateway"

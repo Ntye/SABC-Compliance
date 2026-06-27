@@ -281,7 +281,7 @@ function Build-Images {
             Remove-Item -Recurse -Force $alpinectx -ErrorAction SilentlyContinue
 
             if ($WithAI) {
-                $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:1b" }
+                $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:3b" }
                 Info "Pulling Ollama model '$ollamaModel' on this build machine ..."
                 $modelTmp = Join-Path $stage "ollama-model-data"
                 New-Item -ItemType Directory -Force -Path $modelTmp | Out-Null
