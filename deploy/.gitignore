@@ -1,0 +1,9 @@
+# Build/deploy artifacts produced by ship.sh / ship.ps1 — never commit these.
+.images/
+.image-cache/
+sabc-images.tar
+sabc-images.tar.gz
+ollama-models.tar.gz
+ollama-runtime.tar
+alpine.tar
+postgres.tar

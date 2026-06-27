@@ -81,6 +81,9 @@ $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $Archive    = Join-Path $ScriptDir "sabc-images.tar"
 $RemoteDir  = "/opt/sabc-compliance"
+# Persistent cache of packaged stock-image tars (postgres/ollama/alpine) so they
+# are pulled+exported once, not on every build. Override with SABC_IMAGE_CACHE.
+$ImageCache = if ($env:SABC_IMAGE_CACHE) { $env:SABC_IMAGE_CACHE } else { Join-Path $ScriptDir ".image-cache" }
 
 # -- Validate arguments -------------------------------------------------------
 if ((-not $Target) -and (-not $BuildOnly) -and (-not $Bundle)) {
@@ -214,21 +217,32 @@ function Send-File {
     if ($LASTEXITCODE -ne 0) { Fail "Transfer failed: $LocalPath" }
 }
 
-# Export a stock image to a tar, REUSING the local copy when it already exists
-# so we never re-pull over the internet on every build. Only stock third-party
-# images use this — the app images (backend/frontend) are always rebuilt.
+# Package a stock image into a tar, REUSING a previously-built tar from a
+# persistent on-disk cache so we never re-pull/re-export on every build. Only
+# stock third-party images use this — the app images (backend/frontend) are
+# always rebuilt.
+#
+# We export via `docker buildx build --output type=docker,dest=` (NOT
+# `docker save`): with Docker Desktop's containerd image store, `docker save`
+# of a freshly-pulled multi-arch image fails with "unable to create manifests
+# file: NotFound". Caching the resulting tar means the pull only happens once.
 function Package-OrReuse {
     param([string]$Image, [string]$Dest)
-    & docker image inspect $Image *>$null
-    if ($LASTEXITCODE -eq 0) {
-        Info "Reusing existing local image $Image (no pull)"
+    New-Item -ItemType Directory -Force -Path $ImageCache | Out-Null
+    $tarName = Split-Path -Leaf $Dest
+    $cached  = Join-Path $ImageCache $tarName
+    if (Test-Path $cached) {
+        Info "Reusing cached image archive $tarName (delete $cached to refresh)"
     } else {
-        Info "Pulling $Image (linux/amd64) -- not present locally ..."
-        & docker pull --platform linux/amd64 $Image
-        if ($LASTEXITCODE -ne 0) { Fail "Pull failed: $Image" }
+        Info "Packaging $Image (linux/amd64) into cache ..."
+        $ctx = Join-Path $env:TEMP ("sabc-ctx-" + ($tarName -replace '\W', '_'))
+        New-Item -ItemType Directory -Force -Path $ctx | Out-Null
+        Set-Content -Path (Join-Path $ctx "Dockerfile") -Value "FROM $Image" -Encoding ASCII
+        & docker buildx build --platform linux/amd64 -t $Image --output "type=docker,dest=$cached" $ctx
+        if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $ctx -ErrorAction SilentlyContinue; Fail "Packaging failed: $Image" }
+        Remove-Item -Recurse -Force $ctx -ErrorAction SilentlyContinue
     }
-    & docker save -o $Dest $Image
-    if ($LASTEXITCODE -ne 0) { Fail "Saving image failed: $Image" }
+    Copy-Item $cached $Dest -Force
 }
 
 # -- Step 1: Build images -----------------------------------------------------

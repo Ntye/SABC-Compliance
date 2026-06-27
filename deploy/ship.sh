@@ -48,6 +48,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ARCHIVE="$SCRIPT_DIR/sabc-images.tar.gz"
 REMOTE_DIR="/opt/sabc-compliance"
+# Persistent cache of packaged stock-image tars (postgres/ollama/alpine) so they
+# are pulled+exported once, not on every build. Override with SABC_IMAGE_CACHE.
+IMAGE_CACHE="${SABC_IMAGE_CACHE:-$SCRIPT_DIR/.image-cache}"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 TARGET=""
@@ -103,20 +106,32 @@ remote_docker() {
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo $*"
 }
 
-# Export a stock image to a tar, REUSING the local copy when it already exists
-# so we never re-pull over the internet on every build. Only stock third-party
-# images (postgres, ollama runtime, alpine) use this — the app images
-# (backend/frontend) are always rebuilt because their source changes.
-#   $1 = image ref (e.g. postgres:16-alpine)   $2 = destination tar path
+# Package a stock image into a tar, REUSING a previously-built tar from a
+# persistent on-disk cache so we never re-pull/re-export on every build. Only
+# stock third-party images (postgres, ollama runtime, alpine) use this — the app
+# images (backend/frontend) are always rebuilt because their source changes.
+#
+# We export via `docker buildx build --output type=docker,dest=` (NOT
+# `docker save`): with Docker Desktop's containerd image store, `docker save`
+# of a freshly-pulled multi-arch image fails with "unable to create manifests
+# file: NotFound". buildx exports a self-contained, loadable archive directly.
+# Caching the resulting tar means the (one-time) pull only ever happens once.
+#   $1 = image ref (e.g. postgres:16-alpine)   $2 = tar filename (in $STAGE)
 package_or_reuse() {
-  local image="$1" dest="$2"
-  if docker image inspect "$image" >/dev/null 2>&1; then
-    info "Reusing existing local image $image (no pull)"
+  local image="$1" tarname="$2"
+  mkdir -p "$IMAGE_CACHE"
+  local cached="$IMAGE_CACHE/$tarname"
+  if [[ -f "$cached" ]]; then
+    info "Reusing cached image archive $tarname (rm $cached to refresh)"
   else
-    info "Pulling $image (linux/amd64) — not present locally ..."
-    docker pull --platform linux/amd64 "$image"
+    info "Packaging $image (linux/amd64) into cache ..."
+    local ctx; ctx="$(mktemp -d)"
+    echo "FROM $image" > "$ctx/Dockerfile"
+    docker buildx build --platform linux/amd64 -t "$image" \
+      --output "type=docker,dest=$cached" "$ctx"
+    rm -rf "$ctx"
   fi
-  docker save -o "$dest" "$image"
+  cp "$cached" "$STAGE/$tarname"
 }
 
 # ── Step 1: Build images ────────────────────────────────────────────────────
@@ -173,8 +188,8 @@ build_images() {
   if [[ "$FRONTEND_ONLY" == false ]]; then
     if [[ "$WITH_AI" == "true" || -n "$AI_MODELS" ]]; then
       # Stock runtime + alpine — reused from the local image store if present.
-      package_or_reuse ollama/ollama:latest "$STAGE/ollama-runtime.tar"
-      package_or_reuse alpine:latest        "$STAGE/alpine.tar"
+      package_or_reuse ollama/ollama:latest ollama-runtime.tar
+      package_or_reuse alpine:latest        alpine.tar
 
       if [[ "$WITH_AI" == "true" ]]; then
         local ollama_model="${OLLAMA_MODEL:-llama3.2:3b}"
@@ -207,7 +222,7 @@ build_images() {
   # postgres is only needed for full deploys — for partial updates the database
   # container is already running on the server and must not be replaced.
   if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
-    package_or_reuse postgres:16-alpine "$STAGE/postgres.tar"
+    package_or_reuse postgres:16-alpine postgres.tar
   fi
 
   ok "Image archives built (linux/amd64)"
