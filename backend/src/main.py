@@ -20,6 +20,7 @@ from infrastructure.database.adapter import (
 )
 from infrastructure.http.wazuh_client import WazuhRESTClient
 from infrastructure.http.puppet_nc_client import PuppetNCClient
+from infrastructure.http.puppet_core_client import PuppetCoreClient
 from infrastructure.http.ollama_client import OllamaClient
 from modules.auth.usecases import (
     AuthenticateUseCase, ChangePasswordUseCase, CreateApiKeyUseCase,
@@ -183,6 +184,22 @@ async def lifespan(app: FastAPI):
         remove_member_uc=remove_member_uc,
     )
 
+    # -- SSH client (needed by the Puppet Core ENC classifier below) --
+    ssh_client = SshClientAdapter(settings.ssh_key_path)
+
+    # Puppet Core (open-source) node classifier — deploys an ENC over SSH
+    # instead of calling the PE-only RBAC/Node-Classifier APIs. Used only when
+    # puppet_edition == "core"; harmless to construct otherwise.
+    puppet_core_client = PuppetCoreClient(
+        ssh_client=ssh_client,
+        host=settings.puppet_master_host,
+        ssh_user=settings.puppet_core_ssh_user,
+        ssh_key_path=settings.ssh_key_path,
+        enc_dir=settings.puppet_core_enc_dir,
+        default_environment=settings.puppet_core_default_environment,
+        config_repo=platform_config_repo,
+    )
+
     # -- Node group use cases --
     list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo, node_repo)
     get_node_group_uc = GetNodeGroupUseCase(node_group_repo, node_repo)
@@ -194,7 +211,10 @@ async def lifespan(app: FastAPI):
     list_facts_uc = ListFactsUseCase(node_repo)
     preview_matching_uc = PreviewMatchingUseCase(node_repo)
     seed_node_groups_uc = SeedDefaultNodeGroupsUseCase(node_group_repo)
-    sync_node_groups_uc = SyncAllNodeGroupsUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
+    sync_node_groups_uc = SyncAllNodeGroupsUseCase(
+        node_group_repo, node_repo, wazuh_client, puppet_nc_client,
+        puppet_core_client=puppet_core_client, config_repo=platform_config_repo,
+    )
 
     node_groups_routes.set_use_cases(
         list_uc=list_node_groups_uc,
@@ -213,8 +233,7 @@ async def lifespan(app: FastAPI):
     # -- WebSocket manager --
     ws_manager = WebSocketManager(job_repo)
 
-    # -- SSH + Ansible clients --
-    ssh_client = SshClientAdapter(settings.ssh_key_path)
+    # -- Ansible client (ssh_client was created earlier for the ENC classifier) --
     ansible = AnsibleAdapter(settings.ansible_dir, settings.ssh_key_path, settings.packages_dir)
 
     # -- Job infrastructure (needed by both node and provisioning use cases) --
@@ -290,6 +309,7 @@ async def lifespan(app: FastAPI):
     install_wazuh_agent_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
     check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
     configure_wazuh_remediation_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_remediation")
+    configure_puppet_core_enc_uc       = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_core_enc")
     scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
@@ -299,6 +319,7 @@ async def lifespan(app: FastAPI):
         install_wazuh_manager_uc=install_wazuh_manager_uc,
         install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
         configure_wazuh_remediation_uc=configure_wazuh_remediation_uc,
+        configure_puppet_core_enc_uc=configure_puppet_core_enc_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,
         check_health_uc=check_health_uc,

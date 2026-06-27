@@ -33,6 +33,12 @@ class SetPuppetCredentialsRequest(BaseModel):
     admin_password: str
 
 
+class SetPuppetEditionRequest(BaseModel):
+    # "enterprise" (PE Advanced, RBAC + Node Classifier APIs) or
+    # "core" (open-source Puppet, classification via ENC over SSH).
+    edition: str
+
+
 class InstallRequest(BaseModel):
     node_id: str
 
@@ -64,6 +70,7 @@ _node_repo = None
 _packages_dir: str = ""
 _ssh_client = None
 _config_repo = None
+_configure_puppet_core_enc_uc = None
 
 
 def set_use_cases(
@@ -81,6 +88,7 @@ def set_use_cases(
     ssh_client=None,
     config_repo=None,
     configure_wazuh_remediation_uc=None,
+    configure_puppet_core_enc_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
@@ -88,6 +96,7 @@ def set_use_cases(
     global _install_puppet_agent_uc, _install_wazuh_agent_uc
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir, _ssh_client, _config_repo
+    global _configure_puppet_core_enc_uc
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -102,6 +111,7 @@ def set_use_cases(
     _packages_dir = packages_dir
     _ssh_client = ssh_client
     _config_repo = config_repo
+    _configure_puppet_core_enc_uc = configure_puppet_core_enc_uc
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -204,6 +214,61 @@ async def set_puppet_credentials(
     await _config_repo.set("pe_console_password", password)
     await _config_repo.set("pe_admin_user", body.admin_user.strip() or "admin")
     return {"message": "Puppet Enterprise credentials updated", "admin_user": body.admin_user}
+
+
+@router.get("/puppet-edition", summary="Get the active Puppet edition (enterprise | core)")
+async def get_puppet_edition(
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """Report which Puppet edition node-group sync targets.
+
+    ``enterprise`` uses the PE-only RBAC + Node Classifier APIs; ``core`` uses
+    an External Node Classifier deployed over SSH (no commercial APIs)."""
+    from config import get_settings
+    edition = None
+    if _config_repo:
+        try:
+            edition = await _config_repo.get("puppet_edition")
+        except Exception:
+            edition = None
+    edition = (edition or get_settings().puppet_edition or "enterprise").strip().lower()
+    return {"edition": edition}
+
+
+@router.post("/puppet-edition", summary="Switch the Puppet edition (enterprise | core)")
+async def set_puppet_edition(
+    body: SetPuppetEditionRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Switch between Puppet Enterprise and Puppet Core. This only changes which
+    classification backend the next node-group sync uses — it does not touch the
+    master. For Puppet Core, run POST /configure/puppet-core-enc once afterwards
+    to enable the ENC on the master."""
+    if not _config_repo:
+        raise HTTPException(status_code=503, detail="Config repository not available")
+    edition = (body.edition or "").strip().lower()
+    if edition not in ("enterprise", "core"):
+        raise HTTPException(status_code=422, detail="edition must be 'enterprise' or 'core'")
+    await _config_repo.set("puppet_edition", edition)
+    return {"message": f"Puppet edition set to '{edition}'", "edition": edition}
+
+
+@router.post("/configure/puppet-core-enc", response_model=JobRef, status_code=202,
+             summary="Enable the External Node Classifier on a Puppet Core master (one-time)")
+async def configure_puppet_core_enc(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Run the one-time Ansible job that points the Puppet Core master at the
+    SABC ENC (node_terminus = exec + external_nodes) and restarts puppetserver.
+    Per-node classification data is pushed automatically on every sync."""
+    if _configure_puppet_core_enc_uc is None:
+        raise HTTPException(status_code=503, detail="Puppet Core ENC configuration not available")
+    try:
+        job = await _configure_puppet_core_enc_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/install/puppet-master", response_model=JobRef, status_code=202, summary="Install Puppet master on a node")

@@ -1,0 +1,96 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Enable the SABC External Node Classifier (ENC) on a Puppet Core master.
+#
+# Puppet Core (open-source) has no Node Classifier / RBAC HTTP API, so the
+# platform classifies nodes with an exec ENC instead. This one-time, privileged
+# playbook prepares the master:
+#
+#   * creates the ENC directory (script + per-node data live here)
+#   * installs the `classify` ENC script and a `default.yaml` fallback
+#   * points puppet.conf at the ENC (node_terminus = exec / external_nodes),
+#     in a marker-delimited block so it is idempotent and reversible
+#   * restarts puppetserver only when puppet.conf actually changed
+#
+# The per-node YAML data is pushed separately by the platform over SSH on every
+# node-group sync (no restart needed — an exec ENC is re-run per catalog).
+#
+# Required extra-vars (injected by the platform):
+#   enc_dir   absolute path for the ENC dir (default /etc/puppetlabs/puppet/enc)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Enable SABC External Node Classifier on Puppet Core master
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    enc_dir: /etc/puppetlabs/puppet/enc
+    _puppet_conf: /etc/puppetlabs/puppet/puppet.conf
+    _marker: "SABC Compliance ENC (managed)"
+
+  tasks:
+    - name: Ensure the ENC directory and nodes subdir exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: puppet
+        group: puppet
+        mode: "0755"
+      loop:
+        - "{{ enc_dir }}"
+        - "{{ enc_dir }}/nodes"
+
+    - name: Install the ENC classify script
+      copy:
+        dest: "{{ enc_dir }}/classify"
+        owner: puppet
+        group: puppet
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # SABC Compliance — Puppet Core External Node Classifier.
+          # Managed by the SABC Compliance platform. Do not edit.
+          certname="$1"
+          safe=$(printf "%s" "$certname" | tr "/\\" "__")
+          node_file="{{ enc_dir }}/nodes/${safe}.yaml"
+          default_file="{{ enc_dir }}/default.yaml"
+          if [ -n "$safe" ] && [ -f "$node_file" ]; then
+            cat "$node_file"
+          elif [ -f "$default_file" ]; then
+            cat "$default_file"
+          else
+            printf -- "---\nenvironment: production\nclasses: {}\n"
+          fi
+
+    - name: Install the default ENC document (fallback for unmanaged nodes)
+      copy:
+        dest: "{{ enc_dir }}/default.yaml"
+        owner: puppet
+        group: puppet
+        mode: "0644"
+        # Do not clobber an existing data file the platform may have pushed.
+        force: no
+        content: |
+          ---
+          environment: "production"
+          classes: {}
+          parameters:
+            sabc_groups: []
+
+    - name: Point puppet.conf at the ENC (idempotent marker block)
+      blockinfile:
+        path: "{{ _puppet_conf }}"
+        marker: "# {mark} {{ _marker }}"
+        create: yes
+        block: |
+          [server]
+          node_terminus = exec
+          external_nodes = {{ enc_dir }}/classify
+      register: _puppet_conf_change
+
+    - name: Restart puppetserver if puppet.conf changed
+      service:
+        name: puppetserver
+        state: restarted
+      when: _puppet_conf_change is changed
+      ignore_errors: yes

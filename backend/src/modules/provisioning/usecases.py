@@ -245,6 +245,9 @@ class InstallServiceUseCase:
         "check_health":            "check_node_health.yml",
         # Configure the Wazuh→Puppet closed remediation loop on the manager node.
         "wazuh_remediation":       "configure_wazuh_remediation.yml",
+        # One-time: enable the External Node Classifier on a Puppet Core master
+        # (node_terminus = exec + external_nodes in puppet.conf, restart server).
+        "puppet_core_enc":         "configure_puppet_core_enc.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master":           "puppet_master_host",
@@ -339,6 +342,9 @@ class InstallServiceUseCase:
             )
             extra_vars["sabc_webhook_secret"] = secret
             extra_vars["sabc_min_level"] = settings.wazuh_webhook_min_level
+        elif self._service == "puppet_core_enc":
+            settings = get_settings()
+            extra_vars["enc_dir"] = settings.puppet_core_enc_dir
         elif self._service == "check_health":
             host = await self._config.get("puppet_master_host")
             if host:

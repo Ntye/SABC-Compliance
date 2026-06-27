@@ -408,14 +408,36 @@ class SyncAllNodeGroupsUseCase:
     (reverse order) because PE refuses to delete a group that still has
     children.
     """
-    def __init__(self, repo, node_repo, wazuh_client, puppet_client):
+    def __init__(self, repo, node_repo, wazuh_client, puppet_client,
+                 puppet_core_client=None, config_repo=None):
         self._repo = repo
         self._node_repo = node_repo
         self._wazuh = wazuh_client
         self._puppet = puppet_client
+        self._core = puppet_core_client
+        self._config_repo = config_repo
+
+    async def _edition(self) -> str:
+        """Resolve the active Puppet edition: 'enterprise' (PE Advanced) or
+        'core' (open-source Puppet via ENC). Console-set value (config DB) wins
+        over the startup env default."""
+        if self._config_repo:
+            try:
+                e = await self._config_repo.get("puppet_edition")
+                if e:
+                    return e.strip().lower()
+            except Exception:
+                pass
+        from config import get_settings
+        return (get_settings().puppet_edition or "enterprise").strip().lower()
 
     async def execute(self) -> dict:
         groups = await self._repo.find_all()  # created_at ascending
+
+        # Puppet Core has no RBAC/Node-Classifier API — classification goes
+        # through the ENC path instead, which never touches those PE-only APIs.
+        if await self._edition() == "core":
+            return await self._sync_core(groups)
 
         # Is a Puppet master actually configured? If not, the classifier client
         # silently no-ops and we must NOT report groups as synced to PE.
@@ -665,6 +687,94 @@ class SyncAllNodeGroupsUseCase:
             "groups_pushed": pushed,
             "nodes_classified": total_nodes,
             "puppet_configured": puppet_ready,
+        }
+
+    async def _sync_core(self, groups) -> dict:
+        """Puppet Core sync: classify nodes via the External Node Classifier.
+
+        Builds one ENC document per managed node — its environment, every group
+        it belongs to (``sabc_groups``) and the most-specific bound InSpec
+        profile — and pushes the data to the master over SSH. Wazuh agent-group
+        sync still runs, exactly as in the PE path, since it is edition-agnostic.
+
+        No RBAC token, no Node Classifier API: nothing here calls a Puppet
+        Enterprise-only endpoint.
+        """
+        by_name: dict[str, NodeGroup] = {g.name: g for g in groups}
+
+        def depth(g: NodeGroup) -> int:
+            d, seen, cur = 0, set(), g
+            while cur and cur.parent in by_name and cur.parent not in seen:
+                seen.add(cur.parent)
+                cur = by_name[cur.parent]
+                d += 1
+            return d
+
+        ordered = sorted(groups, key=depth)  # shallow → deep
+        resolved = {g.id: await resolve_matching(g, self._node_repo) for g in groups}
+        total_nodes = sum(len(resolved[g.id]["ids"]) for g in groups)
+
+        # Accumulate per-certname classification. Processing shallow→deep means a
+        # deeper (more specific) group overrides the environment and InSpec
+        # profile, while a child without its own profile inherits the parent's.
+        classmap: dict[str, dict] = {}
+        for g in ordered:
+            for cn in resolved[g.id]["certnames"]:
+                entry = classmap.setdefault(cn, {
+                    "certname": cn,
+                    "environment": g.environment or "production",
+                    "groups": [],
+                    "inspec_profile": None,
+                })
+                entry["groups"].append(g.name)
+                if g.environment:
+                    entry["environment"] = g.environment
+                if g.inspec_profile_id:
+                    entry["inspec_profile"] = g.inspec_profile_id
+
+        classifications = list(classmap.values())
+
+        # Wazuh agent-group sync (same as the PE path; edition-independent).
+        wazuh_failed = 0
+        for g in ordered:
+            if g.group_type == "system" and not resolved[g.id]["certnames"]:
+                continue
+            try:
+                await self._wazuh.create_agent_group(g.name)
+                await self._wazuh.assign_agents_to_group(
+                    g.name, resolved[g.id]["hostnames"]
+                )
+            except Exception as e:
+                wazuh_failed += 1
+                logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
+
+        # Deploy the ENC data to the Puppet Core master.
+        core_ready = False
+        deployed = 0
+        try:
+            core_ready = bool(self._core) and await self._core.is_configured()
+        except Exception as e:
+            logger.warning("Puppet Core readiness check failed: %s", e)
+        if core_ready:
+            try:
+                res = await self._core.apply_classification(classifications)
+                deployed = res.get("deployed", 0)
+                for g in groups:
+                    g.puppet_synced = True
+                    g.updated_at = datetime.utcnow()
+                    await self._repo.update(g)
+            except Exception as e:
+                logger.warning("Puppet Core ENC deploy failed: %s", e)
+        else:
+            logger.info("Puppet Core master not configured — ENC deploy skipped.")
+
+        return {
+            "edition": "core",
+            "groups_total": len(groups),
+            "nodes_classified": total_nodes,
+            "enc_nodes_deployed": deployed,
+            "puppet_configured": core_ready,
+            "wazuh_failed": wazuh_failed,
         }
 
 
