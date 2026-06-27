@@ -309,10 +309,12 @@ function Build-Images {
                     New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
                     $cacheMount = ($cacheDir -replace '\\', '/') -replace '^([A-Za-z]):', { "/host_mnt/$($_.Groups[1].Value.ToLower())" }
                     Info "Pulling Ollama model '$ollamaModel' (cache: $cacheDir) ..."
-                    # 'ollama pull' needs a running server, so start one in the
-                    # background inside the container, wait for it, then pull.
+                    # No --platform here on purpose: model files are architecture-
+                    # independent, so reuse whatever ollama image is already present
+                    # instead of pulling the amd64 variant just to download data.
+                    # 'ollama pull' needs a running server, so start one first.
                     $pullCmd = "ollama serve >/tmp/serve.log 2>&1 & for i in `$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done; ollama pull '$ollamaModel'"
-                    & docker run --rm --platform linux/amd64 `
+                    & docker run --rm `
                         -v "${cacheMount}:/root/.ollama" `
                         --entrypoint /bin/sh "ollama/ollama:latest" -c $pullCmd
                     if ($LASTEXITCODE -ne 0) { Fail "Ollama model pull failed" }

@@ -203,10 +203,13 @@ build_images() {
           local cache_dir="${SABC_OLLAMA_CACHE:-$HOME/.cache/sabc-ollama}"
           mkdir -p "$cache_dir"
           info "Pulling Ollama model '${ollama_model}' (cache: $cache_dir) ..."
-          # The ollama CLI 'pull' talks to a running server, so start one in the
-          # background inside the container, wait until it answers, then pull.
-          # (Running 'ollama pull' alone fails: "could not connect to ollama server".)
-          docker run --rm --platform linux/amd64 \
+          # No --platform here on purpose: model files are architecture-
+          # independent (just weights/blobs), so we reuse whatever ollama image
+          # is already present locally instead of pulling the amd64 variant just
+          # to download data. The amd64 *runtime* image is built+cached above.
+          # 'ollama pull' needs a running server, so start one in the background
+          # inside the container, wait until it answers, then pull.
+          docker run --rm \
             -v "${cache_dir}:/root/.ollama" \
             --entrypoint /bin/sh ollama/ollama:latest -c \
             "ollama serve >/tmp/serve.log 2>&1 & for i in \$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done; ollama pull '${ollama_model}'"
