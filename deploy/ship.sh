@@ -218,7 +218,14 @@ build_images() {
           ok "Model archive: $SCRIPT_DIR/ollama-models.tar.gz"
         fi
       else
-        cp "$AI_MODELS" "$SCRIPT_DIR/ollama-models.tar.gz"
+        # Skip the copy when --ai-models already points at the destination
+        # (cp errors "are identical" otherwise).
+        ai_dest="$SCRIPT_DIR/ollama-models.tar.gz"
+        ai_src_real="$(cd "$(dirname "$AI_MODELS")" && pwd)/$(basename "$AI_MODELS")"
+        ai_dst_real="$(cd "$(dirname "$ai_dest")" && pwd)/$(basename "$ai_dest")"
+        if [[ "$ai_src_real" != "$ai_dst_real" ]]; then
+          cp "$AI_MODELS" "$ai_dest"
+        fi
         ok "Using model archive: $AI_MODELS"
       fi
     else
