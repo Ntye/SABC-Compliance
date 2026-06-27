@@ -214,6 +214,23 @@ function Send-File {
     if ($LASTEXITCODE -ne 0) { Fail "Transfer failed: $LocalPath" }
 }
 
+# Export a stock image to a tar, REUSING the local copy when it already exists
+# so we never re-pull over the internet on every build. Only stock third-party
+# images use this — the app images (backend/frontend) are always rebuilt.
+function Package-OrReuse {
+    param([string]$Image, [string]$Dest)
+    & docker image inspect $Image *>$null
+    if ($LASTEXITCODE -eq 0) {
+        Info "Reusing existing local image $Image (no pull)"
+    } else {
+        Info "Pulling $Image (linux/amd64) -- not present locally ..."
+        & docker pull --platform linux/amd64 $Image
+        if ($LASTEXITCODE -ne 0) { Fail "Pull failed: $Image" }
+    }
+    & docker save -o $Dest $Image
+    if ($LASTEXITCODE -ne 0) { Fail "Saving image failed: $Image" }
+}
+
 # -- Step 1: Build images -----------------------------------------------------
 function Build-Images {
     Info "Building Docker images for linux/amd64 ..."
@@ -260,40 +277,33 @@ function Build-Images {
         # Ollama runtime + model — only when -WithAI or -AiModels was passed and
         # this is not a frontend-only update (Ollama is used by the backend).
         if ((-not $FrontendOnly) -and ($WithAI -or ($AiModels -ne ""))) {
-            # Package the stock ollama/ollama runtime (server has no internet).
-            Info "Packaging ollama/ollama:latest runtime for linux/amd64 ..."
-            $ollactx = Join-Path $stage "ollactx"
-            New-Item -ItemType Directory -Force -Path $ollactx | Out-Null
-            Set-Content -Path (Join-Path $ollactx "Dockerfile") -Value "FROM ollama/ollama:latest" -Encoding ASCII
-            & docker buildx build --platform linux/amd64 `
-                -t "ollama/ollama:latest" `
-                --output "type=docker,dest=$stage\ollama-runtime.tar" $ollactx
-            if ($LASTEXITCODE -ne 0) { Fail "Ollama runtime packaging failed" }
-            Remove-Item -Recurse -Force $ollactx -ErrorAction SilentlyContinue
-
-            # Package alpine for model extraction and volume probe (server is airgapped).
-            Info "Packaging alpine:latest for linux/amd64 ..."
-            $alpinectx = Join-Path $stage "alpinectx"
-            New-Item -ItemType Directory -Force -Path $alpinectx | Out-Null
-            Set-Content -Path (Join-Path $alpinectx "Dockerfile") -Value "FROM alpine:latest" -Encoding ASCII
-            & docker buildx build --platform linux/amd64 -t "alpine:latest" --output "type=docker,dest=$stage\alpine.tar" $alpinectx
-            if ($LASTEXITCODE -ne 0) { Fail "alpine packaging failed" }
-            Remove-Item -Recurse -Force $alpinectx -ErrorAction SilentlyContinue
+            # Stock runtime + alpine — reused from the local image store if present.
+            Package-OrReuse "ollama/ollama:latest" "$stage\ollama-runtime.tar"
+            Package-OrReuse "alpine:latest"        "$stage\alpine.tar"
 
             if ($WithAI) {
                 $ollamaModel = if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2:3b" }
-                Info "Pulling Ollama model '$ollamaModel' on this build machine ..."
-                $modelTmp = Join-Path $stage "ollama-model-data"
-                New-Item -ItemType Directory -Force -Path $modelTmp | Out-Null
-                & docker run --rm --platform linux/amd64 `
-                    -v "${modelTmp}:/root/.ollama" `
-                    "ollama/ollama:latest" pull $ollamaModel
-                if ($LASTEXITCODE -ne 0) { Fail "Ollama model pull failed" }
-                Info "Archiving model files ..."
-                & tar -czf (Join-Path $ScriptDir "ollama-models.tar.gz") -C $modelTmp .
-                if ($LASTEXITCODE -ne 0) { Fail "Model archive failed" }
-                Remove-Item -Recurse -Force $modelTmp -ErrorAction SilentlyContinue
-                Ok "Model archive: $(Join-Path $ScriptDir 'ollama-models.tar.gz')"
+                $aiArchive = Join-Path $ScriptDir "ollama-models.tar.gz"
+                if (Test-Path $aiArchive) {
+                    # Already downloaded on a previous run — don't pull GBs again.
+                    Ok "Reusing existing model archive: $aiArchive"
+                    Info "(delete it to force a fresh download of '$ollamaModel')"
+                } else {
+                    # Persistent cache so a fresh archive build skips blobs Ollama
+                    # already has locally.
+                    $cacheDir = if ($env:SABC_OLLAMA_CACHE) { $env:SABC_OLLAMA_CACHE } else { Join-Path $env:LOCALAPPDATA "sabc-ollama" }
+                    New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+                    $cacheMount = ($cacheDir -replace '\\', '/') -replace '^([A-Za-z]):', { "/host_mnt/$($_.Groups[1].Value.ToLower())" }
+                    Info "Pulling Ollama model '$ollamaModel' (cache: $cacheDir) ..."
+                    & docker run --rm --platform linux/amd64 `
+                        -v "${cacheMount}:/root/.ollama" `
+                        "ollama/ollama:latest" pull $ollamaModel
+                    if ($LASTEXITCODE -ne 0) { Fail "Ollama model pull failed" }
+                    Info "Archiving model files ..."
+                    & tar -czf $aiArchive -C $cacheDir .
+                    if ($LASTEXITCODE -ne 0) { Fail "Model archive failed" }
+                    Ok "Model archive: $aiArchive"
+                }
             } else {
                 $aiDest = Join-Path $ScriptDir "ollama-models.tar.gz"
                 $aiSrc  = (Resolve-Path $AiModels).Path
@@ -308,13 +318,7 @@ function Build-Images {
         # postgres is only needed for full deploys — for partial updates the
         # database container is already running and must not be replaced.
         if ((-not $BackendOnly) -and (-not $FrontendOnly)) {
-            Info "Packaging postgres:16-alpine for linux/amd64 ..."
-            $pgctx = Join-Path $stage "pgctx"
-            New-Item -ItemType Directory -Force -Path $pgctx | Out-Null
-            Set-Content -Path (Join-Path $pgctx "Dockerfile") -Value "FROM postgres:16-alpine" -Encoding ASCII
-            & docker buildx build --platform linux/amd64 -t postgres:16-alpine --output "type=docker,dest=$stage\postgres.tar" $pgctx
-            if ($LASTEXITCODE -ne 0) { Fail "postgres packaging failed" }
-            Remove-Item -Recurse -Force $pgctx -ErrorAction SilentlyContinue
+            Package-OrReuse "postgres:16-alpine" "$stage\postgres.tar"
         }
     } finally {
         Pop-Location
@@ -660,13 +664,16 @@ function Start-Containers {
         'set -e',
         '# Extract Ollama model archive into the named volume if it was transferred.',
         "if [ -f `"$RemoteDir/ollama-models.tar.gz`" ]; then",
-        '  echo "[ship] Extracting Ollama model files into Docker volume ..."',
         '  docker volume create sabc-ollama-models 2>/dev/null || true',
-        '  docker run --rm \',
-        '    -v sabc-ollama-models:/root/.ollama \',
-        "    -v $RemoteDir/ollama-models.tar.gz:/src/models.tar.gz \",
-        '    alpine tar -xzf /src/models.tar.gz -C /root/.ollama',
-        '  echo "[ship] Ollama model files extracted."',
+        "  arch_stamp=`$(stat -c %Y `"$RemoteDir/ollama-models.tar.gz`" 2>/dev/null || echo 0)",
+        '  vol_stamp=$(docker run --rm -v sabc-ollama-models:/m alpine cat /m/.sabc-archive-stamp 2>/dev/null || echo 0)',
+        '  if [ "$arch_stamp" = "$vol_stamp" ] && [ "$arch_stamp" != "0" ]; then',
+        '    echo "[ship] Ollama model already present in volume -- skipping extraction."',
+        '  else',
+        '    echo "[ship] Extracting Ollama model files into Docker volume ..."',
+        "    docker run --rm -v sabc-ollama-models:/root/.ollama -v `"$RemoteDir/ollama-models.tar.gz:/src/models.tar.gz`" alpine sh -c `"tar -xzf /src/models.tar.gz -C /root/.ollama && echo `$arch_stamp > /root/.ollama/.sabc-archive-stamp`"",
+        '    echo "[ship] Ollama model files extracted."',
+        '  fi',
         'fi',
         'PROFILE=""',
         "COMPOSE=`"$composePrefix`"",

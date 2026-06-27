@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, CheckCircle, ChevronDown, Cpu, KeyRound, Link, RefreshCw,
-  Search, Server, ShieldCheck, XCircle,
+  Search, Server, ShieldCheck, XCircle, GitBranch,
 } from 'lucide-react'
 import {
   getInfrastructureStatus, installService, listNodes,
   setPuppetMasterHost, setWazuhManagerHost, setPuppetCredentials, jobWsUrl,
   checkPuppetAgentPlatform, probeWazuhDashboardPort,
   getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
-  checkNodeHealth,
+  checkNodeHealth, getPuppetEdition, switchPuppetEdition,
 } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -423,14 +423,90 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
 
 // ── Tab 1: Masters & Managers ─────────────────────────────────────────────────
 
+// ── Puppet edition switch (PE Advanced ⇄ Puppet Core) ────────────────────────
+
+function EditionControl({ nodes, onJobStarted, onCancel, t }) {
+  const [current, setCurrent]   = useState(null)   // 'enterprise' | 'core' | null
+  const [target, setTarget]     = useState('core')
+  const [nodeId, setNodeId]     = useState('')
+  const [busy, setBusy]         = useState(false)
+  const toast = useToast()
+
+  useEffect(() => {
+    getPuppetEdition()
+      .then((r) => { setCurrent(r.edition); setTarget(r.edition === 'core' ? 'enterprise' : 'core') })
+      .catch(() => setCurrent(null))
+  }, [])
+
+  async function handleSwitch() {
+    if (!nodeId) { toast('Select the master node to switch', 'error'); return }
+    setBusy(true)
+    try {
+      const job = await switchPuppetEdition(target, nodeId)
+      toast(`Switching master to ${target === 'core' ? 'Puppet Core' : 'Puppet Enterprise'}…`, 'success')
+      onJobStarted(job)
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const label = (e) => (e === 'core' ? 'Puppet Core (open source)' : e === 'enterprise' ? 'Puppet Enterprise' : 'Unknown')
+
+  return (
+    <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
+        Puppet Edition
+      </p>
+      <p className="text-[11px] text-gray-500">
+        Current: <span className="font-medium text-gray-700">{label(current)}</span>.
+        Switching reinstalls the master with the chosen edition and removes the other
+        (PE and Core cannot coexist). Puppet Core uses the no-cost ENC classifier;
+        PE Advanced uses the RBAC + Node Classifier APIs.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          className="px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand"
+        >
+          <option value="core">Switch to Puppet Core (open source)</option>
+          <option value="enterprise">Switch to Puppet Enterprise</option>
+        </select>
+        <select
+          value={nodeId}
+          onChange={(e) => setNodeId(e.target.value)}
+          className="px-3 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand"
+        >
+          <option value="">Select master node…</option>
+          {nodes.map((n) => (
+            <option key={n.id} value={n.id}>{n.hostname} — {n.ip}</option>
+          ))}
+        </select>
+        <button onClick={handleSwitch} disabled={busy || !nodeId} className={btn(true)}>
+          {busy && <Spinner size={13} />}
+          {busy ? 'Starting…' : 'Switch'}
+        </button>
+        <button onClick={onCancel} className={btn(false)}>{t('common.cancel')}</button>
+      </div>
+      <p className="text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+        ⚠ Switching regenerates the master CA — agents must be re-enrolled afterwards.
+        Puppet Enterprise also requires its installer tarball staged on the platform.
+      </p>
+    </div>
+  )
+}
+
 function MasterCard({ service, status, nodes, onJobStarted, t }) {
   const [showConnect, setShowConnect]   = useState(false)
   const [showInstall, setShowInstall]   = useState(false)
   const [showCreds,   setShowCreds]     = useState(false)
+  const [showEdition, setShowEdition]   = useState(false)
   const isPuppet      = service === 'puppet'
   const masterService = isPuppet ? 'puppet-master' : 'wazuh-manager'
 
-  function closeAll() { setShowConnect(false); setShowInstall(false); setShowCreds(false) }
+  function closeAll() { setShowConnect(false); setShowInstall(false); setShowCreds(false); setShowEdition(false) }
 
   return (
     <>
@@ -476,11 +552,20 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
           </button>
           {isPuppet && (
             <button
-              onClick={() => { setShowCreds(!showCreds); setShowConnect(false); setShowInstall(false) }}
+              onClick={() => { setShowCreds(!showCreds); setShowConnect(false); setShowInstall(false); setShowEdition(false) }}
               className={btnSm(false)}
             >
               <KeyRound size={11} />
               {t('infra.setPECredentials')}
+            </button>
+          )}
+          {isPuppet && (
+            <button
+              onClick={() => { setShowEdition(!showEdition); setShowConnect(false); setShowInstall(false); setShowCreds(false) }}
+              className={btnSm(false)}
+            >
+              <GitBranch size={11} />
+              Edition
             </button>
           )}
         </div>
@@ -498,6 +583,15 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
           <PuppetCredentialsForm
             onSave={() => setShowCreds(false)}
             onCancel={() => setShowCreds(false)}
+            t={t}
+          />
+        )}
+
+        {isPuppet && showEdition && (
+          <EditionControl
+            nodes={nodes}
+            onJobStarted={(job) => { setShowEdition(false); onJobStarted(job) }}
+            onCancel={() => setShowEdition(false)}
             t={t}
           />
         )}

@@ -294,6 +294,16 @@ export async function setWazuhManagerHost(host) {
   return request('POST', '/infrastructure/wazuh-manager', { host })
 }
 
+export async function getPuppetEdition() {
+  return request('GET', '/infrastructure/puppet-edition')
+}
+
+export async function switchPuppetEdition(edition, nodeId) {
+  // Reinstalls the master with the chosen edition (enterprise | core),
+  // purging the opposite edition, and auto-configures the ENC for core.
+  return request('POST', '/infrastructure/puppet-edition/switch', { edition, node_id: nodeId })
+}
+
 export async function probeWazuhDashboardPort(nodeId) {
   return request('GET', `/infrastructure/probe-dashboard-port?node_id=${encodeURIComponent(nodeId)}`)
 }

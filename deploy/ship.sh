@@ -103,6 +103,22 @@ remote_docker() {
   ssh -o StrictHostKeyChecking=no "$TARGET" "sudo $*"
 }
 
+# Export a stock image to a tar, REUSING the local copy when it already exists
+# so we never re-pull over the internet on every build. Only stock third-party
+# images (postgres, ollama runtime, alpine) use this — the app images
+# (backend/frontend) are always rebuilt because their source changes.
+#   $1 = image ref (e.g. postgres:16-alpine)   $2 = destination tar path
+package_or_reuse() {
+  local image="$1" dest="$2"
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    info "Reusing existing local image $image (no pull)"
+  else
+    info "Pulling $image (linux/amd64) — not present locally ..."
+    docker pull --platform linux/amd64 "$image"
+  fi
+  docker save -o "$dest" "$image"
+}
+
 # ── Step 1: Build images ────────────────────────────────────────────────────
 build_images() {
   info "Building Docker images for linux/amd64 ..."
@@ -156,38 +172,29 @@ build_images() {
   # Neither         : skip; chat widget degrades gracefully on the server
   if [[ "$FRONTEND_ONLY" == false ]]; then
     if [[ "$WITH_AI" == "true" || -n "$AI_MODELS" ]]; then
-      # Package the stock ollama/ollama runtime (server has no internet).
-      info "Packaging ollama/ollama:latest runtime for linux/amd64 ..."
-      local ollactx="$STAGE/ollactx"
-      mkdir -p "$ollactx"
-      echo 'FROM ollama/ollama:latest' > "$ollactx/Dockerfile"
-      docker buildx build --platform linux/amd64 \
-        -t ollama/ollama:latest \
-        --output "type=docker,dest=$STAGE/ollama-runtime.tar" "$ollactx"
-      rm -rf "$ollactx"
-
-      # Package alpine for model extraction and volume probe (server is airgapped).
-      info "Packaging alpine:latest for linux/amd64 ..."
-      local alpinectx="$STAGE/alpinectx"
-      mkdir -p "$alpinectx"
-      echo 'FROM alpine:latest' > "$alpinectx/Dockerfile"
-      docker buildx build --platform linux/amd64 \
-        -t alpine:latest \
-        --output "type=docker,dest=$STAGE/alpine.tar" "$alpinectx"
-      rm -rf "$alpinectx"
+      # Stock runtime + alpine — reused from the local image store if present.
+      package_or_reuse ollama/ollama:latest "$STAGE/ollama-runtime.tar"
+      package_or_reuse alpine:latest        "$STAGE/alpine.tar"
 
       if [[ "$WITH_AI" == "true" ]]; then
         local ollama_model="${OLLAMA_MODEL:-llama3.2:3b}"
-        info "Pulling Ollama model '${ollama_model}' on this build machine ..."
-        local model_tmp="$STAGE/ollama-model-data"
-        mkdir -p "$model_tmp"
-        docker run --rm --platform linux/amd64 \
-          -v "${model_tmp}:/root/.ollama" \
-          ollama/ollama:latest pull "${ollama_model}"
-        info "Archiving model files ..."
-        tar -czf "$SCRIPT_DIR/ollama-models.tar.gz" -C "$model_tmp" .
-        rm -rf "$model_tmp"
-        ok "Model archive: $SCRIPT_DIR/ollama-models.tar.gz"
+        if [[ -f "$SCRIPT_DIR/ollama-models.tar.gz" ]]; then
+          # Already downloaded on a previous run — don't pull gigabytes again.
+          ok "Reusing existing model archive: $SCRIPT_DIR/ollama-models.tar.gz"
+          info "(delete it to force a fresh download of '${ollama_model}')"
+        else
+          # Persistent cache so even a fresh archive build skips re-downloading
+          # blobs Ollama already has locally.
+          local cache_dir="${SABC_OLLAMA_CACHE:-$HOME/.cache/sabc-ollama}"
+          mkdir -p "$cache_dir"
+          info "Pulling Ollama model '${ollama_model}' (cache: $cache_dir) ..."
+          docker run --rm --platform linux/amd64 \
+            -v "${cache_dir}:/root/.ollama" \
+            ollama/ollama:latest pull "${ollama_model}"
+          info "Archiving model files ..."
+          tar -czf "$SCRIPT_DIR/ollama-models.tar.gz" -C "$cache_dir" .
+          ok "Model archive: $SCRIPT_DIR/ollama-models.tar.gz"
+        fi
       else
         cp "$AI_MODELS" "$SCRIPT_DIR/ollama-models.tar.gz"
         ok "Using model archive: $AI_MODELS"
@@ -200,14 +207,7 @@ build_images() {
   # postgres is only needed for full deploys — for partial updates the database
   # container is already running on the server and must not be replaced.
   if [[ "$BACKEND_ONLY" == false && "$FRONTEND_ONLY" == false ]]; then
-    info "Packaging postgres:16-alpine for linux/amd64 ..."
-    local pgctx="$STAGE/pgctx"
-    mkdir -p "$pgctx"
-    echo 'FROM postgres:16-alpine' > "$pgctx/Dockerfile"
-    docker buildx build --platform linux/amd64 \
-      -t postgres:16-alpine \
-      --output "type=docker,dest=$STAGE/postgres.tar" "$pgctx"
-    rm -rf "$pgctx"
+    package_or_reuse postgres:16-alpine "$STAGE/postgres.tar"
   fi
 
   ok "Image archives built (linux/amd64)"
@@ -519,13 +519,25 @@ if docker compose version >/dev/null 2>&1; then _bin="docker compose"; else _bin
 # so the stock ollama/ollama container can serve it. Idempotent — re-running
 # overwrites with the same (or newer) model files.
 if [ -f "$REMOTE_DIR/ollama-models.tar.gz" ]; then
-  echo "[ship.sh] Extracting Ollama model files into Docker volume ..."
   docker volume create sabc-ollama-models 2>/dev/null || true
-  docker run --rm \
-    -v sabc-ollama-models:/root/.ollama \
-    -v "$REMOTE_DIR/ollama-models.tar.gz:/src/models.tar.gz" \
-    alpine tar -xzf /src/models.tar.gz -C /root/.ollama
-  echo "[ship.sh] Ollama model files extracted."
+  # Skip extraction when the volume is already populated — avoids unpacking
+  # several GB on every deploy. Touch a stamp file matching the archive's mtime
+  # so a NEWER archive (model change) still re-extracts.
+  arch_stamp=\$(stat -c %Y "$REMOTE_DIR/ollama-models.tar.gz" 2>/dev/null || echo 0)
+  vol_stamp=\$(docker run --rm -v sabc-ollama-models:/m alpine \
+    sh -c 'cat /m/.sabc-archive-stamp 2>/dev/null || echo 0' 2>/dev/null || echo 0)
+  if docker run --rm -v sabc-ollama-models:/m alpine \
+       sh -c '[ -d /m/models/blobs ] && [ -n "\$(ls -A /m/models/blobs 2>/dev/null)" ]' 2>/dev/null \
+     && [ "\$arch_stamp" = "\$vol_stamp" ]; then
+    echo "[ship.sh] Ollama model already present in volume (stamp \$vol_stamp) — skipping extraction."
+  else
+    echo "[ship.sh] Extracting Ollama model files into Docker volume ..."
+    docker run --rm \
+      -v sabc-ollama-models:/root/.ollama \
+      -v "$REMOTE_DIR/ollama-models.tar.gz:/src/models.tar.gz" \
+      alpine sh -c "tar -xzf /src/models.tar.gz -C /root/.ollama && echo \$arch_stamp > /root/.ollama/.sabc-archive-stamp"
+    echo "[ship.sh] Ollama model files extracted."
+  fi
 fi
 
 COMPOSE="\$_bin -f $REMOTE_DIR/docker-compose.yml --project-directory $REMOTE_DIR"
