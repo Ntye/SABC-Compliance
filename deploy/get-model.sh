@@ -42,9 +42,13 @@ info "Pulling Ollama model '${MODEL}' (this may take several minutes) ..."
 MODEL_DIR="$(mktemp -d)"
 trap 'rm -rf "$MODEL_DIR"' EXIT
 
+# 'ollama pull' talks to a running server, so start one in the background inside
+# the container, wait until it answers, then pull. (Running 'ollama pull' alone
+# fails with "could not connect to ollama server".)
 docker run --rm \
   -v "${MODEL_DIR}:/root/.ollama" \
-  ollama/ollama:latest pull "${MODEL}"
+  --entrypoint /bin/sh ollama/ollama:latest -c \
+  "ollama serve >/tmp/serve.log 2>&1 & for i in \$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done; ollama pull '${MODEL}'"
 
 info "Archiving model files → $OUTPUT ..."
 tar -czf "$OUTPUT" -C "$MODEL_DIR" .

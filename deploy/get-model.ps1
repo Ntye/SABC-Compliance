@@ -70,9 +70,12 @@ try {
     # forward slashes, but we still normalise the colon away to be safe.
     $dockerMount = $modelDirFwd -replace '^([A-Za-z]):', { "/host_mnt/$($_.Groups[1].Value.ToLower())" }
 
+    # 'ollama pull' needs a running server, so start one in the background inside
+    # the container, wait until it answers, then pull.
+    $pullCmd = "ollama serve >/tmp/serve.log 2>&1 & for i in `$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done; ollama pull '$Model'"
     & docker run --rm `
         -v "${dockerMount}:/root/.ollama" `
-        ollama/ollama:latest pull $Model
+        --entrypoint /bin/sh ollama/ollama:latest -c $pullCmd
     if ($LASTEXITCODE -ne 0) { Fail "Docker pull failed (exit $LASTEXITCODE)" }
 
     Info "Archiving model files -> $Output ..."
