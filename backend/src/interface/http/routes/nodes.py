@@ -223,7 +223,7 @@ async def get_host_info(
 ):
     """
     Returns the IP, hostname, and detected admin SSH user of the platform host.
-    Used by the Add VM page to pre-fill the form when registering this machine.
+    Used by the Add Server page to pre-fill the form when registering this machine.
     Set HOST_IP and HOST_ADMIN_USER in .env for reliable values.
     """
     host_ip = _detect_host_ip()

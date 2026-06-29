@@ -196,7 +196,7 @@ passwordless sudo. No manual SSH key copying needed.
 
 ### Option A — Server can reach the platform (online)
 
-Open the **Add VM** page. Copy the one-liner and run it on the target server as root:
+Open the **Add Server** page. Copy the one-liner and run it on the target server as root:
 
 ```bash
 curl -sSL http://<platform-ip>/api/nodes/bootstrap | sudo bash
@@ -206,7 +206,7 @@ The script is served unauthenticated (it only contains the public key, which is 
 
 ### Option B — Airgap (no network from server to platform)
 
-1. Click **Download setup-node.sh** on the Add VM page.
+1. Click **Download setup-node.sh** on the Add Server page.
    The platform's public key is embedded in the script at download time.
 2. Transfer the script to the target server (USB, SCP, etc.).
 3. On the target server:
@@ -217,7 +217,7 @@ sudo bash setup-node.sh
 
 ### Register the server
 
-After the bootstrap script completes, fill in the **Add VM** form:
+After the bootstrap script completes, fill in the **Add Server** form:
 
 | Field | Notes |
 |-------|-------|
@@ -237,7 +237,7 @@ Click **Register server**. The platform will:
 
 The platform is SSH-based and provider-agnostic. You can manage:
 - EC2 instances in any AWS account (any region)
-- On-premise VMs
+- On-premise Servers
 - VPS on Hetzner, OVH, Azure, etc.
 
 The only requirement is that **the platform can reach the server on port 22**. For EC2
@@ -586,7 +586,7 @@ SABC-Compliance/
 │   │   ├── context/       ThemeContext, LangContext (EN + FR)
 │   │   ├── i18n/          translations.js (English + French)
 │   │   ├── lib/           api.js (all API calls), tw.js (Tailwind helpers)
-│   │   └── pages/         One file per page (Overview, Nodes, AddVm, …)
+│   │   └── pages/         One file per page (Overview, Nodes, AddServer, …)
 │   └── Dockerfile
 ├── deploy/
 │   └── ship.sh            EC2 build-transfer-deploy script

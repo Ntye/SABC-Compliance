@@ -119,7 +119,7 @@ export default function Sidebar() {
         {nodesOpen && (
           <>
             <NavItem path="/nodes"        label={t('nav.nodes')}       icon={Server}     />
-            <NavItem path="/add-vm"       label={t('nav.addVm')}       icon={PlusCircle} />
+            <NavItem path="/add-server"       label={t('nav.addServer')}       icon={PlusCircle} />
             <NavItem path="/node-groups"  label={t('nav.nodeGroups')}  icon={Layers}     />
           </>
         )}

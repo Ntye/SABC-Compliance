@@ -17,7 +17,7 @@ const DEFAULT_FORM = {
   tags: '',
 }
 
-export default function AddVmPage() {
+export default function AddServerPage() {
   const toast = useToast()
   const t = useT()
   const [form, setForm] = useState(DEFAULT_FORM)
@@ -122,17 +122,17 @@ export default function AddVmPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
-      <h2 className="text-[18px] font-semibold text-gray-900">{t('addVm.title')}</h2>
+      <h2 className="text-[18px] font-semibold text-gray-900">{t('addServer.title')}</h2>
 
       {/* ── Zone 1: Registration form ── */}
       <div className="bg-white rounded-xl border border-gray-100 p-6 max-w-2xl">
-        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">{t('addVm.cardTitle')}</h3>
+        <h3 className="text-[14px] font-semibold text-gray-800 mb-5">{t('addServer.cardTitle')}</h3>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Row: hostname + IP (always visible) */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                {t('addVm.hostname')} <span className="text-red-500">{t('addVm.required')}</span>
+                {t('addServer.hostname')} <span className="text-red-500">{t('addServer.required')}</span>
               </label>
               <input
                 required
@@ -144,7 +144,7 @@ export default function AddVmPage() {
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                {t('addVm.ipAddress')} <span className="text-red-500">{t('addVm.required')}</span>
+                {t('addServer.ipAddress')} <span className="text-red-500">{t('addServer.required')}</span>
               </label>
               <input
                 required
@@ -163,7 +163,7 @@ export default function AddVmPage() {
             className="flex items-center gap-1.5 text-[11px] font-medium text-gray-400 hover:text-gray-600 transition-colors"
           >
             {showAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            {t('addVm.advancedSetup')}
+            {t('addServer.advancedSetup')}
           </button>
 
           {showAdvanced && (
@@ -171,7 +171,7 @@ export default function AddVmPage() {
               {/* Row: SSH port + SSH user */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.sshPort')}</label>
+                  <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addServer.sshPort')}</label>
                   <input
                     type="number"
                     value={form.ssh_port}
@@ -181,7 +181,7 @@ export default function AddVmPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.sshUser')}</label>
+                  <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addServer.sshUser')}</label>
                   <input
                     value={form.ssh_user}
                     onChange={set('ssh_user')}
@@ -194,7 +194,7 @@ export default function AddVmPage() {
               {/* SSH key path */}
               <div>
                 <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                  {t('addVm.sshKeyPath')} <span className="text-gray-400">{t('addVm.sshKeyHint')}</span>
+                  {t('addServer.sshKeyPath')} <span className="text-gray-400">{t('addServer.sshKeyHint')}</span>
                 </label>
                 <input
                   value={form.ssh_key_path}
@@ -206,7 +206,7 @@ export default function AddVmPage() {
 
               {/* Description */}
               <div>
-                <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addVm.description')}</label>
+                <label className="block text-[11px] font-medium text-gray-500 mb-1.5">{t('addServer.description')}</label>
                 <input
                   value={form.description}
                   onChange={set('description')}
@@ -218,7 +218,7 @@ export default function AddVmPage() {
               {/* Tags */}
               <div>
                 <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                  {t('addVm.tags')} <span className="text-gray-400">{t('addVm.tagsHint')}</span>
+                  {t('addServer.tags')} <span className="text-gray-400">{t('addServer.tagsHint')}</span>
                 </label>
                 <input
                   value={form.tags}
@@ -237,7 +237,7 @@ export default function AddVmPage() {
             className={`${btn(true)} w-full justify-center`}
           >
             {submitting && <Spinner size={14} />}
-            {submitting ? t('addVm.registering') : t('addVm.register')}
+            {submitting ? t('addServer.registering') : t('addServer.register')}
           </button>
         </form>
 
@@ -247,7 +247,7 @@ export default function AddVmPage() {
             <div className="flex items-start gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
               <CheckCircle size={16} className="text-green-600 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-medium text-green-800">{t('addVm.successTitle')}</p>
+                <p className="text-[13px] font-medium text-green-800">{t('addServer.successTitle')}</p>
                 <p className="text-[12px] text-green-700 mt-0.5">
                   {result.node.hostname} · {result.node.os_name || result.node.os_family || 'Unknown OS'} · {result.node.ip}
                 </p>
@@ -268,7 +268,7 @@ export default function AddVmPage() {
               <div className="rounded-lg border border-gray-200 overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-console-bg border-b border-white/10">
                   <span className="text-[11px] font-semibold text-console-accent uppercase tracking-widest">
-                    {t('addVm.detectTitle')}
+                    {t('addServer.detectTitle')}
                   </span>
                   {!detectDone && <Spinner size={12} className="text-console-accent" />}
                   {detectDone && <CheckCircle size={12} className="text-green-400" />}
@@ -291,7 +291,7 @@ export default function AddVmPage() {
           <div className="mt-4 flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
             <XCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-[13px] font-medium text-red-700">{t('addVm.failTitle')}</p>
+              <p className="text-[13px] font-medium text-red-700">{t('addServer.failTitle')}</p>
               <p className="text-[12px] text-red-600 mt-0.5">{result.error}</p>
             </div>
           </div>
@@ -302,10 +302,10 @@ export default function AddVmPage() {
       <div className="bg-console-bg rounded-xl p-6 max-w-2xl">
         <div className="flex items-center gap-2 mb-4">
           <Terminal size={14} className="text-console-accent" />
-          <h3 className="text-[13px] font-semibold text-console-text">{t('addVm.helper.title')}</h3>
+          <h3 className="text-[13px] font-semibold text-console-text">{t('addServer.helper.title')}</h3>
         </div>
         <p className="text-[12px] text-console-muted mb-5 leading-relaxed">
-          {t('addVm.helper.description')}
+          {t('addServer.helper.description')}
         </p>
 
         {/* Option 1 — Online: curl | sudo bash */}
@@ -313,13 +313,13 @@ export default function AddVmPage() {
           <div className="flex items-center gap-2 mb-3">
             <Globe size={12} className="text-console-accent" />
             <p className="text-[10px] font-semibold uppercase tracking-widest text-console-accent">
-              {t('addVm.helper.onlineTitle')}
+              {t('addServer.helper.onlineTitle')}
             </p>
           </div>
 
           <div className="mb-3">
             <label className="block text-[10px] font-medium text-console-muted mb-1.5">
-              {t('addVm.helper.platformUrl')}
+              {t('addServer.helper.platformUrl')}
             </label>
             <input
               value={platformUrl}
@@ -328,11 +328,11 @@ export default function AddVmPage() {
               className="w-full px-3 py-2 text-[12px] font-mono bg-console-surface border border-white/10 rounded-lg outline-none text-console-text placeholder:text-console-muted focus:border-white/30 transition-colors"
             />
             <p className="text-[10px] text-console-muted mt-1">
-              {t('addVm.helper.platformUrlHint')}
+              {t('addServer.helper.platformUrlHint')}
             </p>
           </div>
 
-          <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.runOnTarget')}</p>
+          <p className="text-[10px] text-console-muted mb-1.5">{t('addServer.helper.runOnTarget')}</p>
           <div className="bg-console-surface rounded-lg p-3 flex items-start justify-between gap-3">
             <pre className="text-[12px] font-mono text-console-text whitespace-pre-wrap flex-1 leading-relaxed">{curlCmd}</pre>
             <CopyButton
@@ -346,7 +346,7 @@ export default function AddVmPage() {
         {/* Divider */}
         <div className="flex items-center gap-3 my-5">
           <div className="flex-1 border-t border-white/10" />
-          <span className="text-[10px] font-semibold text-console-muted uppercase">{t('addVm.helper.or')}</span>
+          <span className="text-[10px] font-semibold text-console-muted uppercase">{t('addServer.helper.or')}</span>
           <div className="flex-1 border-t border-white/10" />
         </div>
 
@@ -355,7 +355,7 @@ export default function AddVmPage() {
           <div className="flex items-center gap-2 mb-3">
             <HardDriveDownload size={12} className="text-console-accent" />
             <p className="text-[10px] font-semibold uppercase tracking-widest text-console-accent">
-              {t('addVm.helper.airgapTitle')}
+              {t('addServer.helper.airgapTitle')}
             </p>
           </div>
 
@@ -369,15 +369,15 @@ export default function AddVmPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-console-accent/20 hover:bg-console-accent/30 border border-console-accent/40 text-console-accent rounded-lg text-[12px] font-semibold transition-colors"
               >
                 <Download size={13} />
-                {t('addVm.helper.downloadBtn')}
+                {t('addServer.helper.downloadBtn')}
               </button>
             </div>
             <p className="text-[10px] text-console-muted pt-1.5 leading-relaxed">
-              {t('addVm.helper.airgapSteps')}
+              {t('addServer.helper.airgapSteps')}
             </p>
           </div>
 
-          <p className="text-[10px] text-console-muted mb-1.5">{t('addVm.helper.thenRun')}</p>
+          <p className="text-[10px] text-console-muted mb-1.5">{t('addServer.helper.thenRun')}</p>
           <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
             <pre className="text-[12px] font-mono text-console-text">{airgapCmd}</pre>
             <CopyButton

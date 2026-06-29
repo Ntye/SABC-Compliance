@@ -14,7 +14,7 @@ const SERVICE_LABELS = {
   'puppet-agent':          'Puppet Agent Install',
   'wazuh-manager':         'Wazuh Manager Install',
   'wazuh-agent':           'Wazuh Agent Install',
-  'provision':             'VM Provision (Add VM)',
+  'provision':             'Server Provision (Add Server)',
   'scan-verify':           'Compliance Scan',
   'install_check_health':  'Node Health Check',
   'detect_agents':         'Agent Detection',

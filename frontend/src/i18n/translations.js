@@ -9,7 +9,7 @@ export const translations = {
       enrolled: 'enrolled', notEnrolled: 'none', active: 'active', revoked: 'revoked',
     },
     nav: {
-      overview: 'Overview', nodes: 'Node Registry', addVm: 'Add VM',
+      overview: 'Overview', nodes: 'Node Registry', addServer: 'Add Server',
       infrastructure: 'Infrastructure', jobs: 'Jobs', compliance: 'Compliance',
       rules: 'Puppet Rules', keys: 'API Keys', audit: 'Audit Log',
       apiDocs: 'API Docs ↗', signOut: 'Sign out', platform: 'Compliance Platform',
@@ -67,7 +67,7 @@ export const translations = {
       active: 'Active', deactivate: 'Remove key',
       overrideTooltip: 'Override with a different API key',
       deactivated: 'API key removed — back to view-only mode',
-      pageOverview: 'Overview', pageNodes: 'Node Registry', pageAddVm: 'Add VM',
+      pageOverview: 'Overview', pageNodes: 'Node Registry', pageAddServer: 'Add Server',
       pageInfrastructure: 'Infrastructure', pageJobs: 'Jobs', pageCompliance: 'Compliance',
       pageRules: 'Puppet Rules', pageKeys: 'API Keys', pageAudit: 'Audit Log',
       pageProfiles: 'Custom Profiles',
@@ -87,7 +87,7 @@ export const translations = {
       colStatus: 'Status', colHostname: 'Hostname / FQDN', colIp: 'IP Address',
       colOs: 'OS', colSshPort: 'SSH Port', colPuppet: 'Puppet', colWazuh: 'Wazuh',
       colLastSeen: 'Last Seen', colActions: 'Actions',
-      noNodes: 'No nodes registered', noNodesDesc: 'Go to Add VM to register your first server',
+      noNodes: 'No nodes registered', noNodesDesc: 'Go to Add Server to register your first server',
       dnsIssue: 'DNS not resolving — click to fix',
       summary: '{{count}} node{{plural}} • {{reachable}} reachable',
       dnsIssues: ' • {{count}} DNS issue{{plural}}',
@@ -157,8 +157,8 @@ export const translations = {
         resourcesFixed: '{{n}} resources enforced',
       },
     },
-    addVm: {
-      title: 'Add VM', cardTitle: 'Register a Linux Server',
+    addServer: {
+      title: 'Add Server', cardTitle: 'Register a Linux Server',
       hostname: 'Hostname', required: '*', ipAddress: 'IP Address',
       sshPort: 'SSH Port', sshUser: 'SSH User',
       sshKeyPath: 'SSH Key Path', sshKeyHint: '(optional — uses platform default if blank)',
@@ -568,7 +568,7 @@ export const translations = {
       enrolled: 'enrôlé', notEnrolled: 'aucun', active: 'actif', revoked: 'révoqué',
     },
     nav: {
-      overview: 'Aperçu', nodes: 'Registre des nœuds', addVm: 'Ajouter VM',
+      overview: 'Aperçu', nodes: 'Registre des nœuds', addServer: 'Ajouter VM',
       infrastructure: 'Infrastructure', jobs: 'Tâches', compliance: 'Conformité',
       rules: 'Règles Puppet', keys: 'Clés API', audit: 'Journal d\'audit',
       apiDocs: 'Docs API ↗', signOut: 'Déconnexion', platform: 'Plateforme de conformité',
@@ -626,7 +626,7 @@ export const translations = {
       active: 'Actif', deactivate: 'Retirer la clé',
       overrideTooltip: 'Remplacer par une autre clé API',
       deactivated: 'Clé API retirée — retour en mode lecture seule',
-      pageOverview: 'Aperçu', pageNodes: 'Registre des nœuds', pageAddVm: 'Ajouter VM',
+      pageOverview: 'Aperçu', pageNodes: 'Registre des nœuds', pageAddServer: 'Ajouter VM',
       pageInfrastructure: 'Infrastructure', pageJobs: 'Tâches', pageCompliance: 'Conformité',
       pageRules: 'Règles Puppet', pageKeys: 'Clés API', pageAudit: 'Journal d\'audit',
       pageProfiles: 'Profils personnalisés',
@@ -717,7 +717,7 @@ export const translations = {
         resourcesFixed: '{{n}} ressources appliquées',
       },
     },
-    addVm: {
+    addServer: {
       title: 'Ajouter VM', cardTitle: 'Enregistrer un serveur Linux',
       hostname: 'Nom d\'hôte', required: '*', ipAddress: 'Adresse IP',
       sshPort: 'Port SSH', sshUser: 'Utilisateur SSH',

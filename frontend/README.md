@@ -126,7 +126,7 @@ frontend/
       ApiKeysPage.jsx      # ✅ Create, list, revoke API keys
       OverviewPage.jsx     # 🔜 Feature 6
       NodesPage.jsx        # 🔜 Feature 2
-      AddVmPage.jsx        # 🔜 Feature 2
+      AddServerPage.jsx        # 🔜 Feature 2
       JobsPage.jsx         # 🔜 Feature 3
       CompliancePage.jsx   # 🔜 Feature 4
       PuppetRulesPage.jsx  # 🔜 Feature 5
@@ -157,7 +157,7 @@ frontend/
 
 The dark console theme (`bg-console-bg`, `font-mono`, `text-console-*`) appears **only** in:
 - Log output panel in `JobsPage`
-- SSH setup helper in `AddVmPage`
+- SSH setup helper in `AddServerPage`
 - Puppet/InSpec code editors in `PuppetRulesPage`
 
 It never appears elsewhere in the UI.
@@ -176,7 +176,7 @@ The sidebar footer contains a link to `{gatewayUrl}/docs` which opens the FastAP
 |---------|--------|--------------|
 | 0 — Scaffolding | ✅ Done | All config files |
 | 1 — Auth | ✅ Done | LoginPage, ApiKeysPage, Shell, Sidebar, Header |
-| 2 — Node Registry | ✅ Done | NodesPage, AddVmPage |
+| 2 — Node Registry | ✅ Done | NodesPage, AddServerPage |
 | 3 — Jobs | 🔜 | JobsPage (WebSocket log stream) |
 | 4 — Compliance | 🔜 | CompliancePage |
 | 5 — Rules | 🔜 | PuppetRulesPage (4-step stepper) |

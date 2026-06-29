@@ -38,7 +38,7 @@ services:
       # Build from the POSTGRES_* vars so the password is only defined once.
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-sabc}:${POSTGRES_PASSWORD:-sabc-change-me}@postgres:5432/${POSTGRES_DB:-sabc}"
       # Optional: set to the host machine's LAN IP so "Register this machine"
-      # works on the Add VM page without manual typing.
+      # works on the Add Server page without manual typing.
       # If blank the backend auto-detects via host.docker.internal.
       HOST_IP:         "${HOST_IP:-}"
       # Optional: SSH admin user on the host (default: root).

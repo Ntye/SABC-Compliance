@@ -10,7 +10,7 @@ import ActivateModal from '../auth/ActivateModal.jsx'
 const PAGE_KEY = {
   '/overview':       'header.pageOverview',
   '/nodes':          'header.pageNodes',
-  '/add-vm':         'header.pageAddVm',
+  '/add-server':         'header.pageAddServer',
   '/infrastructure': 'header.pageInfrastructure',
   '/jobs':           'header.pageJobs',
   '/compliance':     'header.pageCompliance',
