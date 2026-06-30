@@ -1,8 +1,9 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import (
     Column, Integer, MetaData, String, Table, Text, select, delete, update, func, text
@@ -91,6 +92,17 @@ compliance_reports_table = Table(
     Column("duration", Text),
     Column("skipped_checks", Integer, default=0),
     Column("collected_at", Text),
+    # ── De-duplication (keyframe / confirmation) ──────────────────────────────
+    # content_hash: hash of the normalized control state (control_id+status),
+    #   used to detect whether anything actually changed since the last scan.
+    # is_keyframe:  1 = a full report (details populated); 0 = a lightweight
+    #   "confirmation" row proving the scan ran without re-storing the identical
+    #   details blob. NULL on legacy rows → treated as a keyframe.
+    # keyframe_id:  on a confirmation row, points to the full report whose
+    #   details still represent the current state.
+    Column("content_hash", Text),
+    Column("is_keyframe", Integer, default=1),
+    Column("keyframe_id", Text),
 )
 
 remediation_events_table = Table(
@@ -332,7 +344,10 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 except Exception:
                     pass
             for col, typ in [("profile", "TEXT"), ("duration", "TEXT"),
-                             ("skipped_checks", "INTEGER")]:
+                             ("skipped_checks", "INTEGER"),
+                             ("content_hash", "TEXT"),
+                             ("is_keyframe", "INTEGER DEFAULT 1"),
+                             ("keyframe_id", "TEXT")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
                 except Exception:
@@ -392,6 +407,9 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("compliance_reports", "profile",               "TEXT"),
             ("compliance_reports", "duration",              "TEXT"),
             ("compliance_reports", "skipped_checks",        "INTEGER DEFAULT 0"),
+            ("compliance_reports", "content_hash",          "TEXT"),
+            ("compliance_reports", "is_keyframe",           "INTEGER DEFAULT 1"),
+            ("compliance_reports", "keyframe_id",           "TEXT"),
             ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
             ("profiles",           "framework",             "TEXT"),
         ]
@@ -599,7 +617,53 @@ class ComplianceRepository(IComplianceRepository):
     def __init__(self, session: async_sessionmaker) -> None:
         self._session = session
 
-    def _report_to_entity(self, row) -> ComplianceReport:
+    # How often to force a full snapshot even when nothing changed, so the
+    # evidentiary trail never depends on reconstructing state from a long chain
+    # of confirmations. Daily is the common compliance cadence.
+    FORCE_FULL_AFTER = timedelta(hours=24)
+
+    @staticmethod
+    def _state_hash(details: list[dict]) -> str:
+        """Hash the *compliance state* of a report: the sorted (control_id,
+        status) pairs. Volatile fields (messages, values, timestamps, duration)
+        are deliberately excluded so a re-scan that finds the identical pass/fail
+        picture produces the identical hash — that is what lets us skip storing
+        the duplicate details blob."""
+        norm = sorted(
+            (str(d.get("control_id")), str(d.get("status")))
+            for d in (details or [])
+        )
+        blob = json.dumps(norm, separators=(",", ":"))
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _is_confirmation(row) -> bool:
+        """True for a lightweight confirmation row (details live on its
+        keyframe). Legacy rows (is_keyframe NULL) are full reports."""
+        val = getattr(row, "is_keyframe", None)
+        return (val == 0 or val is False) and bool(getattr(row, "keyframe_id", None))
+
+    async def _hydrate(self, s, rows) -> dict:
+        """Return {keyframe_id: details_json} for every confirmation row in
+        ``rows``, fetched in a single query so reads still see real details."""
+        need = {
+            row.keyframe_id for row in rows if self._is_confirmation(row)
+        }
+        need.discard(None)
+        if not need:
+            return {}
+        kf_rows = (await s.execute(
+            select(compliance_reports_table.c.id, compliance_reports_table.c.details)
+            .where(compliance_reports_table.c.id.in_(need))
+        )).all()
+        return {r.id: r.details for r in kf_rows}
+
+    def _report_to_entity(self, row, kf_details: dict | None = None) -> ComplianceReport:
+        # A confirmation row carries no details of its own — pull them from the
+        # keyframe it points at so callers see the effective state.
+        details_raw = row.details
+        if kf_details is not None and self._is_confirmation(row):
+            details_raw = kf_details.get(row.keyframe_id, row.details)
         return ComplianceReport(
             id=row.id,
             node_id=row.node_id,
@@ -608,7 +672,7 @@ class ComplianceRepository(IComplianceRepository):
             passed_checks=row.passed_checks or 0,
             failed_checks=row.failed_checks or 0,
             total_checks=row.total_checks or 0,
-            details=json.loads(row.details or "[]"),
+            details=json.loads(details_raw or "[]"),
             profile=getattr(row, "profile", None),
             duration=(float(row.duration) if getattr(row, "duration", None) else None),
             skipped_checks=getattr(row, "skipped_checks", None) or 0,
@@ -628,16 +692,61 @@ class ComplianceRepository(IComplianceRepository):
         )
 
     async def save_report(self, report: ComplianceReport) -> None:
+        """Persist a scan result with keyframe/confirmation de-duplication.
+
+        Instead of inserting the full (often multi-KB) details blob on every
+        scan, compare the new compliance state to the last one for this
+        (node, source):
+
+          * first scan, changed state, or the active keyframe is older than
+            FORCE_FULL_AFTER → store a full "keyframe" report (details kept).
+          * otherwise → store a tiny "confirmation" row (no details) that proves
+            the scan ran and points at the keyframe still representing the state.
+
+        Scalar fields (counts/score/duration) are kept on every row so summaries
+        and scoring need no keyframe lookup; only the big details array is
+        de-duplicated.
+        """
+        state_hash = self._state_hash(report.details)
+        c = compliance_reports_table.c
         async with self._session() as s:
+            latest = (await s.execute(
+                select(compliance_reports_table)
+                .where(c.node_id == report.node_id)
+                .where(c.source == report.source)
+                .order_by(c.collected_at.desc())
+                .limit(1)
+            )).first()
+
+            make_keyframe = True
+            keyframe_ptr = None
+            if latest is not None:
+                active_kf_id = latest.keyframe_id if self._is_confirmation(latest) else latest.id
+                kf_time = None
+                if active_kf_id:
+                    kf_row = (await s.execute(
+                        select(c.collected_at).where(c.id == active_kf_id)
+                    )).first()
+                    kf_time = _dt(kf_row.collected_at) if kf_row else None
+                unchanged = getattr(latest, "content_hash", None) == state_hash
+                stale = kf_time is None or (datetime.utcnow() - kf_time) >= self.FORCE_FULL_AFTER
+                if unchanged and not stale and active_kf_id:
+                    make_keyframe = False
+                    keyframe_ptr = active_kf_id
+
             await s.execute(compliance_reports_table.insert().values(
                 id=report.id, node_id=report.node_id, source=report.source,
                 framework=report.framework, passed_checks=report.passed_checks,
                 failed_checks=report.failed_checks, total_checks=report.total_checks,
-                score=report.score, details=json.dumps(report.details),
+                score=report.score,
+                details=(json.dumps(report.details) if make_keyframe else "[]"),
                 profile=report.profile,
                 duration=(str(report.duration) if report.duration is not None else None),
                 skipped_checks=report.skipped_checks,
                 collected_at=_ts(report.collected_at),
+                content_hash=state_hash,
+                is_keyframe=(1 if make_keyframe else 0),
+                keyframe_id=keyframe_ptr,
             ))
             await s.commit()
 
@@ -649,7 +758,8 @@ class ComplianceRepository(IComplianceRepository):
                 .order_by(compliance_reports_table.c.collected_at.desc())
                 .limit(10)
             )).all()
-            return [self._report_to_entity(r) for r in rows]
+            kf_details = await self._hydrate(s, rows)
+            return [self._report_to_entity(r, kf_details) for r in rows]
 
     async def find_summary(self) -> list[dict]:
         async with self._session() as s:
@@ -669,7 +779,9 @@ class ComplianceRepository(IComplianceRepository):
                     .limit(5)
                 )
                 reports_result, remediations_result = await asyncio.gather(reports_task, remediations_task)
-                reports = [self._report_to_entity(r) for r in reports_result.all()]
+                report_rows = reports_result.all()
+                kf_details = await self._hydrate(s, report_rows)
+                reports = [self._report_to_entity(r, kf_details) for r in report_rows]
                 remediations = [self._remediation_to_entity(r) for r in remediations_result.all()]
 
                 node = NodeRepository(self._session)._to_entity(node_row)
