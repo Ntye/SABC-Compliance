@@ -18,6 +18,7 @@ import UsersPage from './pages/UsersPage.jsx'
 import UserGroupsPage from './pages/UserGroupsPage.jsx'
 import PermissionsPage from './pages/PermissionsPage.jsx'
 import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
+import NodeGroupDetailPage from './pages/NodeGroupDetailPage.jsx'
 import TlsCertificatePage from './pages/TlsCertificatePage.jsx'
 import HelpPage from './pages/HelpPage.jsx'
 
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="/settings/tls" element={<TlsCertificatePage />} />
             {/* Node Groups */}
             <Route path="/node-groups" element={<NodeGroupsPage />} />
+            <Route path="/node-groups/:id" element={<NodeGroupDetailPage />} />
             <Route path="/help" element={<HelpPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/overview" replace />} />

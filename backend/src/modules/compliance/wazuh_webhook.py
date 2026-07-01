@@ -235,11 +235,11 @@ class ReceiveWazuhAlertUseCase:
                 })
 
                 # ── Group escalation ──────────────────────────────────────────
-                # When enabled, drive the closed loop across every group this
-                # node belongs to (enforce + re-scan each member) instead of the
-                # single node, then finish.
-                if self._remediate_group and self._closed_loop is not None:
-                    group_ids = await self._node_group_ids(node_id)
+                # Drive the closed loop across every group this node belongs to
+                # that has active response enabled (or all of them when the global
+                # remediate_group override is on), instead of the single node.
+                if self._closed_loop is not None:
+                    group_ids = await self._escalation_group_ids(node_id)
                     if group_ids:
                         for gid in group_ids:
                             await self._closed_loop.execute(
@@ -297,16 +297,24 @@ class ReceiveWazuhAlertUseCase:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    async def _node_group_ids(self, node_id: str) -> list[str]:
-        """Group ids whose resolved membership includes this node."""
+    async def _escalation_group_ids(self, node_id: str) -> list[str]:
+        """Group ids to escalate to for this node: those whose membership
+        includes it AND that have active response enabled — or all of its groups
+        when the global remediate_group override is on."""
         if self._list_groups is None:
             return []
         try:
             pairs = await self._list_groups.execute()  # [(group, [member_ids])]
-            return [g.id for (g, ids) in pairs if node_id in (ids or [])]
         except Exception as exc:
             logger.error("Group resolution for node %s failed: %s", node_id, exc)
             return []
+        out: list[str] = []
+        for g, ids in pairs:
+            if node_id not in (ids or []):
+                continue
+            if self._remediate_group or getattr(g, "active_response_enabled", False):
+                out.append(g.id)
+        return out
 
     async def _resolve_node(self, alert: WazuhAlert):
         """Match a Wazuh agent to a managed node by hostname, then by IP."""

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
   ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
@@ -480,6 +481,7 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated, defaultParent
 // ── Tree node row ─────────────────────────────────────────────────────────────
 function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, onClosedLoop, loopingId, initialExpanded }) {
   const t = useT()
+  const navigate = useNavigate()
   const children = useMemo(
     () => allGroups.filter((g) => g.parent === group.name).sort((a, b) => a.name.localeCompare(b.name)),
     [allGroups, group.name],
@@ -512,8 +514,14 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, onClose
           : <Server size={13} className="flex-shrink-0 text-gray-400" />
         }
 
-        {/* name */}
-        <span className="text-[12px] font-medium truncate flex-1 min-w-0">{group.name}</span>
+        {/* name — opens the group detail page */}
+        <button
+          onClick={() => navigate(`/node-groups/${group.id}`)}
+          title="Open group details"
+          className="text-[12px] font-medium truncate flex-1 min-w-0 text-left hover:text-brand hover:underline"
+        >
+          {group.name}
+        </button>
 
         {/* system badge */}
         {isSystem && (
@@ -686,6 +694,7 @@ function EnvQuickCreate({ groups, onLaunchWizard }) {
 export default function NodeGroupsPage() {
   const t = useT()
   const toast = useToast()
+  const navigate = useNavigate()
   const { data: groups, loading, error, refetch } = useApi(listNodeGroups)
   const { data: nodes } = useApi(listNodes)
   const { data: facts } = useApi(listNodeGroupFacts)
@@ -935,7 +944,8 @@ export default function NodeGroupsPage() {
                               ? <Shield size={13} className="text-blue-400 flex-shrink-0" />
                               : <Server size={13} className="text-gray-400 flex-shrink-0" />
                             }
-                            <span>{g.name}</span>
+                            <button onClick={() => navigate(`/node-groups/${g.id}`)}
+                              className="text-left hover:text-brand hover:underline">{g.name}</button>
                             {g.group_type === 'system' && (
                               <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded font-medium">
                                 {t('nodeGroups.systemGroup')}

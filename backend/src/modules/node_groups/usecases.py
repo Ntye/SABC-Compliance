@@ -872,6 +872,10 @@ class UpdateNodeGroupUseCase:
             group.match_type = data["match_type"]
         if "rules" in data:
             group.rules = data["rules"] or []
+        if "inspec_profile_id" in data:
+            group.inspec_profile_id = data["inspec_profile_id"] or None
+        if "active_response_enabled" in data:
+            group.active_response_enabled = bool(data["active_response_enabled"])
         if "node_ids" in data:
             current = set(group.node_ids)
             wanted = set(data["node_ids"] or [])

@@ -259,6 +259,7 @@ node_groups_table = Table(
     Column("puppet_synced", Integer, default=0),
     Column("group_type", Text, default="user"),
     Column("inspec_profile_id", Text),
+    Column("active_response_enabled", Integer, default=0),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -338,7 +339,8 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             for col, typ in [("parent", "TEXT"), ("environment", "TEXT"),
                              ("is_environment_group", "INTEGER"),
                              ("match_type", "TEXT"), ("rules", "TEXT"),
-                             ("group_type", "TEXT"), ("inspec_profile_id", "TEXT")]:
+                             ("group_type", "TEXT"), ("inspec_profile_id", "TEXT"),
+                             ("active_response_enabled", "INTEGER DEFAULT 0")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
                 except Exception:
@@ -404,6 +406,7 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("node_groups",        "rules",                 "TEXT DEFAULT '[]'"),
             ("node_groups",        "group_type",            "TEXT DEFAULT 'user'"),
             ("node_groups",        "inspec_profile_id",     "TEXT"),
+            ("node_groups",        "active_response_enabled", "INTEGER DEFAULT 0"),
             ("compliance_reports", "profile",               "TEXT"),
             ("compliance_reports", "duration",              "TEXT"),
             ("compliance_reports", "skipped_checks",        "INTEGER DEFAULT 0"),
@@ -1430,6 +1433,7 @@ class NodeGroupRepository(INodeGroupRepository):
             puppet_synced=bool(row.puppet_synced),
             group_type=getattr(row, "group_type", None) or "user",
             inspec_profile_id=getattr(row, "inspec_profile_id", None),
+            active_response_enabled=bool(getattr(row, "active_response_enabled", 0)),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
         )
@@ -1446,6 +1450,7 @@ class NodeGroupRepository(INodeGroupRepository):
                 puppet_synced=int(g.puppet_synced),
                 group_type=g.group_type,
                 inspec_profile_id=g.inspec_profile_id,
+                active_response_enabled=int(g.active_response_enabled),
                 created_at=_ts(g.created_at),
                 updated_at=_ts(g.updated_at),
             ))
@@ -1489,6 +1494,7 @@ class NodeGroupRepository(INodeGroupRepository):
                     puppet_synced=int(g.puppet_synced),
                     group_type=g.group_type,
                     inspec_profile_id=g.inspec_profile_id,
+                    active_response_enabled=int(g.active_response_enabled),
                     updated_at=_ts(g.updated_at),
                 )
             )

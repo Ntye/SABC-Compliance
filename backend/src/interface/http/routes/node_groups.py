@@ -32,6 +32,7 @@ class NodeGroupResponse(BaseModel):
     puppet_synced: bool = False
     group_type: str = "user"
     inspec_profile_id: str | None = None
+    active_response_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -54,6 +55,8 @@ class UpdateNodeGroupRequest(BaseModel):
     match_type: str | None = None
     rules: list[RuleModel] | None = None
     node_ids: list[str] | None = None
+    inspec_profile_id: str | None = None
+    active_response_enabled: bool | None = None
 
 class AddNodeRequest(BaseModel):
     node_id: str
@@ -111,6 +114,7 @@ def _resp(g, matching=None) -> NodeGroupResponse:
         wazuh_synced=g.wazuh_synced, puppet_synced=g.puppet_synced,
         group_type=g.group_type,
         inspec_profile_id=g.inspec_profile_id,
+        active_response_enabled=g.active_response_enabled,
         created_at=g.created_at, updated_at=g.updated_at,
     )
 

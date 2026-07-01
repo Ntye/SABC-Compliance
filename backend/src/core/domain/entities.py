@@ -275,6 +275,9 @@ class NodeGroup:
     group_type: str = "user"
     # InSpec profile to use when scanning members; child groups inherit parent's profile
     inspec_profile_id: str | None = None
+    # When true, a Wazuh alert for any member node drives the closed remediation
+    # loop across this whole group (active response). Off by default.
+    active_response_enabled: bool = False
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
