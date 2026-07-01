@@ -77,6 +77,7 @@ _ssh_client = None
 _config_repo = None
 _configure_puppet_core_enc_uc = None
 _switch_puppet_edition_uc = None
+_deploy_compliance_module_uc = None
 
 
 def set_use_cases(
@@ -96,6 +97,7 @@ def set_use_cases(
     configure_wazuh_remediation_uc=None,
     configure_puppet_core_enc_uc=None,
     switch_puppet_edition_uc=None,
+    deploy_compliance_module_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
@@ -104,6 +106,7 @@ def set_use_cases(
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir, _ssh_client, _config_repo
     global _configure_puppet_core_enc_uc, _switch_puppet_edition_uc
+    global _deploy_compliance_module_uc
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -120,6 +123,7 @@ def set_use_cases(
     _config_repo = config_repo
     _configure_puppet_core_enc_uc = configure_puppet_core_enc_uc
     _switch_puppet_edition_uc = switch_puppet_edition_uc
+    _deploy_compliance_module_uc = deploy_compliance_module_uc
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -298,6 +302,25 @@ async def configure_puppet_core_enc(
         raise HTTPException(status_code=503, detail="Puppet Core ENC configuration not available")
     try:
         job = await _configure_puppet_core_enc_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/deploy/compliance-module", response_model=JobRef, status_code=202,
+             summary="Deploy the sabc_compliance Puppet module and enforce the referential")
+async def deploy_compliance_module(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Copy the sabc_compliance module to the Puppet master (``node_id`` = the
+    master) and add a site-manifest include so every managed node enforces the
+    internal referential when it runs `puppet agent -t` — the enforcement half
+    of the closed remediation loop."""
+    if _deploy_compliance_module_uc is None:
+        raise HTTPException(status_code=503, detail="Compliance module deployment not available")
+    try:
+        job = await _deploy_compliance_module_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

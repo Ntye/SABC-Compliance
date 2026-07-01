@@ -61,6 +61,7 @@ services:
       - ./backend/src:/app/src           # live — git pull reflects instantly
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
       - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed
+      - ./backend/puppet:/app/puppet     # live — sabc_compliance Puppet module shipped to the master
     depends_on:
       postgres:
         condition: service_healthy

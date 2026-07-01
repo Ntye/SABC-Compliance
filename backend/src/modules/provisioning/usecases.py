@@ -248,6 +248,9 @@ class InstallServiceUseCase:
         # One-time: enable the External Node Classifier on a Puppet Core master
         # (node_terminus = exec + external_nodes in puppet.conf, restart server).
         "puppet_core_enc":         "configure_puppet_core_enc.yml",
+        # Deploy the sabc_compliance Puppet module to the master + enforce the
+        # referential fleet-wide (site-manifest include). Runs on the master node.
+        "compliance_module":       "deploy_compliance_module.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master":           "puppet_master_host",
@@ -345,6 +348,13 @@ class InstallServiceUseCase:
         elif self._service == "puppet_core_enc":
             settings = get_settings()
             extra_vars["enc_dir"] = settings.puppet_core_enc_dir
+        elif self._service == "compliance_module":
+            import os as _os
+            settings = get_settings()
+            # The module ships alongside the ansible dir in the image
+            # (…/ansible and …/puppet/modules/sabc_compliance share a parent).
+            base = _os.path.dirname(_os.path.abspath(settings.ansible_dir or "/app/ansible"))
+            extra_vars["sabc_module_src"] = _os.path.join(base, "puppet", "modules", "sabc_compliance")
         elif self._service == "check_health":
             host = await self._config.get("puppet_master_host")
             if host:

@@ -1,0 +1,101 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy the sabc_compliance Puppet module to the Puppet master and enforce the
+# internal referential on every managed node.
+#
+# This is what makes `puppet agent -t` (the enforcement step of the closed loop)
+# actually remediate the CIS referential: the module is copied into the
+# production environment's module path, and a site-manifest drop-in adds a
+# top-scope `include sabc_compliance` so every node applying its catalog
+# converges on the baseline. Top-scope include (rather than a node block)
+# coexists with any existing node definitions and works on BOTH Puppet
+# Enterprise and open-source Puppet Core.
+#
+# Required extra-vars (injected by the platform):
+#   sabc_module_src   absolute path to the module on the controller
+#                     (default /app/puppet/modules/sabc_compliance in-container)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Deploy sabc_compliance Puppet module and enforce the referential
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    sabc_module_src: /app/puppet/modules/sabc_compliance
+    puppet_env:      production
+    code_dir:        /etc/puppetlabs/code/environments
+    module_name:     sabc_compliance
+
+  tasks:
+    - name: Resolve environment paths
+      set_fact:
+        module_path:   "{{ code_dir }}/{{ puppet_env }}/modules"
+        manifest_path: "{{ code_dir }}/{{ puppet_env }}/manifests"
+
+    - name: Ensure the module and manifest directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ module_path }}"
+        - "{{ manifest_path }}"
+
+    - name: Verify the module source is present on the controller
+      stat:
+        path: "{{ sabc_module_src }}/manifests/init.pp"
+      register: mod_src
+      delegate_to: localhost
+      become: no
+
+    - name: Fail with a clear message when the module source is missing
+      fail:
+        msg: >-
+          sabc_compliance module not found at {{ sabc_module_src }} on the
+          controller. Pass sabc_module_src=<path> or ensure the deployment
+          bundles backend/puppet/modules/sabc_compliance.
+      when: not mod_src.stat.exists
+
+    # Copy the module into place. `copy` of a directory is recursive and
+    # dependency-free (no rsync needed on the master). The trailing slash on src
+    # copies the CONTENTS into the module directory.
+    - name: Deploy the sabc_compliance module
+      copy:
+        src: "{{ sabc_module_src }}/"
+        dest: "{{ module_path }}/{{ module_name }}/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+
+    # Site-manifest drop-in: top-scope include applied to every node. Puppet
+    # evaluates every .pp in the manifests dir; the zzz_ prefix keeps it last.
+    - name: Enforce the referential fleet-wide (site-manifest drop-in)
+      copy:
+        dest: "{{ manifest_path }}/zzz_sabc_compliance.pp"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by SABC Compliance. Enforce the internal referential (CIS)
+          # on every managed node. Tune per node/group via Hiera or an ENC by
+          # setting class parameters of sabc_compliance.
+          include sabc_compliance
+
+    # Validate the deployed module compiles on the master (best-effort — never
+    # blocks the deploy, but surfaces a problem in the job log).
+    - name: Validate the deployed module parses
+      command: >-
+        /opt/puppetlabs/bin/puppet parser validate
+        {{ module_path }}/{{ module_name }}/manifests
+      register: parse_check
+      changed_when: false
+      failed_when: false
+
+    - name: Report validation result
+      debug:
+        msg: >-
+          sabc_compliance deployed to {{ module_path }}/{{ module_name }} —
+          {{ 'parse OK' if parse_check.rc == 0 else 'parse WARNING: ' + (parse_check.stderr | default('')) }}

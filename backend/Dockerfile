@@ -34,6 +34,8 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 COPY src/              src/
 COPY ansible/          ansible/
 COPY scan-profiles/    scan-profiles/
+# Puppet module (sabc_compliance) shipped to the master by deploy_compliance_module.yml
+COPY puppet/           puppet/
 
 # One-shot SQLite → PostgreSQL migration helper (invoked by deploy/ship.sh).
 COPY migrate_to_postgres.py .
