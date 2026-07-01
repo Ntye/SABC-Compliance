@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight,
-  Network, RefreshCw, ShieldCheck, Wifi, Wrench, XCircle,
+  Network, RefreshCw, RotateCw, ShieldCheck, Wifi, Wrench, XCircle,
 } from 'lucide-react'
 import {
   getNode, pingNode, updateNode, changeNodeIdentity,
-  getNodeCompliance, collectNodeCompliance, triggerRemediation,
+  getNodeCompliance, collectNodeCompliance, triggerRemediation, runClosedLoop,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -298,6 +298,7 @@ export default function NodeDetailPage() {
   const [identityOpen, setIdentityOpen] = useState(false)
   const [collecting, setCollecting] = useState(false)
   const [remediating, setRemediating] = useState(false)
+  const [closedLooping, setClosedLooping] = useState(false)
 
   // editable settings
   const [editing, setEditing] = useState(false)
@@ -373,6 +374,22 @@ export default function NodeDetailPage() {
       toast(err.message, 'error')
     } finally {
       setRemediating(false)
+    }
+  }
+
+  async function handleClosedLoop() {
+    setClosedLooping(true)
+    try {
+      const r = await runClosedLoop({ nodeId: id, description: 'Closed loop from node detail' })
+      const n = (r.nodes && r.nodes[0]) || {}
+      const status = n.status || (r.succeeded ? 'success' : 'failed')
+      toast(`Closed loop ${status}: enforced${r.rescan ? ' + re-scanned' : ''}.`,
+        status === 'failed' ? 'error' : 'success')
+      refetchCompliance()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setClosedLooping(false)
     }
   }
 
@@ -550,6 +567,11 @@ export default function NodeDetailPage() {
             <button onClick={handleRemediate} disabled={remediating || !node.puppet_enrolled} title={!node.puppet_enrolled ? t('nodeDetail.compliance.puppetFirst') : ''}
               className={`${btnSm(false)} disabled:opacity-40 disabled:cursor-not-allowed`}>
               {remediating ? <Spinner size={12} /> : <Wrench size={12} />}{t('nodeDetail.compliance.remediate')}
+            </button>
+            <button onClick={handleClosedLoop} disabled={closedLooping || !node.puppet_enrolled}
+              title={!node.puppet_enrolled ? t('nodeDetail.compliance.puppetFirst') : 'Enforce with Puppet, then re-scan'}
+              className={`${btnSm(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+              {closedLooping ? <Spinner size={12} /> : <RotateCw size={12} />}Closed loop
             </button>
           </div>
         </div>

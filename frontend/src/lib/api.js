@@ -359,6 +359,14 @@ export async function triggerRemediation(id, description) {
   return request('POST', `/compliance/nodes/${id}/remediate`, { description })
 }
 
+// Closed-loop remediation: enforce (Puppet) → re-scan (CINC) for a single node
+// OR every member of a node group. Pass exactly one of nodeId / groupId.
+export async function runClosedLoop({ nodeId = null, groupId = null, description = null, rescan = true } = {}) {
+  return request('POST', '/compliance/closed-loop', {
+    node_id: nodeId, group_id: groupId, description, rescan,
+  })
+}
+
 export async function getAutoScanSchedule() {
   return request('GET', '/compliance/schedule')
 }

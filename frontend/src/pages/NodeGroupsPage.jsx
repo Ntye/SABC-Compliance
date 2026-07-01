@@ -2,12 +2,12 @@ import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
   ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
-  List, Network, Layers, RefreshCw, UploadCloud,
+  List, Network, Layers, RefreshCw, RotateCw, UploadCloud,
 } from 'lucide-react'
 import {
   listNodeGroups, createNodeGroup, deleteNodeGroup, listNodes,
   listNodeGroupFacts, previewNodeGroupMatches, seedDefaultNodeGroups,
-  syncNodeGroups,
+  syncNodeGroups, runClosedLoop,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -478,7 +478,7 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated, defaultParent
 }
 
 // ── Tree node row ─────────────────────────────────────────────────────────────
-function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, initialExpanded }) {
+function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, onClosedLoop, loopingId, initialExpanded }) {
   const t = useT()
   const children = useMemo(
     () => allGroups.filter((g) => g.parent === group.name).sort((a, b) => a.name.localeCompare(b.name)),
@@ -546,6 +546,14 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, initial
         {/* action buttons */}
         <span className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
+            onClick={() => onClosedLoop && onClosedLoop(group)}
+            disabled={count === 0 || loopingId === group.id}
+            title={count === 0 ? 'No member nodes to remediate' : 'Run closed loop (enforce + re-scan) on this group'}
+            className="p-1 text-gray-400 hover:text-brand hover:bg-brand/10 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {loopingId === group.id ? <Spinner size={12} /> : <RotateCw size={12} />}
+          </button>
+          <button
             onClick={() => onCreateChild(group)}
             title={t('nodeGroups.addChildGroup')}
             className="p-1 text-gray-400 hover:text-brand hover:bg-brand/10 rounded transition-colors"
@@ -575,6 +583,8 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, initial
               depth={depth + 1}
               onDelete={onDelete}
               onCreateChild={onCreateChild}
+              onClosedLoop={onClosedLoop}
+              loopingId={loopingId}
             />
           ))}
         </div>
@@ -584,7 +594,7 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, initial
 }
 
 // ── Tree view ─────────────────────────────────────────────────────────────────
-function TreeView({ groups, onDelete, onCreateChild }) {
+function TreeView({ groups, onDelete, onCreateChild, onClosedLoop, loopingId }) {
   const t = useT()
 
   // roots: groups whose parent is "All Nodes" or whose parent doesn't exist in the list
@@ -619,6 +629,8 @@ function TreeView({ groups, onDelete, onCreateChild }) {
           depth={0}
           onDelete={onDelete}
           onCreateChild={onCreateChild}
+          onClosedLoop={onClosedLoop}
+          loopingId={loopingId}
           initialExpanded={true}
         />
       ))}
@@ -687,6 +699,27 @@ export default function NodeGroupsPage() {
   const [wizardName, setWizardName] = useState(null)
   const [seeding, setSeeding] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [loopingId, setLoopingId] = useState(null)
+
+  async function handleClosedLoop(group) {
+    const count = group.matching_node_ids?.length ?? 0
+    if (count === 0) {
+      toast(`Group "${group.name}" has no member nodes to remediate.`, 'info')
+      return
+    }
+    setLoopingId(group.id)
+    try {
+      const r = await runClosedLoop({ groupId: group.id, description: `Closed loop on group ${group.name}` })
+      toast(`Closed loop on "${group.name}": ${r.succeeded}/${r.requested} succeeded` +
+        (r.failed ? `, ${r.failed} failed` : '') + (r.skipped ? `, ${r.skipped} skipped` : ''),
+        r.failed ? 'error' : 'success')
+      refetch()
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setLoopingId(null)
+    }
+  }
 
   const filtered = useMemo(() => {
     if (!groups) return []
@@ -870,6 +903,8 @@ export default function NodeGroupsPage() {
                 groups={filtered}
                 onDelete={setDeleteTarget}
                 onCreateChild={openWizardForChild}
+                onClosedLoop={handleClosedLoop}
+                loopingId={loopingId}
               />
             ) : (
               /* ── flat list ── */
@@ -923,6 +958,14 @@ export default function NodeGroupsPage() {
                         <td className="px-4 py-3 text-gray-400">{relativeTime(g.created_at)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 justify-end">
+                            <button
+                              onClick={() => handleClosedLoop(g)}
+                              disabled={(g.matching_node_ids?.length ?? 0) === 0 || loopingId === g.id}
+                              title={(g.matching_node_ids?.length ?? 0) === 0 ? 'No member nodes to remediate' : 'Run closed loop (enforce + re-scan) on this group'}
+                              className="p-1.5 text-gray-400 hover:text-brand rounded hover:bg-brand/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              {loopingId === g.id ? <Spinner size={12} /> : <RotateCw size={12} />}
+                            </button>
                             {g.group_type !== 'system' && (
                               <button
                                 onClick={() => setDeleteTarget(g)}
