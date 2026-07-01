@@ -1,0 +1,20 @@
+{
+  "name": "sabc-sabc_compliance",
+  "version": "1.0.0",
+  "author": "SABC Compliance Platform",
+  "summary": "Enforces the SABC internal referential (CIS Linux Benchmark) via Puppet",
+  "license": "Apache-2.0",
+  "source": "https://github.com/ntye/sabc-compliance",
+  "dependencies": [],
+  "operatingsystem_support": [
+    { "operatingsystem": "Ubuntu",     "operatingsystemrelease": ["20.04", "22.04", "24.04"] },
+    { "operatingsystem": "Debian",     "operatingsystemrelease": ["11", "12"] },
+    { "operatingsystem": "RedHat",     "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "CentOS",     "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "AlmaLinux",  "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "Rocky",      "operatingsystemrelease": ["8", "9"] }
+  ],
+  "requirements": [
+    { "name": "puppet", "version_requirement": ">= 7.0.0 < 9.0.0" }
+  ]
+}
