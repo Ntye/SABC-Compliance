@@ -1,0 +1,255 @@
+# SABC CIS Baseline — Wazuh Security Configuration Assessment (SCA) policy.
+#
+# This is the DETECTION half of the closed loop: Wazuh agents run these checks
+# on a schedule; a failed check raises an SCA alert which the manager escalates
+# and forwards to the platform webhook, which drives Puppet enforcement
+# (sabc_compliance) and a re-scan. Every check here maps to a control the
+# sabc_compliance Puppet module remediates, so detection and remediation stay
+# aligned — Wazuh finds the drift, Puppet fixes exactly that.
+#
+# SCA rule syntax reference: https://documentation.wazuh.com/current/user-manual/capabilities/sec-config-assessment/
+policy:
+  id: "sabc_cis_baseline"
+  file: "sabc_cis_baseline.yml"
+  name: "SABC CIS Linux Baseline"
+  description: "SABC internal referential (CIS Linux Benchmark) — configuration assessment aligned with the sabc_compliance Puppet module."
+  references:
+    - https://www.cisecurity.org/benchmark/distribution_independent_linux
+
+requirements:
+  title: "Runs on any Linux host"
+  description: "Applies to every managed Linux node."
+  condition: any
+  rules:
+    - "f:/etc/os-release"
+    - "f:/etc/hostname"
+
+checks:
+  # ── Section 1: Initial Setup (process hardening) ────────────────────────────
+  - id: 41001
+    title: "Ensure ASLR is enabled (kernel.randomize_va_space = 2)"
+    description: "Address space layout randomization must be fully enabled."
+    remediation: "Enforced by sabc_compliance::initial_setup (sysctl kernel.randomize_va_space=2)."
+    compliance:
+      - cis: ["1.5.1"]
+    condition: all
+    rules:
+      - 'c:sysctl kernel.randomize_va_space -> r:= 2$'
+
+  - id: 41002
+    title: "Ensure ptrace scope is restricted (>= 1)"
+    remediation: "Enforced by sabc_compliance (sysctl kernel.yama.ptrace_scope=1)."
+    compliance:
+      - cis: ["1.5.2"]
+    condition: all
+    rules:
+      - 'c:sysctl kernel.yama.ptrace_scope -> n:= (\d+) compare >= 1'
+
+  - id: 41003
+    title: "Ensure SUID core dumps are restricted (fs.suid_dumpable = 0)"
+    remediation: "Enforced by sabc_compliance (sysctl fs.suid_dumpable=0)."
+    compliance:
+      - cis: ["1.5.3"]
+    condition: all
+    rules:
+      - 'c:sysctl fs.suid_dumpable -> r:= 0$'
+
+  - id: 41004
+    title: "Ensure prelink is not installed"
+    remediation: "Enforced by sabc_compliance (package prelink purged)."
+    compliance:
+      - cis: ["1.5.4"]
+    condition: none
+    rules:
+      - 'c:sh -c "command -v prelink" -> r:prelink'
+
+  # ── Section 2: Services ─────────────────────────────────────────────────────
+  - id: 41010
+    title: "Ensure a time synchronization daemon is running"
+    remediation: "Enforced by sabc_compliance::services (chrony running)."
+    compliance:
+      - cis: ["2.1.1"]
+    condition: any
+    rules:
+      - 'c:systemctl is-active chrony -> r:^active'
+      - 'c:systemctl is-active chronyd -> r:^active'
+      - 'c:systemctl is-active systemd-timesyncd -> r:^active'
+
+  - id: 41011
+    title: "Ensure telnet client is not installed"
+    remediation: "Enforced by sabc_compliance::services (insecure clients purged)."
+    compliance:
+      - cis: ["2.3"]
+    condition: none
+    rules:
+      - 'c:sh -c "command -v telnet" -> r:telnet'
+
+  # ── Section 3: Network ──────────────────────────────────────────────────────
+  - id: 41020
+    title: "Ensure IP forwarding is disabled (net.ipv4.ip_forward = 0)"
+    remediation: "Enforced by sabc_compliance::network (sysctl)."
+    compliance:
+      - cis: ["3.1.1"]
+    condition: all
+    rules:
+      - 'c:sysctl net.ipv4.ip_forward -> r:= 0$'
+
+  - id: 41021
+    title: "Ensure broadcast ICMP requests are ignored"
+    remediation: "Enforced by sabc_compliance::network (sysctl icmp_echo_ignore_broadcasts=1)."
+    compliance:
+      - cis: ["3.2.5"]
+    condition: all
+    rules:
+      - 'c:sysctl net.ipv4.icmp_echo_ignore_broadcasts -> r:= 1$'
+
+  - id: 41022
+    title: "Ensure TCP SYN cookies are enabled"
+    remediation: "Enforced by sabc_compliance::network (sysctl tcp_syncookies=1)."
+    compliance:
+      - cis: ["3.2.8"]
+    condition: all
+    rules:
+      - 'c:sysctl net.ipv4.tcp_syncookies -> r:= 1$'
+
+  - id: 41023
+    title: "Ensure a host firewall is active"
+    remediation: "Enforced by sabc_compliance::network (ufw/firewalld active, SSH allowed)."
+    compliance:
+      - cis: ["3.5.2"]
+    condition: any
+    rules:
+      - 'c:systemctl is-active ufw -> r:^active'
+      - 'c:systemctl is-active firewalld -> r:^active'
+      - 'c:systemctl is-active nftables -> r:^active'
+
+  # ── Section 4: Logging and Auditing ─────────────────────────────────────────
+  - id: 41030
+    title: "Ensure auditd is enabled and running"
+    remediation: "Enforced by sabc_compliance::logging_audit (auditd running+enabled)."
+    compliance:
+      - cis: ["4.1.1.2"]
+    condition: all
+    rules:
+      - 'c:systemctl is-active auditd -> r:^active'
+
+  - id: 41031
+    title: "Ensure audit log storage size is configured (max_log_file >= 8)"
+    remediation: "Enforced by sabc_compliance (auditd.conf max_log_file=8)."
+    compliance:
+      - cis: ["4.1.2.1"]
+    condition: all
+    rules:
+      - 'f:/etc/audit/auditd.conf -> n:^max_log_file\s*=\s*(\d+) compare >= 8'
+
+  - id: 41032
+    title: "Ensure audit logs are not automatically deleted (keep_logs)"
+    remediation: "Enforced by sabc_compliance (auditd.conf max_log_file_action=keep_logs)."
+    compliance:
+      - cis: ["4.1.2.2"]
+    condition: all
+    rules:
+      - 'f:/etc/audit/auditd.conf -> r:^max_log_file_action\s*=\s*keep_logs'
+
+  - id: 41033
+    title: "Ensure a system logging service is active"
+    remediation: "Enforced by sabc_compliance (rsyslog running)."
+    compliance:
+      - cis: ["4.2.1"]
+    condition: any
+    rules:
+      - 'c:systemctl is-active rsyslog -> r:^active'
+      - 'c:systemctl is-active systemd-journald -> r:^active'
+
+  # ── Section 5: Access, Authentication and Authorization ─────────────────────
+  - id: 41040
+    title: "Ensure SSH root login is disabled"
+    remediation: "Enforced by sabc_compliance::access_auth (sshd drop-in PermitRootLogin no)."
+    compliance:
+      - cis: ["5.2.9"]
+    condition: all
+    rules:
+      - 'c:sshd -T -> r:^\s*permitrootlogin\s+no'
+
+  - id: 41041
+    title: "Ensure SSH PermitEmptyPasswords is disabled"
+    remediation: "Enforced by sabc_compliance::access_auth (sshd drop-in)."
+    compliance:
+      - cis: ["5.2.10"]
+    condition: all
+    rules:
+      - 'c:sshd -T -> r:^\s*permitemptypasswords\s+no'
+
+  - id: 41042
+    title: "Ensure SSH MaxAuthTries is 4 or less"
+    remediation: "Enforced by sabc_compliance::access_auth (sshd drop-in MaxAuthTries 4)."
+    compliance:
+      - cis: ["5.2.6"]
+    condition: all
+    rules:
+      - 'c:sshd -T -> n:^\s*maxauthtries\s+(\d+) compare <= 4'
+
+  - id: 41043
+    title: "Ensure SSH HostbasedAuthentication is disabled"
+    remediation: "Enforced by sabc_compliance::access_auth (sshd drop-in)."
+    compliance:
+      - cis: ["5.2.8"]
+    condition: all
+    rules:
+      - 'c:sshd -T -> r:^\s*hostbasedauthentication\s+no'
+
+  - id: 41044
+    title: "Ensure password expiration is 365 days or less"
+    remediation: "Enforced by sabc_compliance::access_auth (login.defs PASS_MAX_DAYS)."
+    compliance:
+      - cis: ["5.4.1.1"]
+    condition: all
+    rules:
+      - 'f:/etc/login.defs -> n:^PASS_MAX_DAYS\s+(\d+) compare <= 365'
+
+  - id: 41045
+    title: "Ensure default user umask is 027 or more restrictive"
+    remediation: "Enforced by sabc_compliance::access_auth (login.defs UMASK 027)."
+    compliance:
+      - cis: ["5.4.4"]
+    condition: all
+    rules:
+      - 'f:/etc/login.defs -> r:^UMASK\s+0?[027]7'
+
+  - id: 41046
+    title: "Ensure no account other than the automation user has passwordless sudo"
+    description: "The 'ansible' automation account is an approved referential exception; any OTHER NOPASSWD grant is a finding."
+    remediation: "Remove the offending NOPASSWD grant. sabc_compliance can strip it (remove_other_nopasswd, opt-in) — the ansible account is never touched."
+    compliance:
+      - cis: ["5.3.5"]
+    condition: none
+    rules:
+      - 'c:sh -c "grep -rhE NOPASSWD /etc/sudoers /etc/sudoers.d/ 2>/dev/null | grep -vE ''^[[:space:]]*#'' | grep -vE ''^[[:space:]]*ansible[[:space:]]''" -> r:NOPASSWD'
+
+  # ── Section 6: System Maintenance (file permissions) ────────────────────────
+  - id: 41050
+    title: "Ensure permissions on /etc/shadow are 0640 or more restrictive"
+    remediation: "Enforced by sabc_compliance::maintenance (chmod 0640 /etc/shadow)."
+    compliance:
+      - cis: ["6.1.6"]
+    condition: all
+    rules:
+      - 'c:stat -c "%a" /etc/shadow -> r:^0?[0-6][0-4]0$'
+
+  - id: 41051
+    title: "Ensure permissions on /etc/passwd are 0644 or more restrictive"
+    remediation: "Enforced by sabc_compliance::maintenance (chmod 0644 /etc/passwd)."
+    compliance:
+      - cis: ["6.1.2"]
+    condition: all
+    rules:
+      - 'c:stat -c "%a" /etc/passwd -> r:^0?644$'
+
+  - id: 41052
+    title: "Ensure root is the only UID 0 account"
+    remediation: "Detective — remove any extra UID-0 account (not auto-remediated)."
+    compliance:
+      - cis: ["6.2.5"]
+    condition: all
+    rules:
+      - 'c:awk -F: ($3 == 0) {print $1} /etc/passwd -> r:^root$'

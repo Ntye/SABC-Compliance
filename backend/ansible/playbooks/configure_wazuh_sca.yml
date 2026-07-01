@@ -1,0 +1,154 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Configure Wazuh SCA scanning for the SABC CIS baseline (manager side).
+#
+# This wires the DETECTION half of the closed loop:
+#   ① the sabc_cis_baseline SCA policy is placed in the manager's shared folder
+#      so it is distributed to every agent in the group and run on a schedule
+#   ② the shared agent.conf enables SCA and references the policy
+#   ③ a local rule escalates a FAILED check to level 10, so the manager's
+#      integrator (configured by configure_wazuh_remediation.yml) forwards it to
+#      POST /api/webhooks/wazuh — which drives Puppet enforcement + a re-scan.
+#
+# Because SCA + the escalation apply to the whole Wazuh agent group, detection
+# naturally scales to a node group, matching the closed loop's group mode.
+#
+# Idempotent: marker-delimited edits, restart only on change. The Wazuh manager
+# runs as a Docker container (same pattern as configure_wazuh_remediation.yml).
+#
+# Required extra-vars (injected by the platform):
+#   sabc_sca_src   controller dir holding sabc_cis_baseline.yml + sabc_sca_escalation.xml
+#                  (default /app/ansible/files/wazuh-sca)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Configure Wazuh SCA for the SABC CIS baseline
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    sabc_sca_src:    /app/ansible/files/wazuh-sca
+    manager_ctr:     wazuh-manager
+    _shared_dir:     /var/ossec/etc/shared/default
+    _agent_conf:     /var/ossec/etc/shared/default/agent.conf
+    _local_rules:    /var/ossec/etc/rules/local_rules.xml
+    _policy_file:    sabc_cis_baseline.yml
+    _marker:         "SABC-COMPLIANCE SCA"
+
+  tasks:
+    - name: Locate the running Wazuh manager container
+      shell: "docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -E 'wazuh.*manager|{{ manager_ctr }}' | head -1"
+      register: _ctr
+      changed_when: false
+
+    - name: Fail if no manager container is running
+      fail:
+        msg: "No running Wazuh manager container found (looked for wazuh-manager)."
+      when: _ctr.stdout | trim | length == 0
+
+    - name: Set the container name
+      set_fact:
+        manager_ctr: "{{ _ctr.stdout | trim }}"
+
+    - name: Verify the SCA source files exist on the controller
+      stat:
+        path: "{{ sabc_sca_src }}/{{ item }}"
+      register: _src
+      delegate_to: localhost
+      become: no
+      loop:
+        - "{{ _policy_file }}"
+        - sabc_sca_escalation.xml
+
+    - name: Fail with a clear message when source files are missing
+      fail:
+        msg: "Missing {{ item.item }} in {{ sabc_sca_src }} on the controller."
+      when: not item.stat.exists
+      loop: "{{ _src.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # ── ① Distribute the SCA policy via the manager's shared folder ─────────────
+    - name: Copy the SCA policy into the container's shared folder
+      shell: >-
+        docker cp {{ sabc_sca_src }}/{{ _policy_file }}
+        {{ manager_ctr }}:{{ _shared_dir }}/{{ _policy_file }}
+      register: _cp_policy
+      changed_when: true
+
+    # ── ② Enable SCA for the policy in the shared agent.conf ────────────────────
+    - name: Create a working copy of agent.conf
+      command: >-
+        docker exec {{ manager_ctr }} sh -c
+        "test -f {{ _agent_conf }} || printf '<agent_config>\n</agent_config>\n' > {{ _agent_conf }}"
+      changed_when: false
+
+    - name: Copy agent.conf out of the container
+      command: docker cp {{ manager_ctr }}:{{ _agent_conf }} /tmp/sabc_agent.conf
+      changed_when: false
+
+    - name: Enable the SABC SCA policy in agent.conf (marker-delimited block)
+      blockinfile:
+        path: /tmp/sabc_agent.conf
+        marker: "<!-- {mark} {{ _marker }} -->"
+        insertbefore: "</agent_config>"
+        block: |
+          <sca>
+            <enabled>yes</enabled>
+            <scan_on_start>yes</scan_on_start>
+            <interval>1h</interval>
+            <policies>
+              <policy>etc/shared/{{ _policy_file }}</policy>
+            </policies>
+          </sca>
+      register: _agentconf_change
+
+    - name: Copy agent.conf back into the container
+      command: docker cp /tmp/sabc_agent.conf {{ manager_ctr }}:{{ _agent_conf }}
+      when: _agentconf_change is changed
+
+    # ── ③ Escalation rule so failed checks reach the webhook ────────────────────
+    - name: Copy local_rules.xml out of the container
+      command: docker cp {{ manager_ctr }}:{{ _local_rules }} /tmp/sabc_local_rules.xml
+      register: _cp_rules
+      changed_when: false
+      failed_when: false
+
+    - name: Seed an empty local_rules.xml if none exists
+      copy:
+        dest: /tmp/sabc_local_rules.xml
+        content: "<group name=\"local,syslog,\">\n</group>\n"
+      when: _cp_rules.rc is defined and _cp_rules.rc != 0
+
+    - name: Read the escalation rule fragment
+      set_fact:
+        _escalation_rule: "{{ lookup('file', sabc_sca_src + '/sabc_sca_escalation.xml') }}"
+
+    - name: Insert the escalation rule (marker-delimited)
+      blockinfile:
+        path: /tmp/sabc_local_rules.xml
+        marker: "<!-- {mark} {{ _marker }} ESCALATION -->"
+        block: "{{ _escalation_rule }}"
+      register: _rules_change
+
+    - name: Copy local_rules.xml back into the container
+      command: docker cp /tmp/sabc_local_rules.xml {{ manager_ctr }}:{{ _local_rules }}
+      when: _rules_change is changed
+
+    - name: Fix ownership/permissions of edited files in the container
+      command: >-
+        docker exec {{ manager_ctr }} sh -c
+        "chown root:wazuh {{ _agent_conf }} {{ _local_rules }} {{ _shared_dir }}/{{ _policy_file }} 2>/dev/null;
+         chmod 660 {{ _agent_conf }} {{ _local_rules }} {{ _shared_dir }}/{{ _policy_file }} 2>/dev/null; true"
+      changed_when: false
+
+    # ── Restart only when something changed ─────────────────────────────────────
+    - name: Restart the Wazuh manager to apply SCA + rules
+      command: docker restart {{ manager_ctr }}
+      when: (_agentconf_change is changed) or (_rules_change is changed) or (_cp_policy is changed)
+
+    - name: Report result
+      debug:
+        msg: >-
+          SABC CIS SCA policy installed and enabled on {{ manager_ctr }};
+          failed checks (policy sabc_cis_baseline) escalate to level 10 and forward
+          to the platform webhook, closing the detection→remediation loop.

@@ -78,6 +78,7 @@ _config_repo = None
 _configure_puppet_core_enc_uc = None
 _switch_puppet_edition_uc = None
 _deploy_compliance_module_uc = None
+_configure_wazuh_sca_uc = None
 
 
 def set_use_cases(
@@ -98,6 +99,7 @@ def set_use_cases(
     configure_puppet_core_enc_uc=None,
     switch_puppet_edition_uc=None,
     deploy_compliance_module_uc=None,
+    configure_wazuh_sca_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
     global _install_puppet_master_uc, _install_wazuh_manager_uc
@@ -106,7 +108,7 @@ def set_use_cases(
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir, _ssh_client, _config_repo
     global _configure_puppet_core_enc_uc, _switch_puppet_edition_uc
-    global _deploy_compliance_module_uc
+    global _deploy_compliance_module_uc, _configure_wazuh_sca_uc
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
@@ -124,6 +126,7 @@ def set_use_cases(
     _configure_puppet_core_enc_uc = configure_puppet_core_enc_uc
     _switch_puppet_edition_uc = switch_puppet_edition_uc
     _deploy_compliance_module_uc = deploy_compliance_module_uc
+    _configure_wazuh_sca_uc = configure_wazuh_sca_uc
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -321,6 +324,24 @@ async def deploy_compliance_module(
         raise HTTPException(status_code=503, detail="Compliance module deployment not available")
     try:
         job = await _deploy_compliance_module_uc.execute(body.node_id)
+        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/configure/wazuh-sca", response_model=JobRef, status_code=202,
+             summary="Configure Wazuh SCA scanning for the CIS baseline (detection half of the loop)")
+async def configure_wazuh_sca(
+    body: InstallRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Install the SABC CIS SCA policy on the Wazuh manager (``node_id`` = the
+    manager), distribute it to agents, and escalate failed checks to the webhook
+    so Wazuh detection drives the closed remediation loop."""
+    if _configure_wazuh_sca_uc is None:
+        raise HTTPException(status_code=503, detail="Wazuh SCA configuration not available")
+    try:
+        job = await _configure_wazuh_sca_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

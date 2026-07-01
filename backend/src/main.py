@@ -311,6 +311,7 @@ async def lifespan(app: FastAPI):
     configure_wazuh_remediation_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_remediation")
     configure_puppet_core_enc_uc       = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_core_enc")
     deploy_compliance_module_uc        = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "compliance_module")
+    configure_wazuh_sca_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_sca")
     switch_puppet_edition_uc           = SwitchPuppetEditionUseCase(start_job_uc, platform_config_repo, node_repo, configure_puppet_core_enc_uc)
     scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
@@ -323,6 +324,7 @@ async def lifespan(app: FastAPI):
         configure_wazuh_remediation_uc=configure_wazuh_remediation_uc,
         configure_puppet_core_enc_uc=configure_puppet_core_enc_uc,
         deploy_compliance_module_uc=deploy_compliance_module_uc,
+        configure_wazuh_sca_uc=configure_wazuh_sca_uc,
         switch_puppet_edition_uc=switch_puppet_edition_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
         install_wazuh_agent_uc=install_wazuh_agent_uc,

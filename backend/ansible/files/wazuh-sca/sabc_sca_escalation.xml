@@ -1,0 +1,17 @@
+<!--
+  SABC Compliance — Wazuh local rule that escalates a FAILED check of the
+  sabc_cis_baseline SCA policy to a level that the manager's integrator forwards
+  to the platform webhook (>= wazuh_webhook_min_level). That forward is what
+  triggers the closed remediation loop (Puppet enforce + re-scan).
+
+  Installed into /var/ossec/etc/rules/local_rules.xml on the manager.
+-->
+<group name="sca,sabc_compliance,">
+  <rule id="100200" level="10">
+    <if_group>sca</if_group>
+    <field name="sca.policy_id">sabc_cis_baseline</field>
+    <field name="sca.check.result">failed</field>
+    <description>SABC CIS baseline check failed — triggering closed-loop remediation</description>
+    <group>sabc_remediation,</group>
+  </rule>
+</group>

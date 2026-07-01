@@ -251,6 +251,9 @@ class InstallServiceUseCase:
         # Deploy the sabc_compliance Puppet module to the master + enforce the
         # referential fleet-wide (site-manifest include). Runs on the master node.
         "compliance_module":       "deploy_compliance_module.yml",
+        # Configure Wazuh SCA scanning for the CIS baseline + escalate failed
+        # checks to the webhook (detection half of the loop). Runs on the manager.
+        "wazuh_sca":               "configure_wazuh_sca.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master":           "puppet_master_host",
@@ -355,6 +358,11 @@ class InstallServiceUseCase:
             # (…/ansible and …/puppet/modules/sabc_compliance share a parent).
             base = _os.path.dirname(_os.path.abspath(settings.ansible_dir or "/app/ansible"))
             extra_vars["sabc_module_src"] = _os.path.join(base, "puppet", "modules", "sabc_compliance")
+        elif self._service == "wazuh_sca":
+            import os as _os
+            settings = get_settings()
+            adir = _os.path.abspath(settings.ansible_dir or "/app/ansible")
+            extra_vars["sabc_sca_src"] = _os.path.join(adir, "files", "wazuh-sca")
         elif self._service == "check_health":
             host = await self._config.get("puppet_master_host")
             if host:
