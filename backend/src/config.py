@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # Collection
     collector_interval_seconds: int = 300
 
+    # Closed-loop remediation
+    # Max nodes remediated concurrently when the loop targets a whole node group
+    # (bounds simultaneous SSH/Puppet runs).
+    closed_loop_concurrency: int = 4
+    # When true, a Wazuh alert for a node escalates the closed loop to every
+    # member of the groups that node belongs to, not just the single node.
+    wazuh_webhook_remediate_group: bool = False
+
     # Offline AI assistant (Ollama)
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"

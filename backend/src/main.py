@@ -54,7 +54,7 @@ from modules.provisioning.usecases import (
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
-    GetNodeComplianceUseCase, TriggerRemediationUseCase,
+    GetNodeComplianceUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.compliance.wazuh_webhook import ReceiveWazuhAlertUseCase
@@ -351,11 +351,23 @@ async def lifespan(app: FastAPI):
         scan_ctrl=scan_engine_uc,
     )
     remediate_uc = TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client)
+    # Closed-loop engine — enforce (Puppet) → re-scan (CINC) for a single node or
+    # every member of a node group. Group membership resolves via get_node_group_uc.
+    closed_loop_uc = RunClosedLoopUseCase(
+        node_repo=node_repo,
+        remediate_uc=remediate_uc,
+        collect_uc=collect_uc,
+        get_group_uc=get_node_group_uc,
+        event_bus=event_bus,
+        ws_manager=ws_manager,
+        concurrency=settings.closed_loop_concurrency,
+    )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
         collect_uc=collect_uc,
         remediate_uc=remediate_uc,
+        closed_loop_uc=closed_loop_uc,
         config_repo=platform_config_repo,
     )
 
@@ -371,6 +383,9 @@ async def lifespan(app: FastAPI):
         ws_manager=ws_manager,
         min_level=settings.wazuh_webhook_min_level,
         rescan=settings.wazuh_webhook_rescan,
+        closed_loop_uc=closed_loop_uc,
+        list_groups_uc=list_node_groups_uc,
+        remediate_group=settings.wazuh_webhook_remediate_group,
     )
     webhooks_routes.set_use_cases(
         receive_wazuh_uc=receive_wazuh_uc,

@@ -19,6 +19,14 @@ class CollectRequest(BaseModel):
 class RemediateRequest(BaseModel):
     description: str | None = None
 
+class ClosedLoopRequest(BaseModel):
+    # Exactly one of node_id / group_id. Enforce (Puppet) → re-scan (CINC) for a
+    # single node or every member of a node group.
+    node_id: str | None = None
+    group_id: str | None = None
+    description: str | None = None
+    rescan: bool = True
+
 class ScanScheduleRequest(BaseModel):
     enabled: bool = True
     interval: int = Field(default=30, ge=1)
@@ -31,15 +39,19 @@ _summary_uc = None
 _node_uc = None
 _collect_uc = None
 _remediate_uc = None
+_closed_loop_uc = None
 _config_repo = None
 
 
-def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=None) -> None:
+def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=None,
+                  closed_loop_uc=None) -> None:
     global _summary_uc, _node_uc, _collect_uc, _remediate_uc, _config_repo
+    global _closed_loop_uc
     _summary_uc = summary_uc
     _node_uc = node_uc
     _collect_uc = collect_uc
     _remediate_uc = remediate_uc
+    _closed_loop_uc = closed_loop_uc
     _config_repo = config_repo
 
 
@@ -92,6 +104,32 @@ async def remediate_node(id: str, body: RemediateRequest, principal: AuthPrincip
         return await _remediate_uc.execute(id, body.description)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/closed-loop", summary="Run the closed remediation loop on a node or a node group")
+async def run_closed_loop(
+    body: ClosedLoopRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Enforce compliance with Puppet and re-scan, for a single node
+    (``{"node_id": "..."}``) or every member of a node group
+    (``{"group_id": "..."}``). Provide exactly one. Per-node progress is streamed
+    over the node's WebSocket channel; the response returns the aggregate once
+    the run completes.
+    """
+    if _closed_loop_uc is None:
+        raise HTTPException(status_code=503, detail="Closed-loop remediation not available")
+    try:
+        return await _closed_loop_uc.execute(
+            node_id=body.node_id,
+            group_id=body.group_id,
+            description=body.description,
+            rescan=body.rescan,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/schedule", summary="Get the auto-scan schedule")

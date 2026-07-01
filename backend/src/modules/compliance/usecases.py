@@ -1,11 +1,14 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from core.domain.entities import (
     CIS_BENCHMARK_PROFILE_ID, INTERNAL_PROFILE_ID,
@@ -541,3 +544,173 @@ class TriggerRemediationUseCase:
             "resources_fixed": event.resources_fixed,
             "message": "Puppet enforcement run complete.",
         }
+
+
+class RunClosedLoopUseCase:
+    """Drive the closed remediation loop for a SINGLE node OR a NODE GROUP.
+
+    For each target node the loop is: Puppet enforcement (`puppet agent -t` over
+    SSH, via TriggerRemediationUseCase) → optional compliance re-scan (CINC/InSpec,
+    via CollectNodeComplianceUseCase) so the dashboard reflects the post-fix
+    posture. Group runs fan out across members with bounded concurrency so a
+    large group doesn't open dozens of simultaneous SSH sessions.
+
+    Exactly one of ``node_id`` / ``group_id`` must be supplied. Group membership
+    is resolved through the injected ``get_group_uc`` (GetNodeGroupUseCase),
+    which returns ``(group, [member_node_ids])`` — no cross-module import.
+    """
+
+    def __init__(
+        self,
+        node_repo: INodeRepository,
+        remediate_uc: "TriggerRemediationUseCase",
+        collect_uc: "CollectNodeComplianceUseCase | None" = None,
+        get_group_uc=None,
+        event_bus=None,
+        ws_manager=None,
+        concurrency: int = 4,
+    ) -> None:
+        self._nodes = node_repo
+        self._remediate = remediate_uc
+        self._collect = collect_uc
+        self._get_group = get_group_uc
+        self._bus = event_bus
+        self._ws = ws_manager
+        self._concurrency = max(1, concurrency)
+
+    async def execute(
+        self,
+        node_id: str | None = None,
+        group_id: str | None = None,
+        description: str | None = None,
+        rescan: bool = True,
+        wazuh_alert_id: str | None = None,
+    ) -> dict:
+        if bool(node_id) == bool(group_id):
+            raise ValidationError("Provide exactly one of node_id or group_id.")
+
+        # ── Resolve the target node list ──────────────────────────────────────
+        if group_id:
+            if self._get_group is None:
+                raise ValidationError("Group remediation is not available (no group resolver).")
+            group, member_ids = await self._get_group.execute(group_id)
+            target = {"kind": "group", "id": group_id, "name": group.name}
+            node_ids = list(dict.fromkeys(member_ids))  # de-dup, preserve order
+            if not node_ids:
+                return {
+                    "target": target, "requested": 0, "processed": 0,
+                    "succeeded": 0, "failed": 0, "skipped": 0,
+                    "message": f"Group '{group.name}' has no member nodes to remediate.",
+                    "nodes": [],
+                }
+        else:
+            node = await _resolve_node(self._nodes, node_id)
+            target = {"kind": "node", "id": node.id, "name": node.hostname}
+            node_ids = [node.id]
+
+        desc = description or (
+            f"Closed-loop remediation ({target['kind']} {target['name']})"
+        )
+
+        # ── Fan out with bounded concurrency ──────────────────────────────────
+        sem = asyncio.Semaphore(self._concurrency)
+
+        async def _one(nid: str) -> dict:
+            async with sem:
+                return await self._process_node(nid, desc, rescan, wazuh_alert_id)
+
+        results = await asyncio.gather(
+            *[_one(nid) for nid in node_ids], return_exceptions=True
+        )
+
+        nodes_out: list[dict] = []
+        succeeded = failed = skipped = 0
+        for nid, res in zip(node_ids, results):
+            if isinstance(res, Exception):
+                logger.error("Closed loop crashed for node %s: %s", nid, res)
+                nodes_out.append({"node_id": nid, "status": "failed", "error": str(res)})
+                failed += 1
+                continue
+            nodes_out.append(res)
+            if res["status"] == "success":
+                succeeded += 1
+            elif res["status"] == "skipped":
+                skipped += 1
+            else:
+                failed += 1
+
+        summary = {
+            "target": target,
+            "requested": len(node_ids),
+            "processed": len(nodes_out),
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped": skipped,
+            "rescan": rescan and self._collect is not None,
+            "nodes": nodes_out,
+        }
+        self._publish("compliance.closed_loop_completed", {
+            "target": target, "succeeded": succeeded, "failed": failed, "skipped": skipped,
+        })
+        return summary
+
+    async def _process_node(
+        self, node_id: str, description: str, rescan: bool, wazuh_alert_id: str | None
+    ) -> dict:
+        await self._broadcast(node_id, "closed_loop_started", {"message": "Enforcement starting."})
+        entry: dict = {"node_id": node_id, "status": "success"}
+        try:
+            enforce = await self._remediate.execute(
+                node_id, description=description, wazuh_alert_id=wazuh_alert_id,
+            )
+            entry["enforcement"] = enforce
+            outcome = (enforce or {}).get("outcome")
+            if outcome == "skipped":
+                entry["status"] = "skipped"
+            elif outcome == "failed":
+                entry["status"] = "failed"
+            await self._broadcast(node_id, "enforcement_completed", enforce)
+
+            # Re-scan only when enforcement actually ran (not skipped/failed).
+            if rescan and self._collect is not None and entry["status"] == "success":
+                await self._broadcast(node_id, "rescan_started", {"message": "Re-scanning."})
+                try:
+                    scan = await self._collect.execute(node_id)
+                    entry["rescan"] = scan
+                    await self._broadcast(node_id, "rescan_completed", {
+                        "collected": scan.get("collected") if isinstance(scan, dict) else None,
+                    })
+                except Exception as exc:
+                    # A re-scan failure must not mask a successful enforcement.
+                    logger.error("Post-remediation re-scan failed for %s: %s", node_id, exc)
+                    entry["rescan_error"] = str(exc)
+                    await self._broadcast(node_id, "rescan_failed", {"error": str(exc)})
+        except NotFoundError:
+            raise
+        except Exception as exc:
+            logger.error("Enforcement failed for %s: %s", node_id, exc)
+            entry["status"] = "failed"
+            entry["error"] = str(exc)
+            await self._broadcast(node_id, "closed_loop_failed", {"error": str(exc)})
+        return entry
+
+    def _publish(self, event_name: str, payload: dict) -> None:
+        if self._bus is not None:
+            try:
+                self._bus.publish(event_name, payload)
+            except Exception as exc:
+                logger.error("Event publish failed [%s]: %s", event_name, exc)
+
+    async def _broadcast(self, node_id: str, phase: str, payload: dict) -> None:
+        if self._ws is None:
+            return
+        try:
+            await self._ws.broadcast_node(node_id, {
+                "channel": "remediation",
+                "phase": phase,
+                "node_id": node_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": payload,
+            })
+        except Exception as exc:
+            logger.error("WebSocket broadcast failed [%s/%s]: %s", node_id, phase, exc)

@@ -104,6 +104,9 @@ class ReceiveWazuhAlertUseCase:
         ws_manager=None,
         min_level: int = 7,
         rescan: bool = True,
+        closed_loop_uc=None,
+        list_groups_uc=None,
+        remediate_group: bool = False,
     ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
@@ -113,6 +116,12 @@ class ReceiveWazuhAlertUseCase:
         self._ws = ws_manager
         self._min_level = min_level
         self._rescan = rescan
+        # Optional group escalation: when remediate_group is on, an alert for a
+        # node drives the closed loop across every group the node belongs to
+        # (via the injected RunClosedLoopUseCase), not just the single node.
+        self._closed_loop = closed_loop_uc
+        self._list_groups = list_groups_uc
+        self._remediate_group = remediate_group
         # One in-flight remediation per node — prevents a burst of alerts for the
         # same host from launching concurrent Puppet runs over SSH.
         self._locks: dict[str, asyncio.Lock] = {}
@@ -225,7 +234,31 @@ class ReceiveWazuhAlertUseCase:
                     "message": "Puppet enforcement run started (active response).",
                 })
 
-                # ── Puppet enforcement ────────────────────────────────────────
+                # ── Group escalation ──────────────────────────────────────────
+                # When enabled, drive the closed loop across every group this
+                # node belongs to (enforce + re-scan each member) instead of the
+                # single node, then finish.
+                if self._remediate_group and self._closed_loop is not None:
+                    group_ids = await self._node_group_ids(node_id)
+                    if group_ids:
+                        for gid in group_ids:
+                            await self._closed_loop.execute(
+                                group_id=gid,
+                                description=f"Wazuh alert {alert.alert_id}: {alert.rule_description}",
+                                rescan=self._rescan,
+                                wazuh_alert_id=alert.alert_id,
+                            )
+                        self._publish(Events.REMEDIATION_COMPLETED, {
+                            "node_id": node_id, "wazuh_alert_id": alert.alert_id,
+                            "escalated_groups": group_ids,
+                        })
+                        await self._broadcast(node_id, "remediation_completed", {
+                            "message": f"Closed loop applied to {len(group_ids)} group(s).",
+                            "groups": group_ids,
+                        })
+                        return
+
+                # ── Puppet enforcement (single node) ──────────────────────────
                 result = await self._remediate.execute(
                     node_id,
                     description=f"Wazuh alert {alert.alert_id}: {alert.rule_description}",
@@ -263,6 +296,17 @@ class ReceiveWazuhAlertUseCase:
                 self._inflight.discard(node_id)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    async def _node_group_ids(self, node_id: str) -> list[str]:
+        """Group ids whose resolved membership includes this node."""
+        if self._list_groups is None:
+            return []
+        try:
+            pairs = await self._list_groups.execute()  # [(group, [member_ids])]
+            return [g.id for (g, ids) in pairs if node_id in (ids or [])]
+        except Exception as exc:
+            logger.error("Group resolution for node %s failed: %s", node_id, exc)
+            return []
 
     async def _resolve_node(self, alert: WazuhAlert):
         """Match a Wazuh agent to a managed node by hostname, then by IP."""
