@@ -525,6 +525,11 @@ export async function getNodeGroup(id) {
   return request('GET', `/node-groups/${id}`)
 }
 
+// Configure the group's package repository on every member node via Ansible.
+export async function applyGroupPackageRepo(id) {
+  return request('POST', `/node-groups/${id}/apply-package-repo`)
+}
+
 export async function listNodeGroupFacts() {
   return request('GET', '/node-groups/facts')
 }

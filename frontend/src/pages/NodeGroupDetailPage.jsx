@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Server, Shield, RotateCw, Plus, Trash2, Save, Zap,
-  Network, ChevronRight, CheckCircle, XCircle,
+  Network, ChevronRight, CheckCircle, XCircle, Package, Play,
 } from 'lucide-react'
 import {
   getNodeGroup, updateNodeGroup, listNodes, listNodeGroupFacts, runClosedLoop,
+  applyGroupPackageRepo,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -206,6 +207,97 @@ function RulesCard({ group, facts, onSaved }) {
   )
 }
 
+// ── Package management (repository) ───────────────────────────────────────────
+function PackageRepoCard({ group, onSaved, navigate }) {
+  const toast = useToast()
+  const empty = { enabled: false, name: '', url: '', suite: '', components: 'main', gpg_key: '' }
+  const [repo, setRepo] = useState({ ...empty, ...(group.package_repo || {}) })
+  const [saving, setSaving] = useState(false)
+  const [applying, setApplying] = useState(false)
+
+  useEffect(() => {
+    setRepo({ ...empty, ...(group.package_repo || {}) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.id, group.updated_at])
+
+  const dirty = JSON.stringify({ ...empty, ...(group.package_repo || {}) }) !== JSON.stringify(repo)
+  const set = (k, v) => setRepo((r) => ({ ...r, [k]: v }))
+
+  async function save() {
+    if (repo.enabled && (!repo.name.trim() || !repo.url.trim())) {
+      toast('A name and URL are required to enable a repository.', 'error'); return
+    }
+    setSaving(true)
+    try {
+      await updateNodeGroup(group.id, { package_repo: repo })
+      toast('Package repository saved.', 'success')
+      onSaved()
+    } catch (err) { toast(err.message, 'error') } finally { setSaving(false) }
+  }
+
+  async function applyNow() {
+    setApplying(true)
+    try {
+      const r = await applyGroupPackageRepo(group.id)
+      if (!r.jobs?.length) toast(r.message || 'No member nodes to apply to.', 'info')
+      else toast(`Applying repository on ${r.jobs.length} node(s) via Ansible — see Jobs.`, 'success')
+    } catch (err) { toast(err.message, 'error') } finally { setApplying(false) }
+  }
+
+  const field = (label, k, ph = '') => (
+    <label className="block">
+      <span className="text-[11px] text-gray-500">{label}</span>
+      <input value={repo[k]} onChange={(e) => set(k, e.target.value)} placeholder={ph}
+        className="mt-1 w-full px-2.5 py-1.5 text-[12px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand" />
+    </label>
+  )
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-violet-50 border border-violet-100 flex items-center justify-center flex-shrink-0">
+            <Package size={16} className={repo.enabled ? 'text-violet-500' : 'text-gray-300'} />
+          </div>
+          <div>
+            <h3 className="text-[13px] font-semibold text-gray-900">Package management</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5 max-w-md">
+              The OS package repository member servers pull from. Applied over Ansible
+              immediately (no Puppet master needed); once a master is installed the
+              sabc_compliance module keeps it enforced on every run. Disabled → members
+              use the server default repository.
+            </p>
+          </div>
+        </div>
+        <button onClick={() => set('enabled', !repo.enabled)} role="switch" aria-checked={repo.enabled}
+          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${repo.enabled ? 'bg-violet-500' : 'bg-gray-200'}`}>
+          <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${repo.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+      </div>
+
+      {repo.enabled && (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {field('Name', 'name', 'sabc-mirror')}
+          {field('URL', 'url', 'http://mirror.sabc.local/ubuntu')}
+          {field('Suite (apt only)', 'suite', 'jammy')}
+          {field('Components (apt only)', 'components', 'main')}
+          <div className="col-span-2">{field('GPG key URL (optional)', 'gpg_key', 'http://mirror.sabc.local/key.gpg')}</div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button onClick={save} disabled={!dirty || saving} className={`${btnSm(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+          {saving ? <Spinner size={12} /> : <Save size={12} />}Save
+        </button>
+        <button onClick={applyNow} disabled={applying} className={btnSm(false)}
+          title="Configure the repository on every member node now, via Ansible">
+          {applying ? <Spinner size={12} /> : <Play size={12} />}Apply now (Ansible)
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Members (attached servers) ────────────────────────────────────────────────
 function MembersCard({ group, nodes, navigate }) {
   const memberIds = new Set(group.matching_node_ids || [])
@@ -318,6 +410,7 @@ export default function NodeGroupDetailPage() {
       <div className="space-y-4">
         <ActiveResponseCard group={group} onToggled={refetch} />
         <MembersCard group={group} nodes={nodes} navigate={navigate} />
+        <PackageRepoCard group={group} onSaved={refetch} navigate={navigate} />
         <RulesCard group={group} facts={facts} onSaved={refetch} />
       </div>
     </div>
