@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-# SABC Compliance — Wazuh offline bundle builder (+ verifier)
+# SABC Compliance — Wazuh offline (airgap) bundle builder + verifier
 # =============================================================================
-# Builds a COMPLETE Wazuh offline installation bundle for an airgapped install,
-# and — crucially — VERIFIES it contains every package the installer needs
-# (wazuh-manager, wazuh-indexer, wazuh-dashboard, filebeat) before you ship it.
-# The "Missing necessary offline file: …/filebeat_*.deb" failures come from
-# incomplete/wrong-OS bundles; this script refuses to produce one.
+# Follows the OFFICIAL Wazuh offline installation procedure exactly, then VERIFIES
+# the bundle contains every package the installer needs (wazuh-manager,
+# wazuh-indexer, wazuh-dashboard, filebeat) before you ship it. The recurring
+# "Missing necessary offline file: …/filebeat_*.deb" failures come from bundles
+# built WITHOUT the architecture flag (-da amd64) or on the wrong OS; this script
+# uses the correct flags and refuses to produce an incomplete bundle.
 #
-# RUN THIS ON AN INTERNET-CONNECTED MACHINE OF THE SAME OS FAMILY + ARCH AS THE
-# AIRGAPPED TARGET:
-#   * target is Ubuntu/Debian x86_64  → run on Ubuntu/Debian x86_64  (builds .deb)
-#   * target is RHEL/Rocky/Alma x86_64 → run on a RHEL-family x86_64  (builds .rpm)
-# Package type and arch are baked into the bundle, so a mismatch will fail on the
-# target — build on a matching box.
+# Produces the three files the platform (and Wazuh) need for an all-in-one
+# offline install:
+#   wazuh-install.sh          the installation assistant
+#   wazuh-offline.tar.gz      all packages (renamed wazuh-offline-<deb|rpm>.tar.gz)
+#   wazuh-install-files.tar   certificates, pre-generated for 127.0.0.1 (all-in-one)
+#
+# RUN ON AN INTERNET-CONNECTED MACHINE OF THE SAME OS FAMILY + ARCH AS THE TARGET
+# (Ubuntu/Debian x86_64 target → build on Ubuntu/Debian x86_64), as root.
 #
 # Usage:
-#   sudo ./deploy/get-wazuh-offline.sh                 # version 4.14, auto OS
-#   sudo VERSION=4.14 ./deploy/get-wazuh-offline.sh    # pin the Wazuh version
+#   sudo ./deploy/get-wazuh-offline.sh                 # v4.14, auto OS+arch, all-in-one
+#   sudo VERSION=4.14 ./deploy/get-wazuh-offline.sh
 #
-# Output: deploy/wazuh-manager/wazuh-offline-<deb|rpm>.tar.gz  (+ wazuh-install.sh)
-# Then copy that whole directory into the platform's packages dir on the server:
-#   backend/packages/wazuh-manager/   (or /opt/sabc-compliance/backend/packages/wazuh-manager/)
+# Reference: https://documentation.wazuh.com/current/deployment-options/offline-installation.html
 # =============================================================================
 set -euo pipefail
 
@@ -35,89 +36,94 @@ info() { echo -e "\033[1;34m▸\033[0m $*"; }
 ok()   { echo -e "\033[1;32m✓\033[0m $*"; }
 fail() { echo -e "\033[1;31m✗\033[0m $*"; exit 1; }
 
-# ── Detect OS family → package type ──────────────────────────────────────────
-if command -v apt-get >/dev/null 2>&1; then
-  PKG="deb"
-elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
-  PKG="rpm"
+[ "$(id -u)" -eq 0 ] || fail "Run as root (sudo) — the Wazuh downloader and cert generation need it."
+
+# ── Detect package format + Wazuh's architecture name ────────────────────────
+if   command -v apt-get >/dev/null 2>&1; then PKG="deb"
+elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then PKG="rpm"
+else fail "Unsupported OS: need apt (Debian/Ubuntu) or yum/dnf (RHEL family)."; fi
+
+case "$(uname -m)" in
+  x86_64|amd64)   DA="amd64" ;;
+  aarch64|arm64)  DA="arm64" ;;
+  *) fail "Unsupported arch $(uname -m) — Wazuh offline supports amd64 or arm64." ;;
+esac
+info "Building Wazuh ${VERSION} OFFLINE bundle: format=${PKG}, arch=${DA}"
+
+# The build host's prerequisites (per the official guide) — needed by -g too.
+info "Ensuring build-host prerequisites (curl, tar, gnupg, setcap) ..."
+if [ "$PKG" = "deb" ]; then
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y curl tar gnupg libcap2-bin >/dev/null 2>&1 || true
 else
-  fail "Unsupported OS: need apt (Debian/Ubuntu) or yum/dnf (RHEL family)."
+  ( yum install -y curl tar gnupg2 libcap >/dev/null 2>&1 || dnf install -y curl tar gnupg2 libcap >/dev/null 2>&1 ) || true
 fi
-ARCH="$(uname -m)"
-[ "$(id -u)" -eq 0 ] || fail "Run as root (sudo) — the Wazuh downloader needs it."
-info "Building a Wazuh ${VERSION} OFFLINE bundle: type=${PKG}, arch=${ARCH}"
-[ "$ARCH" = "x86_64" ] || echo "  ! arch is ${ARCH}; ensure it matches your target."
 
 cd "$WORK"
 
-# ── 1. Fetch the installation assistant for this version ─────────────────────
+# ── 1. Installation assistant ────────────────────────────────────────────────
 info "Downloading wazuh-install.sh (${VERSION}) ..."
-curl -fsSL -o wazuh-install.sh "https://packages.wazuh.com/${VERSION}/wazuh-install.sh" \
-  || fail "Could not download wazuh-install.sh — is this machine online / version ${VERSION} valid?"
-chmod +x wazuh-install.sh
+curl -sO "https://packages.wazuh.com/${VERSION}/wazuh-install.sh" \
+  || fail "Could not download wazuh-install.sh — online? version ${VERSION} valid?"
+chmod 744 wazuh-install.sh
 
-# ── 2. Determine the correct 'download resources' flag from the assistant ────
-# Wazuh has used -dw/--download-resources (current) and --download-packages
-# across versions. Detect whichever this assistant actually supports.
-if grep -q -- '--download-resources' wazuh-install.sh; then
-  DL_FLAG="-dw"
-elif grep -q -- '--download-packages' wazuh-install.sh; then
-  DL_FLAG="--download-packages"
-else
-  fail "This wazuh-install.sh has no recognised offline-download option; check 'bash wazuh-install.sh -h'."
-fi
-info "Using download flag: ${DL_FLAG}"
+# ── 2. Download all packages for THIS format + arch (the -da flag matters!) ──
+info "Downloading all packages: ./wazuh-install.sh -dw ${PKG} -da ${DA} (~1.6 GB) ..."
+bash wazuh-install.sh -dw "${PKG}" -da "${DA}" 2>&1 | tail -20 \
+  || fail "Package download failed — see output above."
+[ -f wazuh-offline.tar.gz ] || fail "wazuh-offline.tar.gz was not produced by -dw."
 
-# ── 3. Build the offline bundle ──────────────────────────────────────────────
-info "Downloading all Wazuh ${VERSION} ${PKG} packages (this pulls ~1.6 GB) ..."
-# Newer assistants ignore a trailing type arg; older need it. Try with the type,
-# fall back to bare flag.
-bash wazuh-install.sh ${DL_FLAG} "${PKG}" 2>&1 | tail -20 \
-  || bash wazuh-install.sh ${DL_FLAG} 2>&1 | tail -20 \
-  || fail "wazuh-install.sh ${DL_FLAG} failed — see output above."
+# ── 3-5. Certificates config + generation (all-in-one → 127.0.0.1) ───────────
+info "Downloading config.yml and preparing an all-in-one (127.0.0.1) layout ..."
+curl -sO "https://packages.wazuh.com/${VERSION}/config.yml" \
+  || fail "Could not download config.yml."
+# Replace every "<...-node-ip>" / "<wazuh-manager-ip>" placeholder with 127.0.0.1.
+sed -i -E 's/"<[^"]*>"/"127.0.0.1"/g' config.yml
 
-# Locate the produced tarball (name has varied: wazuh-offline.tar.gz).
-BUNDLE="$(ls -1 wazuh-offline*.tar.gz 2>/dev/null | head -1 || true)"
-[ -n "$BUNDLE" ] || fail "No wazuh-offline*.tar.gz was produced by the download step."
+info "Generating certificates: ./wazuh-install.sh -g ..."
+bash wazuh-install.sh -g 2>&1 | tail -10 || fail "Certificate generation (-g) failed."
+[ -f wazuh-install-files.tar ] || fail "wazuh-install-files.tar (certs) was not produced by -g."
 
-# ── 4. VERIFY the bundle is complete for this OS ─────────────────────────────
-info "Verifying the bundle contains all required ${PKG} packages ..."
-listing="$(tar tzf "$BUNDLE")"
+# ── 6. VERIFY the bundle is complete for this OS ─────────────────────────────
+info "Verifying wazuh-offline.tar.gz contains all required ${PKG} packages ..."
+listing="$(tar tzf wazuh-offline.tar.gz)"
 missing=""
 for want in wazuh-manager wazuh-indexer wazuh-dashboard filebeat; do
-  if ! printf '%s\n' "$listing" | grep -Eq "wazuh-packages/.*${want}.*\.${PKG}\$"; then
-    missing="${missing} ${want}"
-  fi
+  printf '%s\n' "$listing" | grep -Eq "wazuh-packages/.*${want}.*\.${PKG}\$" || missing="${missing} ${want}"
 done
 if [ -n "$missing" ]; then
-  echo "  Bundle contents (wazuh-packages/*):"
+  echo "  Packages present in the bundle:"
   printf '%s\n' "$listing" | grep -E "wazuh-packages/.*\.(deb|rpm)$" | sed 's/^/    /' || true
-  fail "Bundle is INCOMPLETE — missing:${missing}. Do NOT ship it. Rebuild on a matching ${PKG} host."
+  fail "Bundle INCOMPLETE — missing:${missing}. Do NOT ship it. (Built on the wrong OS/arch?)"
 fi
-ok "Bundle verified — wazuh-manager, wazuh-indexer, wazuh-dashboard and filebeat (${PKG}) all present."
+ok "Bundle verified — manager, indexer, dashboard and filebeat (${PKG}/${DA}) all present."
 
-# ── 5. Place it with the OS-specific name the platform prefers ───────────────
+# ── Place the three files, ready to ship ─────────────────────────────────────
 mkdir -p "$OUT_DIR"
-cp "$BUNDLE" "$OUT_DIR/wazuh-offline-${PKG}.tar.gz"
-cp wazuh-install.sh "$OUT_DIR/wazuh-install.sh"
+cp wazuh-offline.tar.gz    "$OUT_DIR/wazuh-offline-${PKG}.tar.gz"
+cp wazuh-install-files.tar "$OUT_DIR/wazuh-install-files.tar"
+cp wazuh-install.sh        "$OUT_DIR/wazuh-install.sh"
 size="$(du -h "$OUT_DIR/wazuh-offline-${PKG}.tar.gz" | cut -f1)"
-ok "Wrote $OUT_DIR/wazuh-offline-${PKG}.tar.gz (${size}) and wazuh-install.sh"
+ok "Wrote to $OUT_DIR: wazuh-offline-${PKG}.tar.gz (${size}), wazuh-install-files.tar, wazuh-install.sh"
 
 cat <<EOF
 
 ──────────────────────────────────────────────────────────────────────────────
- Airgap bundle ready. Copy BOTH files into the platform's packages dir:
+ Airgap bundle ready (all-in-one, certs for 127.0.0.1). Copy the THREE files to
+ the platform's packages dir:
 
    scp $OUT_DIR/wazuh-offline-${PKG}.tar.gz \\
+       $OUT_DIR/wazuh-install-files.tar \\
        $OUT_DIR/wazuh-install.sh \\
        user@platform:/opt/sabc-compliance/backend/packages/wazuh-manager/
 
- Certificates are handled automatically: leave them out and the platform
- generates them on the target during the offline install (all-in-one, 127.0.0.1)
- — you do NOT need to hand-edit config.yml. If you prefer to pre-generate certs,
- also drop a wazuh-install-files.tar in the same dir.
+ IMPORTANT — the AIRGAP TARGET also needs curl, tar, setcap (libcap2-bin) and
+ gnupg pre-installed (the offline installer requires them and cannot fetch them
+ with no internet). On the target once, before going airgapped:
+   sudo apt-get install -y curl tar libcap2-bin gnupg      # Debian/Ubuntu
+   sudo yum install -y curl tar libcap gnupg2              # RHEL family
 
- Then run the Wazuh manager install from the platform. The playbook detects
+ Then run the Wazuh manager install from the platform — it detects
  wazuh-offline-${PKG}.tar.gz and installs fully offline.
 ──────────────────────────────────────────────────────────────────────────────
 EOF

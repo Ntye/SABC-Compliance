@@ -466,9 +466,20 @@
 
     # Verify the target can actually reach the Wazuh package server before
     # handing off to the installer — avoids a long wait for an opaque failure.
+    #
+    # IMPORTANT: distinguish "curl isn't on PATH" (shell exit 127 — a completely
+    # different problem from no internet, and easy to mistake for one) from a
+    # genuine network failure (curl's own codes: 6=DNS, 7=refused, 28=timeout,
+    # 35=TLS). Using the absolute path from `command -v` (resolved separately,
+    # with become) avoids a PATH/secure_path mismatch silently producing 127.
+    - name: Online — locate curl on the target
+      shell: command -v curl || true
+      register: curl_path
+      changed_when: false
+
     - name: Online — verify target can reach packages.wazuh.com
-      shell: >-
-        curl -s
+      command: >-
+        {{ curl_path.stdout | trim | default('curl') }} -s
           --connect-timeout 10
           --max-time 20
           -o /dev/null
@@ -477,6 +488,23 @@
       register: inet_check
       changed_when: false
       failed_when: false
+      when:
+        - (curl_path.stdout | trim) != ''
+        - not wazuh_airgap
+        - not wazuh_installed
+
+    - name: Online — abort clearly when curl itself is missing
+      fail:
+        msg: >-
+          curl is not on this target's PATH even after the prerequisites step —
+          this is NOT a "no internet" problem, it means something is wrong with
+          the package install or PATH/secure_path for the become user. Check
+          manually: `ssh <target> 'sudo which curl'` and
+          `sudo apt-get install -y curl`.
+      when:
+        - (curl_path.stdout | trim) == ''
+        - not wazuh_airgap
+        - not wazuh_installed
       when:
         - not wazuh_airgap
         - not wazuh_installed
