@@ -37,6 +37,7 @@ from modules.node_groups.usecases import (
     ListNodeGroupsUseCase, GetNodeGroupUseCase, AddNodeToGroupUseCase,
     RemoveNodeFromGroupUseCase, ListFactsUseCase, PreviewMatchingUseCase,
     SeedDefaultNodeGroupsUseCase, SyncAllNodeGroupsUseCase,
+    ApplyGroupPackageRepoUseCase,
 )
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
@@ -239,6 +240,12 @@ async def lifespan(app: FastAPI):
     # -- Job infrastructure (needed by both node and provisioning use cases) --
     start_job_uc = StartJobUseCase(job_repo, node_repo, ansible, ws_manager)
     detect_agents_uc = DetectAgentsUseCase(start_job_uc, node_repo, job_repo)
+
+    # Package-repo enforcement per node group (Ansible; needs start_job_uc).
+    apply_group_repo_uc = ApplyGroupPackageRepoUseCase(
+        node_group_repo, node_repo, start_job_uc, platform_config_repo,
+    )
+    node_groups_routes.set_apply_repo_uc(apply_group_repo_uc)
 
     # -- Node use cases --
     register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)

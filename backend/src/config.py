@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     # Collection
     collector_interval_seconds: int = 300
 
+    # Default OS package repository base URL used for node groups that don't set
+    # their own (the "server default repository"). Blank → leave OS defaults.
+    default_package_repo_url: str = ""
+
     # Closed-loop remediation
     # Max nodes remediated concurrently when the loop targets a whole node group
     # (bounds simultaneous SSH/Puppet runs).

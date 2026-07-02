@@ -725,12 +725,16 @@ class SyncAllNodeGroupsUseCase:
                     "environment": g.environment or "production",
                     "groups": [],
                     "inspec_profile": None,
+                    "package_repo": None,
                 })
                 entry["groups"].append(g.name)
                 if g.environment:
                     entry["environment"] = g.environment
                 if g.inspec_profile_id:
                     entry["inspec_profile"] = g.inspec_profile_id
+                # Deepest group with an enabled repo wins (same override order).
+                if (g.package_repo or {}).get("enabled") and (g.package_repo or {}).get("url"):
+                    entry["package_repo"] = g.package_repo
 
         classifications = list(classmap.values())
 
@@ -876,6 +880,8 @@ class UpdateNodeGroupUseCase:
             group.inspec_profile_id = data["inspec_profile_id"] or None
         if "active_response_enabled" in data:
             group.active_response_enabled = bool(data["active_response_enabled"])
+        if "package_repo" in data:
+            group.package_repo = data["package_repo"] or {}
         if "node_ids" in data:
             current = set(group.node_ids)
             wanted = set(data["node_ids"] or [])
@@ -983,6 +989,52 @@ class GetNodeGroupUseCase:
         if self._node_repo:
             matching = (await resolve_matching(g, self._node_repo))["ids"]
         return g, matching
+
+
+class ApplyGroupPackageRepoUseCase:
+    """Configure the group's package repository on each member node via Ansible.
+
+    Works with no Puppet master — it launches one configure_package_repo.yml job
+    per member. When the group has no enabled repo, the server default
+    (default_package_repo_url) is used; when that is also unset, the node's OS
+    defaults are left untouched.
+    """
+    def __init__(self, repo, node_repo, start_job_uc, config_repo=None):
+        self._repo = repo
+        self._node_repo = node_repo
+        self._start = start_job_uc
+        self._config = config_repo
+
+    async def execute(self, group_id: str) -> dict:
+        group = await self._repo.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Node group '{group_id}' not found")
+        node_ids = (await resolve_matching(group, self._node_repo))["ids"]
+        if not node_ids:
+            return {"group": group.name, "requested": 0, "jobs": [],
+                    "message": f"Group '{group.name}' has no member nodes."}
+
+        default_url = ""
+        if self._config:
+            try:
+                default_url = (await self._config.get("default_package_repo_url")) or ""
+            except Exception:
+                default_url = ""
+        if not default_url:
+            from config import get_settings
+            default_url = get_settings().default_package_repo_url or ""
+
+        extra_vars = {"repo": group.package_repo or {}, "default_repo_url": default_url}
+        jobs = []
+        for nid in node_ids:
+            job = await self._start.execute({
+                "type": "configure_package_repo",
+                "node_id": nid,
+                "playbook": "configure_package_repo.yml",
+                "extra_vars": extra_vars,
+            })
+            jobs.append({"node_id": nid, "job_id": job.id})
+        return {"group": group.name, "requested": len(node_ids), "jobs": jobs}
 
 
 class ListFactsUseCase:

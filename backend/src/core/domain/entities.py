@@ -278,6 +278,11 @@ class NodeGroup:
     # When true, a Wazuh alert for any member node drives the closed remediation
     # loop across this whole group (active response). Off by default.
     active_response_enabled: bool = False
+    # OS package repository the group's member nodes pull from. Enforced first by
+    # Ansible (works with no Puppet master) and, once a master is up, by Puppet.
+    # Shape: {"enabled": bool, "name": str, "url": str, "suite": str,
+    #         "components": str, "gpg_key": str}. Empty → use the server default.
+    package_repo: dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

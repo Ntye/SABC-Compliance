@@ -1,0 +1,137 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Configure the OS package repository a node pulls packages from.
+#
+# This is the Ansible enforcement path for a node group's package repository —
+# it works even before any Puppet master is installed. Once a master IS up, the
+# sabc_compliance Puppet module enforces the same repo in the catalog, so the
+# setting "goes into the rules" and is maintained on every puppet run.
+#
+# Effective repository (first that applies):
+#   1. the group's repo               (extra-var `repo` with enabled=true + url)
+#   2. the server default repository  (extra-var `default_repo_url`)
+#   3. none → leave the OS defaults untouched (reported, no change)
+#
+# Required/optional extra-vars (injected by the platform):
+#   repo             {enabled, name, url, suite, components, gpg_key}
+#   default_repo_url fallback base URL when the group has no repo
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Configure package repository
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    repo: {}
+    default_repo_url: ""
+
+  # Ensure a modern Python before gathering facts (minimal images may lack it).
+  pre_tasks:
+    - name: Bootstrap a suitable Python interpreter (raw SSH, no facts)
+      raw: |
+        find_py() {
+          for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+            if command -v "$p" >/dev/null 2>&1; then echo "$(command -v "$p")"; return 0; fi
+          done
+          return 1
+        }
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        if command -v apt-get >/dev/null 2>&1; then apt-get update -y || true; apt-get install -y python3 || true; fi
+        if command -v dnf >/dev/null 2>&1; then dnf install -y python3 || true; fi
+        if command -v yum >/dev/null 2>&1; then yum install -y python3 || true; fi
+        if P=$(find_py); then echo "PYINTERP=$P"; exit 0; fi
+        echo "BOOTSTRAP ERROR: no python3 on target" >&2; exit 1
+      register: python_bootstrap
+      changed_when: false
+
+    - name: Pin the interpreter
+      set_fact:
+        ansible_python_interpreter: "{{ python_bootstrap.stdout | regex_findall('PYINTERP=(\\S+)') | first }}"
+      when: python_bootstrap.stdout is search('PYINTERP=')
+
+    - name: Gather facts
+      setup:
+        gather_subset: ['!all', 'min']
+
+  tasks:
+    # ── Resolve the effective repository ────────────────────────────────────────
+    - name: Determine the effective repository
+      set_fact:
+        _repo_enabled: "{{ (repo.enabled | default(false)) and (repo.url | default('') | length > 0) }}"
+
+    - name: Build the effective repo spec (group repo, else server default)
+      set_fact:
+        _repo: >-
+          {{ repo if _repo_enabled
+             else ({'enabled': true, 'name': 'sabc-default', 'url': default_repo_url,
+                    'suite': ansible_distribution_release | default(''), 'components': 'main', 'gpg_key': ''}
+                   if (default_repo_url | length > 0) else {'enabled': false}) }}
+
+    - name: Report when there is nothing to enforce
+      debug:
+        msg: "No package repository configured for this group and no server default set — leaving OS defaults untouched."
+      when: not (_repo.enabled | default(false))
+
+    # ── Debian / Ubuntu (apt) ───────────────────────────────────────────────────
+    - name: Ensure keyrings directory exists (Debian)
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: "0755"
+      when: (_repo.enabled | default(false)) and ansible_os_family == 'Debian'
+
+    - name: Install the repo GPG key (Debian)
+      shell: >-
+        set -o pipefail;
+        curl -fsSL "{{ _repo.gpg_key }}" | gpg --dearmor -o "/usr/share/keyrings/{{ _repo.name }}.gpg"
+      args:
+        executable: /bin/bash
+        creates: "/usr/share/keyrings/{{ _repo.name }}.gpg"
+      when:
+        - (_repo.enabled | default(false))
+        - ansible_os_family == 'Debian'
+        - (_repo.gpg_key | default('')) | length > 0
+
+    - name: Write the apt sources file (Debian)
+      copy:
+        dest: "/etc/apt/sources.list.d/{{ _repo.name }}.list"
+        owner: root
+        group: root
+        mode: "0644"
+        content: >-
+          {{ 'deb '
+             + ('[signed-by=/usr/share/keyrings/' + _repo.name + '.gpg] ' if (_repo.gpg_key | default('')) | length > 0 else '')
+             + _repo.url + ' '
+             + (_repo.suite | default(ansible_distribution_release)) + ' '
+             + (_repo.components | default('main')) + "\n" }}
+      register: _apt_src
+      when: (_repo.enabled | default(false)) and ansible_os_family == 'Debian'
+
+    - name: apt update after repo change (Debian)
+      apt:
+        update_cache: yes
+      when: (_apt_src is defined) and (_apt_src is changed) and ansible_os_family == 'Debian'
+
+    # ── RedHat family (yum/dnf) ─────────────────────────────────────────────────
+    - name: Write the yum repo file (RedHat)
+      yum_repository:
+        name: "{{ _repo.name }}"
+        description: "{{ _repo.name }} (SABC managed)"
+        baseurl: "{{ _repo.url }}"
+        gpgcheck: "{{ (_repo.gpg_key | default('')) | length > 0 }}"
+        gpgkey: "{{ _repo.gpg_key | default('') }}"
+        enabled: yes
+        file: "{{ _repo.name }}"
+      when: (_repo.enabled | default(false)) and ansible_os_family == 'RedHat'
+
+    - name: Refresh the dnf/yum cache (RedHat)
+      shell: (dnf makecache -y || yum makecache -y) 2>&1 | tail -3
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: (_repo.enabled | default(false)) and ansible_os_family == 'RedHat'
+
+    - name: Report the enforced repository
+      debug:
+        msg: "Package repository '{{ _repo.name }}' → {{ _repo.url }} enforced on {{ inventory_hostname }} ({{ ansible_os_family }})."
+      when: (_repo.enabled | default(false))

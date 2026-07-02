@@ -68,6 +68,11 @@ class sabc_compliance (
   Integer $pass_warn_age           = 7,
   Integer $pwquality_minlen        = 14,
   String  $login_umask             = '027',
+
+  # OS package repository to enforce on members. Defaults to undef; the ENC
+  # populates the top-scope 'sabc_package_repo' variable per node from its
+  # group, which is used when this parameter is not set explicitly (Hiera/PE).
+  Optional[Hash] $package_repo     = undef,
 ) {
 
   if $enforce {
@@ -91,6 +96,17 @@ class sabc_compliance (
     }
     if $manage_maintenance {
       class { 'sabc_compliance::maintenance': }
+    }
+
+    # Package repository — explicit parameter wins; otherwise use the per-node
+    # repo the ENC exposes as the top-scope 'sabc_package_repo' variable
+    # (getvar returns undef when unset, so this is safe under strict_variables).
+    $effective_repo = $package_repo ? {
+      undef   => getvar('sabc_package_repo'),
+      default => $package_repo,
+    }
+    if $effective_repo =~ Hash and ($effective_repo['enabled'] == true) {
+      class { 'sabc_compliance::package_repo': repo => $effective_repo }
     }
   }
 }

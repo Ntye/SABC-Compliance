@@ -56,10 +56,15 @@ def _yaml_quote(value: str) -> str:
     return f'"{s}"'
 
 
+def _yaml_bool(v) -> str:
+    return "true" if v else "false"
+
+
 def render_node_doc(
     environment: str,
     groups: list[str],
     inspec_profile: str | None = None,
+    package_repo: dict | None = None,
 ) -> str:
     """Render one node's ENC YAML document.
 
@@ -80,6 +85,14 @@ def render_node_doc(
         lines.append("  sabc_groups: []")
     if inspec_profile:
         lines.append(f"  sabc_inspec_profile: {_yaml_quote(inspec_profile)}")
+    # Package repository the sabc_compliance module enforces (nested hash).
+    if package_repo and package_repo.get("enabled") and package_repo.get("url"):
+        lines.append("  sabc_package_repo:")
+        lines.append(f"    enabled: {_yaml_bool(package_repo.get('enabled'))}")
+        for k in ("name", "url", "suite", "components", "gpg_key"):
+            v = package_repo.get(k)
+            if v:
+                lines.append(f"    {k}: {_yaml_quote(v)}")
     return "\n".join(lines) + "\n"
 
 
@@ -145,6 +158,7 @@ def build_enc_artifacts(
             c.get("environment") or default_environment,
             c.get("groups") or [],
             c.get("inspec_profile"),
+            c.get("package_repo"),
         )
     return artifacts
 

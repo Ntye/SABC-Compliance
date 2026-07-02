@@ -16,6 +16,14 @@ class RuleModel(BaseModel):
     operator: str = "="
     value: str = ""
 
+class PackageRepoModel(BaseModel):
+    enabled: bool = False
+    name: str = ""
+    url: str = ""
+    suite: str = ""          # apt distribution/suite (e.g. "jammy"); ignored for yum
+    components: str = "main" # apt components; ignored for yum
+    gpg_key: str = ""        # optional URL to the repo GPG key
+
 class NodeGroupResponse(BaseModel):
     id: str
     name: str
@@ -33,6 +41,7 @@ class NodeGroupResponse(BaseModel):
     group_type: str = "user"
     inspec_profile_id: str | None = None
     active_response_enabled: bool = False
+    package_repo: PackageRepoModel = PackageRepoModel()
     created_at: datetime
     updated_at: datetime
 
@@ -57,6 +66,7 @@ class UpdateNodeGroupRequest(BaseModel):
     node_ids: list[str] | None = None
     inspec_profile_id: str | None = None
     active_response_enabled: bool | None = None
+    package_repo: PackageRepoModel | None = None
 
 class AddNodeRequest(BaseModel):
     node_id: str
@@ -83,12 +93,17 @@ _facts_uc = None
 _preview_uc = None
 _seed_uc = None
 _sync_uc = None
+_apply_repo_uc = None
 
 
 def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_node_uc,
-                  update_uc=None, facts_uc=None, preview_uc=None, seed_uc=None, sync_uc=None):
+                  update_uc=None, facts_uc=None, preview_uc=None, seed_uc=None, sync_uc=None,
+                  apply_repo_uc=None):
     global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc
     global _add_node_uc, _remove_node_uc, _facts_uc, _preview_uc, _seed_uc, _sync_uc
+    global _apply_repo_uc
+    if apply_repo_uc is not None:
+        _apply_repo_uc = apply_repo_uc
     _list_uc = list_uc
     _get_uc = get_uc
     _create_uc = create_uc
@@ -100,6 +115,12 @@ def set_use_cases(list_uc, get_uc, create_uc, delete_uc, add_node_uc, remove_nod
     _preview_uc = preview_uc
     _seed_uc = seed_uc
     _sync_uc = sync_uc
+
+
+def set_apply_repo_uc(uc) -> None:
+    """Wire the package-repo apply use case after job infrastructure exists."""
+    global _apply_repo_uc
+    _apply_repo_uc = uc
 
 
 def _resp(g, matching=None) -> NodeGroupResponse:
@@ -115,6 +136,10 @@ def _resp(g, matching=None) -> NodeGroupResponse:
         group_type=g.group_type,
         inspec_profile_id=g.inspec_profile_id,
         active_response_enabled=g.active_response_enabled,
+        package_repo=PackageRepoModel(**{
+            k: v for k, v in (g.package_repo or {}).items()
+            if k in PackageRepoModel.model_fields
+        }),
         created_at=g.created_at, updated_at=g.updated_at,
     )
 
@@ -212,5 +237,17 @@ async def add_node(id: str, body: AddNodeRequest, principal=Depends(require_admi
 async def remove_node(id: str, node_id: str, principal=Depends(require_admin)):
     try:
         return await _remove_node_uc.execute(id, node_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{id}/apply-package-repo", status_code=202)
+async def apply_package_repo(id: str, principal=Depends(require_admin)):
+    """Configure the group's package repository on every member node via Ansible
+    (one job per node). Works without a Puppet master. Returns the launched jobs."""
+    if _apply_repo_uc is None:
+        raise HTTPException(status_code=503, detail="Package repo enforcement not available")
+    try:
+        return await _apply_repo_uc.execute(id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

@@ -260,6 +260,7 @@ node_groups_table = Table(
     Column("group_type", Text, default="user"),
     Column("inspec_profile_id", Text),
     Column("active_response_enabled", Integer, default=0),
+    Column("package_repo", Text, default="{}"),
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -340,7 +341,8 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                              ("is_environment_group", "INTEGER"),
                              ("match_type", "TEXT"), ("rules", "TEXT"),
                              ("group_type", "TEXT"), ("inspec_profile_id", "TEXT"),
-                             ("active_response_enabled", "INTEGER DEFAULT 0")]:
+                             ("active_response_enabled", "INTEGER DEFAULT 0"),
+                             ("package_repo", "TEXT DEFAULT '{}'")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE node_groups ADD COLUMN {col} {typ}"))
                 except Exception:
@@ -407,6 +409,7 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("node_groups",        "group_type",            "TEXT DEFAULT 'user'"),
             ("node_groups",        "inspec_profile_id",     "TEXT"),
             ("node_groups",        "active_response_enabled", "INTEGER DEFAULT 0"),
+            ("node_groups",        "package_repo",          "TEXT DEFAULT '{}'"),
             ("compliance_reports", "profile",               "TEXT"),
             ("compliance_reports", "duration",              "TEXT"),
             ("compliance_reports", "skipped_checks",        "INTEGER DEFAULT 0"),
@@ -1434,6 +1437,7 @@ class NodeGroupRepository(INodeGroupRepository):
             group_type=getattr(row, "group_type", None) or "user",
             inspec_profile_id=getattr(row, "inspec_profile_id", None),
             active_response_enabled=bool(getattr(row, "active_response_enabled", 0)),
+            package_repo=json.loads(getattr(row, "package_repo", None) or "{}"),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
         )
@@ -1451,6 +1455,7 @@ class NodeGroupRepository(INodeGroupRepository):
                 group_type=g.group_type,
                 inspec_profile_id=g.inspec_profile_id,
                 active_response_enabled=int(g.active_response_enabled),
+                package_repo=json.dumps(g.package_repo or {}),
                 created_at=_ts(g.created_at),
                 updated_at=_ts(g.updated_at),
             ))
@@ -1495,6 +1500,7 @@ class NodeGroupRepository(INodeGroupRepository):
                     group_type=g.group_type,
                     inspec_profile_id=g.inspec_profile_id,
                     active_response_enabled=int(g.active_response_enabled),
+                    package_repo=json.dumps(g.package_repo or {}),
                     updated_at=_ts(g.updated_at),
                 )
             )
