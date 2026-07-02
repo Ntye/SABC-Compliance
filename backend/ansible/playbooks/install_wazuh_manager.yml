@@ -390,11 +390,21 @@
     # (slow) upload + install. The installer only reports "Missing necessary
     # offline file: …/filebeat_*.deb" after extracting on the target, wasting a
     # 1.6 GB upload; catch a wrong-OS/incomplete bundle here on the controller.
-    - name: Preflight — verify the offline bundle contains this OS's packages
+    # The installer needs ALL FOUR of these inside wazuh-packages/; report every
+    # one that's missing (a bundle built without -da <arch> typically drops
+    # filebeat, so a filebeat-only check can still false-pass on a bad bundle).
+    - name: Preflight — verify the offline bundle contains all required packages
       shell: >-
-        tar tzf "{{ offline_tar_path }}"
-        | grep -Eim1 "wazuh-packages/.*filebeat.*\.{{ 'deb' if wazuh_os_family == 'deb' else 'rpm' }}$"
-        || true
+        set -o pipefail;
+        listing="$(tar tzf "{{ offline_tar_path }}")";
+        ext="{{ 'deb' if wazuh_os_family == 'deb' else 'rpm' }}";
+        missing="";
+        for pkg in wazuh-manager wazuh-indexer wazuh-dashboard filebeat; do
+          echo "$listing" | grep -Eiq "wazuh-packages/${pkg}[-_].*\.${ext}$" || missing="${missing} ${pkg}";
+        done;
+        echo "MISSING:${missing}"
+      args:
+        executable: /bin/bash
       register: bundle_pkg_check
       delegate_to: localhost
       become: no
@@ -403,28 +413,31 @@
         - wazuh_airgap
         - not wazuh_installed
 
-    - name: Abort — offline bundle is missing this OS's packages
+    - name: Abort — offline bundle is incomplete or built for another OS/arch
       fail:
         msg: |-
-          The offline bundle {{ offline_tar_name }} does not contain the
-          {{ 'Debian (.deb)' if wazuh_os_family == 'deb' else 'RPM (.rpm)' }} packages this
-          target needs (no wazuh-packages/filebeat_*.{{ 'deb' if wazuh_os_family == 'deb' else 'rpm' }} inside it).
+          The offline bundle {{ offline_tar_name }} is missing required
+          {{ 'Debian (.deb)' if wazuh_os_family == 'deb' else 'RPM (.rpm)' }} packages:
+            {{ (bundle_pkg_check.stdout | default('') | regex_replace('^.*MISSING:', '') | trim) or 'unknown' }}
 
-          The bundle is built for a different OS/architecture, a different Wazuh
-          version, or is incomplete. Rebuild it ON a matching
-          {{ ansible_distribution }} {{ ansible_architecture }} host (Wazuh {{ wazuh_version | default('4.14') }}):
+          This is the root cause of the installer error
+          "Missing necessary offline file: …/wazuh-packages/filebeat_*.{{ 'deb' if wazuh_os_family == 'deb' else 'rpm' }}".
+          It happens when the bundle was built WITHOUT the architecture flag
+          (-da amd64), on the wrong OS family, or for a different Wazuh version.
 
-            curl -sO https://packages.wazuh.com/{{ (wazuh_version | default('4.14')).split('.')[0:2] | join('.') }}/wazuh-install.sh
-            sudo bash wazuh-install.sh --download-packages {{ wazuh_os_family }}
-            # → produces wazuh-offline.tar.gz
+          Rebuild it with the maintained builder (it uses the correct
+          `-dw <fmt> -da <arch>` flags and refuses to emit an incomplete bundle),
+          ON a matching {{ ansible_distribution }} {{ ansible_architecture }} host:
 
-          then place it at:
+            sudo VERSION={{ (wazuh_version | default('4.14')).split('.')[0:2] | join('.') }} ./deploy/get-wazuh-offline.sh
+
+          then place the produced tarball at:
             {{ wazuh_pkg_dir }}/wazuh-offline-{{ wazuh_os_family }}.tar.gz   (preferred)
           or {{ wazuh_pkg_dir }}/wazuh-offline.tar.gz
       when:
         - wazuh_airgap
         - not wazuh_installed
-        - (bundle_pkg_check.stdout | default('') | trim) | length == 0
+        - (bundle_pkg_check.stdout | default('') | regex_replace('^.*MISSING:', '') | trim) | length > 0
 
     # ══════════════════════════════════════════════════════════════════════
     # PREREQUISITES — packages the installer script itself needs
@@ -503,9 +516,6 @@
           `sudo apt-get install -y curl`.
       when:
         - (curl_path.stdout | trim) == ''
-        - not wazuh_airgap
-        - not wazuh_installed
-      when:
         - not wazuh_airgap
         - not wazuh_installed
 
