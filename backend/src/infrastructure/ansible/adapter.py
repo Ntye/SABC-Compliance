@@ -112,11 +112,35 @@ class AnsibleAdapter:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=self._ansible_dir,
+                limit=1024 * 1024,   # 1 MiB StreamReader buffer (not relied upon)
             )
             self._running[job_id] = proc
 
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").rstrip()
+            # Read fixed-size chunks and split on newlines ourselves. The default
+            # line iterator (`async for line in proc.stdout`) raises asyncio's
+            # LimitOverrunError — "Separator is not found, and chunk exceed the
+            # limit" — as soon as a single line exceeds the 64 KiB buffer. The
+            # Puppet Enterprise installer runs via async and returns its ENTIRE
+            # install log as one JSON line, which easily blows past that limit and
+            # would crash this reader (masking the real installer error). Chunked
+            # read() has no per-line limit.
+            buf = b""
+            FLUSH = 256 * 1024   # emit an unterminated line once it grows this big
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    line = raw.decode(errors="replace").rstrip("\r")
+                    if line:
+                        await on_line(line)
+                if len(buf) >= FLUSH:
+                    await on_line(buf.decode(errors="replace"))
+                    buf = b""
+            if buf:
+                line = buf.decode(errors="replace").rstrip("\r")
                 if line:
                     await on_line(line)
 
