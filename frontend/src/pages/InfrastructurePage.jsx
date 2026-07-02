@@ -506,8 +506,6 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
   const isPuppet      = service === 'puppet'
   const masterService = isPuppet ? 'puppet-master' : 'wazuh-manager'
 
-  function closeAll() { setShowConnect(false); setShowInstall(false); setShowCreds(false); setShowEdition(false) }
-
   return (
     <>
       <div className="bg-white rounded-xl border border-gray-100 p-5">
@@ -544,7 +542,7 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
             {status?.configured ? t('infra.changeHost') : t('infra.connectExisting')}
           </button>
           <button
-            onClick={() => { setShowInstall(true); closeAll() }}
+            onClick={() => { setShowConnect(false); setShowCreds(false); setShowEdition(false); setShowInstall(true) }}
             className={btnSm(status?.configured ? false : true)}
           >
             <Server size={11} />
