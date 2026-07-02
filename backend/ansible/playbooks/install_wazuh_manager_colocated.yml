@@ -525,7 +525,7 @@
     # ── Prerequisites ──────────────────────────────────────────────────────────
     - name: "[INSTALL] Install prerequisites (Debian/Ubuntu)"
       apt:
-        name: [curl, tar, gnupg, apt-transport-https, ca-certificates, libcap2-bin, lsof]
+        name: [curl, tar, gnupg, apt-transport-https, ca-certificates, libcap2-bin, lsof, debhelper]
         state: present
         update_cache: yes
       when:

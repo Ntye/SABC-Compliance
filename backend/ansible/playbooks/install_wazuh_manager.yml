@@ -400,6 +400,7 @@
           - ca-certificates
           - libcap2-bin     # Wazuh uses file capabilities
           - lsof            # required by wazuh-install.sh --offline-installation
+          - debhelper       # required by wazuh-install.sh --offline-installation (Debian)
         state: present
         update_cache: yes
       when:
