@@ -216,6 +216,56 @@
         - opt_free_gb.stdout | trim | length > 0
         - (opt_free_gb.stdout | trim | int) < (20 if install_mode == 'tarball' else 5)
 
+    # ── Provision swap for a memory-tight PE install ────────────────────────────
+    # PE's monolithic stack (puppetserver JVM + PostgreSQL + console/orchestration
+    # services + nginx) all start at once and peak at ~5-6 GB. On a box with
+    # < 8 GB RAM and no swap the kernel OOM-kills a service mid-install and the
+    # installer fails. A swapfile gives the install the headroom to finish.
+    # Idempotent (creates: /swapfile); only when forcing/using PE with tight RAM.
+    - name: Ensure swap headroom for PE on memory-tight hosts
+      when:
+        - install_mode == 'tarball'
+        - (ansible_memtotal_mb | int) < 8192
+        - (ansible_swaptotal_mb | default(0) | int) < 2048
+      block:
+        - name: Allocate a 4 GiB swapfile
+          command: dd if=/dev/zero of=/swapfile bs=1M count=4096
+          args:
+            creates: /swapfile
+
+        - name: Secure the swapfile
+          file:
+            path: /swapfile
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Format the swapfile
+          command: mkswap /swapfile
+          register: _mkswap
+          changed_when: "'Setting up swapspace' in (_mkswap.stdout | default(''))"
+          failed_when:
+            - _mkswap.rc != 0
+            - "'exists' not in (_mkswap.stderr | default(''))"
+
+        - name: Enable the swapfile
+          command: swapon /swapfile
+          register: _swapon
+          changed_when: _swapon.rc == 0
+          failed_when:
+            - _swapon.rc != 0
+            - "'already' not in (_swapon.stderr | default('') | lower)"
+
+        - name: Persist the swapfile in /etc/fstab
+          lineinfile:
+            path: /etc/fstab
+            line: "/swapfile none swap sw 0 0"
+            state: present
+
+        - name: Report swap enabled
+          debug:
+            msg: "Enabled a 4 GiB swapfile so the PE install has memory headroom on this {{ ansible_memtotal_mb }} MB host."
+
     # ══════════════════════════════════════════════════════════════════════════
     # MODE 1 — TARBALL (Puppet Enterprise)
     #
