@@ -93,10 +93,10 @@
     - name: Set target platform string
       set_fact:
         pe_platform: >-
-          {%- if ansible_os_family == 'Debian' -%}
-          {{ ansible_distribution | lower }}-{{ ansible_distribution_version }}-{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else ansible_architecture }}
+          {%- if ansible_facts['os_family'] == 'Debian' -%}
+          {{ ansible_facts['distribution'] | lower }}-{{ ansible_facts['distribution_version'] }}-{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else 'arm64' if ansible_facts['architecture'] == 'aarch64' else ansible_facts['architecture'] }}
           {%- else -%}
-          el-{{ ansible_distribution_major_version }}-{{ ansible_architecture }}
+          el-{{ ansible_facts['distribution_major_version'] }}-{{ ansible_facts['architecture'] }}
           {%- endif -%}
 
     # ── Always register the PE master with the same SSH credentials ───────────
@@ -130,7 +130,7 @@
             state: present
         - name: Enable and start chrony
           service:
-            name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+            name: "{{ 'chrony' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
             state: started
             enabled: yes
         - name: Force an immediate clock step (chronyc makestep)
@@ -141,7 +141,7 @@
         - name: Warn that time sync could not be configured
           debug:
             msg: >-
-              WARNING: could not configure chrony time sync on {{ ansible_fqdn }}.
+              WARNING: could not configure chrony time sync on {{ ansible_facts['fqdn'] }}.
               If the system clock is wrong, certificate signing may fail with
               "certificate not yet valid". Check the clock manually: `date`.
 
@@ -163,7 +163,7 @@
           - "║   PUPPET MASTER UNREACHABLE — enrollment cannot proceed     ║"
           - "╚══════════════════════════════════════════════════════════════╝"
           - ""
-          - "  {{ ansible_fqdn }} cannot reach {{ puppet_master }}:8140."
+          - "  {{ ansible_facts['fqdn'] }} cannot reach {{ puppet_master }}:8140."
           - ""
           - "  Most likely causes (in order):"
           - "    1. Firewall blocking 8140/TCP between this node and the master"
@@ -606,12 +606,12 @@
     - name: Puppet Agent installed
       debug:
         msg: >-
-          Puppet Agent {{ puppet_ver.stdout | trim }} installed on {{ ansible_fqdn }}.
+          Puppet Agent {{ puppet_ver.stdout | trim }} installed on {{ ansible_facts['fqdn'] }}.
           Service: {{ puppet_svc.stdout }}. Proceeding to certificate signing.
 
     # ── Sign certificate and complete PE console enrollment ───────────────────
-    # Use `puppet config print certname` — not ansible_fqdn — as the
-    # authoritative cert name. ansible_fqdn may return a short hostname
+    # Use `puppet config print certname` — not ansible_facts['fqdn'] — as the
+    # authoritative cert name. ansible_facts['fqdn'] may return a short hostname
     # while Puppet uses the full FQDN (e.g. manager vs manager.lab.cm).
     - name: Get puppet certname of target node
       command: /opt/puppetlabs/bin/puppet config print certname
@@ -681,7 +681,7 @@
     - name: Stale certificate detected — beginning recovery
       debug:
         msg: >-
-          Detected a stale/mismatched Puppet certificate on {{ ansible_fqdn }}
+          Detected a stale/mismatched Puppet certificate on {{ ansible_facts['fqdn'] }}
           (typical after VM cloning or a master reinstall). Clearing the old
           certificate on both ends and re-enrolling once.
       when: puppet_ssl_stale | bool
@@ -747,7 +747,7 @@
     - name: Node enrolled in Puppet Enterprise
       debug:
         msg: >-
-          {{ ansible_fqdn }} is now enrolled in Puppet Enterprise.
+          {{ ansible_facts['fqdn'] }} is now enrolled in Puppet Enterprise.
           Certificate signed{{ ' (re-enrolled after stale-cert recovery)' if puppet_ssl_stale | bool else '' }}.
           First catalog applied. The node appears in the PE console at
           https://{{ puppet_master }}.

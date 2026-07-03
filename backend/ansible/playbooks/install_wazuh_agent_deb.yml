@@ -1,6 +1,6 @@
 ---
 # Wazuh Agent installation tasks — Debian/Ubuntu (APT).
-# Included by install_wazuh_agent.yml when ansible_os_family == 'Debian'.
+# Included by install_wazuh_agent.yml when ansible_facts['os_family'] == 'Debian'.
 #
 # Inherits from parent play:
 #   wazuh_manager, wazuh_agent_group, wazuh_airgap,

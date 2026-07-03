@@ -1,6 +1,6 @@
 ---
 # Wazuh Agent installation tasks — RedHat/CentOS/Rocky/AlmaLinux (YUM/DNF).
-# Included by install_wazuh_agent.yml when ansible_os_family == 'RedHat'.
+# Included by install_wazuh_agent.yml when ansible_facts['os_family'] == 'RedHat'.
 #
 # Inherits from parent play:
 #   wazuh_manager, wazuh_agent_group, wazuh_airgap,

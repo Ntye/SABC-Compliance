@@ -21,37 +21,18 @@
 #   you already downloaded), rename it to wazuh-offline.tar.gz and it will
 #   be used for whichever OS is detected on the target.
 #
-#   ── How to build the offline packages (run on an internet-connected machine):
+#   ── How to build the offline packages (run on an internet-connected machine
+#      of the SAME OS family + architecture as the target):
 #
-#     # Download the installer script (version-specific or latest 4.x):
-#     curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh
+#     sudo VERSION=4.14 ./deploy/get-wazuh-offline.sh
 #
-#     # Build Debian/Ubuntu offline archive (amd64):
-#     bash wazuh-install.sh --download-packages deb
-#     mv wazuh-offline.tar.gz /path/to/packages/wazuh-manager/wazuh-offline-deb.tar.gz
-#
-#     # Build RHEL/Rocky/CentOS offline archive (x86_64):
-#     bash wazuh-install.sh --download-packages rpm
-#     mv wazuh-offline.tar.gz /path/to/packages/wazuh-manager/wazuh-offline-rpm.tar.gz
-#
-#   ── How to pre-generate certificates (optional, any Linux machine):
-#
-#     # Create config.yml first (fill in the target node's real IP/hostname):
-#     cat > config.yml << 'EOF'
-#     nodes:
-#       indexer:
-#         - name: wazuh-indexer
-#           ip: "192.0.2.10"
-#       server:
-#         - name: wazuh-server
-#           ip: "192.0.2.10"
-#       dashboard:
-#         - name: wazuh-dashboard
-#           ip: "192.0.2.10"
-#     EOF
-#
-#     bash wazuh-install.sh --generate-config-files
-#     # Creates wazuh-install-files.tar → place in backend/packages/wazuh-manager/
+#   The builder follows the official Wazuh offline procedure — downloads the
+#   assistant, runs `wazuh-install.sh -dw <deb|rpm> -da <amd64|arm64>` (the
+#   -da flag is REQUIRED; without it the bundle is missing filebeat_*.deb and
+#   the airgap install fails), pre-generates certificates, VERIFIES the bundle
+#   is complete, and drops all three files into deploy/wazuh-manager/:
+#     wazuh-install.sh · wazuh-offline-<deb|rpm>.tar.gz · wazuh-install-files.tar
+#   Copy them into backend/packages/wazuh-manager/ before launching the job.
 #
 # ── ONLINE MODE ───────────────────────────────────────────────────────────────
 # Triggered when no offline tarball is found in the packages directory.
@@ -175,16 +156,16 @@
 
     - name: Determine OS family fact
       set_fact:
-        wazuh_os_family: "{{ 'deb' if ansible_os_family == 'Debian' else 'rpm' }}"
-        wazuh_pkg_mgr:   "{{ 'apt'  if ansible_os_family == 'Debian' else 'yum' }}"
+        wazuh_os_family: "{{ 'deb' if ansible_facts['os_family'] == 'Debian' else 'rpm' }}"
+        wazuh_pkg_mgr:   "{{ 'apt'  if ansible_facts['os_family'] == 'Debian' else 'yum' }}"
 
     - name: Log target OS details
       debug:
         msg: >-
-          Target: {{ ansible_fqdn }} —
-          {{ ansible_distribution }} {{ ansible_distribution_version }}
-          ({{ ansible_os_family }} family, package type: {{ wazuh_os_family }}).
-          Architecture: {{ ansible_architecture }}.
+          Target: {{ ansible_facts['fqdn'] }} —
+          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+          ({{ ansible_facts['os_family'] }} family, package type: {{ wazuh_os_family }}).
+          Architecture: {{ ansible_facts['architecture'] }}.
 
     # ══════════════════════════════════════════════════════════════════════
     # AIRGAP FILE DETECTION — all run on the platform controller
@@ -283,8 +264,8 @@
           ═══════════════════════════════════════════════════════════════
            Wazuh Installation Plan
           ═══════════════════════════════════════════════════════════════
-           Target host  : {{ ansible_fqdn }} ({{ ansible_default_ipv4.address }})
-           OS           : {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ wazuh_os_family }})
+           Target host  : {{ ansible_facts['fqdn'] }} ({{ ansible_facts['default_ipv4']['address'] }})
+           OS           : {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} ({{ wazuh_os_family }})
            Mode         : {{ 'AIRGAP (offline)' if wazuh_airgap else 'ONLINE (packages.wazuh.com)' }}
            {% if wazuh_airgap %}
            Offline tar  : {{ offline_tar_name }}
@@ -300,7 +281,7 @@
     - name: Preflight — check RAM
       debug:
         msg: >-
-          ⚠  WARNING: {{ ansible_fqdn }} has {{ ansible_memtotal_mb }} MB RAM.
+          ⚠  WARNING: {{ ansible_facts['fqdn'] }} has {{ ansible_facts['memtotal_mb'] }} MB RAM.
           The Wazuh all-in-one stack (manager + OpenSearch indexer + dashboard)
           requires a minimum of {{ wazuh_min_ram_mb }} MB RAM;
           {{ wazuh_rec_ram_mb }} MB is recommended.
@@ -308,7 +289,7 @@
           Proceeding anyway — increase instance size if the indexer fails to start.
       when:
         - not wazuh_installed
-        - ansible_memtotal_mb < wazuh_min_ram_mb
+        - ansible_facts['memtotal_mb'] < wazuh_min_ram_mb
 
     - name: Preflight — check free disk space on /
       shell: df -BG --output=avail / | tail -1 | tr -d 'G '
@@ -349,7 +330,7 @@
     - name: Preflight — warn on port conflicts
       debug:
         msg: >-
-          ⚠  WARNING: ports already in use on {{ ansible_fqdn }}:
+          ⚠  WARNING: ports already in use on {{ ansible_facts['fqdn'] }}:
           [{{ port_conflicts.stdout }}].
           If these belong to another service, the Wazuh installer will fail.
           Ports required —
@@ -391,16 +372,24 @@
     # offline file: …/filebeat_*.deb" after extracting on the target, wasting a
     # 1.6 GB upload; catch a wrong-OS/incomplete bundle here on the controller.
     # The installer needs ALL FOUR of these inside wazuh-packages/; report every
-    # one that's missing (a bundle built without -da <arch> typically drops
-    # filebeat, so a filebeat-only check can still false-pass on a bad bundle).
+    # one that's missing. Match the installer's own globs exactly — deb packages
+    # are "<name>_<version>_<arch>.deb" (underscore) and rpm packages are
+    # "<name>-<version>.<arch>.rpm" (dash + digit). A loose "filebeat.*" match
+    # false-passes on filebeat-module-wazuh-*.deb while the actual
+    # filebeat_<ver>.deb binary package (dropped by builds without -da <arch>)
+    # is missing — exactly the bundle that later dies with
+    # "Missing necessary offline file: …/filebeat_*.deb".
     - name: Preflight — verify the offline bundle contains all required packages
       shell: >-
         set -o pipefail;
         listing="$(tar tzf "{{ offline_tar_path }}")";
-        ext="{{ 'deb' if wazuh_os_family == 'deb' else 'rpm' }}";
         missing="";
         for pkg in wazuh-manager wazuh-indexer wazuh-dashboard filebeat; do
-          echo "$listing" | grep -Eiq "wazuh-packages/${pkg}[-_].*\.${ext}$" || missing="${missing} ${pkg}";
+          {% if wazuh_os_family == 'deb' %}
+          echo "$listing" | grep -Eq "wazuh-packages/${pkg}_[^/]*\.deb$" || missing="${missing} ${pkg}";
+          {% else %}
+          echo "$listing" | grep -Eq "wazuh-packages/${pkg}-[0-9][^/]*\.rpm$" || missing="${missing} ${pkg}";
+          {% endif %}
         done;
         echo "MISSING:${missing}"
       args:
@@ -427,7 +416,7 @@
 
           Rebuild it with the maintained builder (it uses the correct
           `-dw <fmt> -da <arch>` flags and refuses to emit an incomplete bundle),
-          ON a matching {{ ansible_distribution }} {{ ansible_architecture }} host:
+          ON a matching {{ ansible_facts['distribution'] }} {{ ansible_facts['architecture'] }} host:
 
             sudo VERSION={{ (wazuh_version | default('4.14')).split('.')[0:2] | join('.') }} ./deploy/get-wazuh-offline.sh
 
@@ -458,7 +447,7 @@
         update_cache: yes
       when:
         - not wazuh_installed
-        - ansible_os_family == 'Debian'
+        - ansible_facts['os_family'] == 'Debian'
 
     - name: Install prerequisites (RHEL/Rocky/CentOS)
       yum:
@@ -471,7 +460,7 @@
         state: present
       when:
         - not wazuh_installed
-        - ansible_os_family == 'RedHat'
+        - ansible_facts['os_family'] == 'RedHat'
 
     # ══════════════════════════════════════════════════════════════════════
     # ONLINE MODE — verify connectivity, download installer
@@ -635,7 +624,7 @@
         msg: >-
           Uploading {{ offline_tar_name }}
           ({{ (tar_stat.stat.size / 1048576) | round(0) | int }} MB)
-          to {{ ansible_fqdn }}:{{ wazuh_work_dir }}/wazuh-offline.tar.gz.
+          to {{ ansible_facts['fqdn'] }}:{{ wazuh_work_dir }}/wazuh-offline.tar.gz.
           This may take several minutes over a slow link.
       when:
         - wazuh_airgap
@@ -682,21 +671,21 @@
         mode: '0644'
         content: |
           # Wazuh single-node all-in-one configuration
-          # Generated by SABC Compliance Platform — {{ ansible_date_time.iso8601 }}
-          # Target: {{ ansible_fqdn }} ({{ ansible_default_ipv4.address }})
+          # Generated by SABC Compliance Platform — {{ ansible_facts['date_time']['iso8601'] }}
+          # Target: {{ ansible_facts['fqdn'] }} ({{ ansible_facts['default_ipv4']['address'] }})
           nodes:
             # ── Wazuh indexer (OpenSearch) ──────────────────────────────
             indexer:
               - name: wazuh-indexer
-                ip: "{{ ansible_default_ipv4.address }}"
+                ip: "{{ ansible_facts['default_ipv4']['address'] }}"
             # ── Wazuh manager (server) ───────────────────────────────────
             server:
               - name: wazuh-server
-                ip: "{{ ansible_default_ipv4.address }}"
+                ip: "{{ ansible_facts['default_ipv4']['address'] }}"
             # ── Wazuh dashboard ──────────────────────────────────────────
             dashboard:
               - name: wazuh-dashboard
-                ip: "{{ ansible_default_ipv4.address }}"
+                ip: "{{ ansible_facts['default_ipv4']['address'] }}"
       when:
         - not wazuh_has_certs
         - not wazuh_installed
@@ -890,7 +879,7 @@
         proto:   "{{ item }}"
         comment: "Wazuh manager agent traffic"
       loop: [tcp, udp]
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
       ignore_errors: yes
 
     - name: Firewall (ufw) — allow agent enrolment port {{ wazuh_auth_port }}/tcp
@@ -899,7 +888,7 @@
         port:    "{{ wazuh_auth_port }}"
         proto:   tcp
         comment: "Wazuh agent enrolment (authd)"
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
       ignore_errors: yes
 
     - name: Firewall (ufw) — allow REST API port {{ wazuh_api_port }}/tcp
@@ -908,7 +897,7 @@
         port:    "{{ wazuh_api_port }}"
         proto:   tcp
         comment: "Wazuh REST API"
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
       ignore_errors: yes
 
     - name: Firewall (ufw) — allow dashboard port {{ wazuh_dashboard_port }}/tcp
@@ -917,7 +906,7 @@
         port:    "{{ wazuh_dashboard_port }}"
         proto:   tcp
         comment: "Wazuh dashboard (HTTPS)"
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
       ignore_errors: yes
 
     - name: Firewall (ufw) — allow syslog port {{ wazuh_syslog_port }}/tcp+udp
@@ -927,7 +916,7 @@
         proto:   "{{ item }}"
         comment: "Wazuh remote syslog"
       loop: [tcp, udp]
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
       ignore_errors: yes
 
     # ── firewalld (RHEL/Rocky/CentOS) ─────────────────────────────────────
@@ -961,7 +950,7 @@
       register: firewalld_result
       changed_when: "'firewall rules applied' in (firewalld_result.stdout | default(''))"
       failed_when: false
-      when: ansible_os_family == 'RedHat'
+      when: ansible_facts['os_family'] == 'RedHat'
 
     # ══════════════════════════════════════════════════════════════════════
     # SERVICE MANAGEMENT — ensure all three Wazuh services are running
@@ -1096,14 +1085,14 @@
           - "║             Wazuh All-in-One — Installation Complete            ║"
           - "╚══════════════════════════════════════════════════════════════════╝"
           - ""
-          - "  Host     : {{ ansible_fqdn }} ({{ ansible_default_ipv4.address }})"
+          - "  Host     : {{ ansible_facts['fqdn'] }} ({{ ansible_facts['default_ipv4']['address'] }})"
           - "  Version  : {{ wazuh_ctl_info.stdout_lines | default(['(see logs)']) | first }}"
           - "  Mode     : {{ 'AIRGAP (offline)' if wazuh_airgap else 'ONLINE' }}"
-          - "  OS       : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "  OS       : {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
           - ""
           - "  ── Access ────────────────────────────────────────────────────"
-          - "  Dashboard  : https://{{ ansible_default_ipv4.address }}:{{ wazuh_dashboard_port }}"
-          - "  REST API   : https://{{ ansible_default_ipv4.address }}:{{ wazuh_api_port }}"
+          - "  Dashboard  : https://{{ ansible_facts['default_ipv4']['address'] }}:{{ wazuh_dashboard_port }}"
+          - "  REST API   : https://{{ ansible_facts['default_ipv4']['address'] }}:{{ wazuh_api_port }}"
           - "  API probe  : HTTP {{ api_probe.status | default('—') }}"
           - ""
           - "  ── Dashboard credentials ─────────────────────────────────────"
@@ -1111,8 +1100,8 @@
           - "  Password : {{ wazuh_admin_password | default('(see installer log or run: sudo tar -O -xf /tmp/wazuh-passwords.txt)') }}"
           - ""
           - "  ── Agent enrolment ───────────────────────────────────────────"
-          - "  Register : {{ ansible_default_ipv4.address }}:{{ wazuh_auth_port }}/tcp"
-          - "  Traffic  : {{ ansible_default_ipv4.address }}:{{ wazuh_manager_port }}/tcp+udp"
+          - "  Register : {{ ansible_facts['default_ipv4']['address'] }}:{{ wazuh_auth_port }}/tcp"
+          - "  Traffic  : {{ ansible_facts['default_ipv4']['address'] }}:{{ wazuh_manager_port }}/tcp+udp"
           - ""
           - "  ── Installer log ─────────────────────────────────────────────"
           - "  ls /var/log/wazuh-install/"

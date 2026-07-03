@@ -84,28 +84,28 @@
       apt:
         update_cache: yes
         cache_valid_time: 3600
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
 
     - name: Update yum cache
       yum:
         update_cache: yes
-      when: ansible_os_family == 'RedHat'
+      when: ansible_facts['os_family'] == 'RedHat'
 
     - name: Install baseline packages (Debian/Ubuntu)
       apt:
         name: "{{ baseline_packages_debian }}"
         state: present
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
 
     - name: Install baseline packages (RedHat/Rocky)
       yum:
         name: "{{ baseline_packages_redhat }}"
         state: present
-      when: ansible_os_family == 'RedHat'
+      when: ansible_facts['os_family'] == 'RedHat'
 
     - name: Enable and start chrony (NTP)
       service:
-        name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+        name: "{{ 'chrony' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
         state: started
         enabled: yes
 
@@ -164,5 +164,5 @@
   handlers:
     - name: restart sshd
       service:
-        name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+        name: "{{ 'ssh' if ansible_facts['os_family'] == 'Debian' else 'sshd' }}"
         state: restarted

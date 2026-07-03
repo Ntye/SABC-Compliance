@@ -133,7 +133,7 @@
       debug:
         msg: >-
           wazuh-agent is already installed and connected to {{ wazuh_manager }}
-          on {{ ansible_fqdn }}. Skipping installation.
+          on {{ ansible_facts['fqdn'] }}. Skipping installation.
       when:
         - wazuh_agent_installed.stat.exists
         - (_agent_already_connected.rc | default(1)) == 0
@@ -164,9 +164,9 @@
     - name: Report OS family, install mode, and manager
       debug:
         msg: >-
-          Target: {{ ansible_fqdn }}
-          ({{ ansible_distribution }} {{ ansible_distribution_version }},
-          {{ ansible_os_family }} family).
+          Target: {{ ansible_facts['fqdn'] }}
+          ({{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }},
+          {{ ansible_facts['os_family'] }} family).
           Manager: {{ wazuh_manager }}.
           Mode: {{ 'AIRGAP — packages from ' + agent_pkg_dir if wazuh_airgap else 'ONLINE' }}.
           Already installed: {{ wazuh_agent_installed.stat.exists }}.
@@ -174,9 +174,9 @@
     - name: Fail on unsupported OS family
       fail:
         msg: >-
-          Unsupported OS family '{{ ansible_os_family }}'.
+          Unsupported OS family '{{ ansible_facts['os_family'] }}'.
           Supported: Debian (Ubuntu/Debian) and RedHat (RHEL/CentOS/Rocky/AlmaLinux).
-      when: ansible_os_family not in ['Debian', 'RedHat']
+      when: ansible_facts['os_family'] not in ['Debian', 'RedHat']
 
     # Check internet connectivity before attempting an online install.
     # Lab/VM environments often have internet on the controller but not on
@@ -249,7 +249,7 @@
             state: present
         - name: Enable and start chrony
           service:
-            name: "{{ 'chrony' if ansible_os_family == 'Debian' else 'chronyd' }}"
+            name: "{{ 'chrony' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
             state: started
             enabled: yes
         - name: Force an immediate clock step (chronyc makestep)
@@ -260,7 +260,7 @@
         - name: Warn that time sync could not be configured
           debug:
             msg: >-
-              WARNING: could not configure chrony on {{ ansible_fqdn }}. A wrong
+              WARNING: could not configure chrony on {{ ansible_facts['fqdn'] }}. A wrong
               clock can break agent↔manager TLS and skew alert timestamps.
 
     # Resolve the manager name up front so the connectivity probe below can use
@@ -302,7 +302,7 @@
           - "║   WAZUH MANAGER UNREACHABLE — enrollment cannot proceed     ║"
           - "╚══════════════════════════════════════════════════════════════╝"
           - ""
-          - "  {{ ansible_fqdn }} cannot reach {{ wazuh_manager }}."
+          - "  {{ ansible_facts['fqdn'] }} cannot reach {{ wazuh_manager }}."
           - "    port 1515 (enrollment): {{ 'BLOCKED' if wazuh_1515_check is failed else 'OK' }}"
           - "    port 1514 (comms):      {{ 'BLOCKED' if wazuh_1514_check is failed else 'OK' }}"
           - ""
@@ -324,11 +324,11 @@
 
     - name: Run Debian/Ubuntu installation script
       include_tasks: install_wazuh_agent_deb.yml
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
 
     - name: Run RedHat/CentOS/Rocky installation script
       include_tasks: install_wazuh_agent_rpm.yml
-      when: ansible_os_family == 'RedHat'
+      when: ansible_facts['os_family'] == 'RedHat'
 
     # ── Common post-install configuration ─────────────────────────────────────
     # Belt-and-suspenders: patch ossec.conf directly in addition to the
@@ -383,7 +383,7 @@
     - name: Duplicate/stale agent key detected — re-enrolling
       debug:
         msg: >-
-          {{ ansible_fqdn }} did not connect to {{ wazuh_manager }} (typical
+          {{ ansible_facts['fqdn'] }} did not connect to {{ wazuh_manager }} (typical
           after VM cloning — a duplicate agent ID in client.keys). Resetting the
           key to force a fresh registration.
       when: wazuh_enroll_stuck | bool
@@ -412,9 +412,9 @@
           delegate_to: localhost
           become: no
 
-        - name: Find agents named {{ ansible_hostname }} on the manager
+        - name: Find agents named {{ ansible_facts['hostname'] }} on the manager
           uri:
-            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_hostname }}&status=all"
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/agents?name={{ ansible_facts['hostname'] }}&status=all"
             method: GET
             headers:
               Authorization: "Bearer {{ _wazuh_jwt.content | trim }}"
@@ -451,7 +451,7 @@
         - name: REST API cleanup failed — continuing with client.keys reset only
           debug:
             msg: >-
-              WARNING: Could not delete stale Wazuh agent '{{ ansible_hostname }}'
+              WARNING: Could not delete stale Wazuh agent '{{ ansible_facts['hostname'] }}'
               via the manager REST API. The client.keys reset below will still
               force a new enrollment ID; the manager may briefly show a duplicate
               entry but will resolve once the agent reconnects.
@@ -476,7 +476,7 @@
       replace:
         path: /var/ossec/etc/ossec.conf
         regexp: '<agent_name>[^<]*</agent_name>'
-        replace: '<agent_name>{{ ansible_hostname }}</agent_name>'
+        replace: "<agent_name>{{ ansible_facts['hostname'] }}</agent_name>"
       failed_when: false
       when: wazuh_enroll_stuck | bool
 
@@ -543,7 +543,7 @@
     - name: Fail if agent never connected to manager
       fail:
         msg: >-
-          wazuh-agent installed on {{ ansible_fqdn }} but never connected to
+          wazuh-agent installed on {{ ansible_facts['fqdn'] }} but never connected to
           {{ wazuh_manager }}. See diagnostics above (ossec.log tail + manual
           test commands). Re-run once the issue is resolved.
       when: not (wazuh_connected_final | bool)
@@ -551,7 +551,7 @@
     - name: Wazuh Agent ready
       debug:
         msg: >-
-          Wazuh Agent installed on {{ ansible_fqdn }}
+          Wazuh Agent installed on {{ ansible_facts['fqdn'] }}
           ({{ agent_info.stdout_lines | join(' | ') }}).
           Manager: {{ wazuh_manager }}.
           Connection: {{ 'CONNECTED' if wazuh_connected_final | bool else 'NOT yet connected — see warning above' }}.

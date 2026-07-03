@@ -21,19 +21,19 @@
     # ── System overview ────────────────────────────────────────────────────────
     - name: "══════════════════════════════════════════════════════════════════"
       debug:
-        msg: "  SABC NODE HEALTH CHECK — {{ ansible_fqdn }}  ({{ ansible_date_time.iso8601 }})"
+        msg: "  SABC NODE HEALTH CHECK — {{ ansible_facts['fqdn'] }}  ({{ ansible_facts['date_time']['iso8601'] }})"
 
     - name: "── SYSTEM INFO ──────────────────────────────────────────────────"
       debug:
         msg:
-          - "Hostname  : {{ ansible_hostname }}"
-          - "FQDN      : {{ ansible_fqdn }}"
-          - "IP (main) : {{ ansible_default_ipv4.address | default('unknown') }}"
-          - "OS        : {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_os_family }})"
-          - "Kernel    : {{ ansible_kernel }}"
+          - "Hostname  : {{ ansible_facts['hostname'] }}"
+          - "FQDN      : {{ ansible_facts['fqdn'] }}"
+          - "IP (main) : {{ ansible_facts['default_ipv4']['address'] | default('unknown') }}"
+          - "OS        : {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} ({{ ansible_facts['os_family'] }})"
+          - "Kernel    : {{ ansible_facts['kernel'] }}"
           - "Uptime    : {{ (ansible_uptime_seconds / 3600) | int }}h {{ ((ansible_uptime_seconds % 3600) / 60) | int }}m"
-          - "vCPUs     : {{ ansible_processor_vcpus }}"
-          - "Memory    : {{ (ansible_memtotal_mb / 1024) | round(1) }} GB total, {{ (ansible_memfree_mb / 1024) | round(1) }} GB free"
+          - "vCPUs     : {{ ansible_facts['processor_vcpus'] }}"
+          - "Memory    : {{ (ansible_facts['memtotal_mb'] / 1024) | round(1) }} GB total, {{ (ansible_facts['memfree_mb'] / 1024) | round(1) }} GB free"
 
     - name: Check disk usage on key mount points
       shell: df -h --output=target,pcent,used,avail,fstype 2>/dev/null | awk '!seen[$1]++ || NR==1' | column -t

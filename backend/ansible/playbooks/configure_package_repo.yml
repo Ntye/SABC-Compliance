@@ -64,7 +64,7 @@
         _repo: >-
           {{ repo if _repo_enabled
              else ({'enabled': true, 'name': 'sabc-default', 'url': default_repo_url,
-                    'suite': ansible_distribution_release | default(''), 'components': 'main', 'gpg_key': ''}
+                    'suite': ansible_facts['distribution_release'] | default(''), 'components': 'main', 'gpg_key': ''}
                    if (default_repo_url | length > 0) else {'enabled': false}) }}
 
     - name: Report when there is nothing to enforce
@@ -78,7 +78,7 @@
         path: /usr/share/keyrings
         state: directory
         mode: "0755"
-      when: (_repo.enabled | default(false)) and ansible_os_family == 'Debian'
+      when: (_repo.enabled | default(false)) and ansible_facts['os_family'] == 'Debian'
 
     - name: Install the repo GPG key (Debian)
       shell: >-
@@ -89,7 +89,7 @@
         creates: "/usr/share/keyrings/{{ _repo.name }}.gpg"
       when:
         - (_repo.enabled | default(false))
-        - ansible_os_family == 'Debian'
+        - ansible_facts['os_family'] == 'Debian'
         - (_repo.gpg_key | default('')) | length > 0
 
     - name: Write the apt sources file (Debian)
@@ -102,15 +102,15 @@
           {{ 'deb '
              + ('[signed-by=/usr/share/keyrings/' + _repo.name + '.gpg] ' if (_repo.gpg_key | default('')) | length > 0 else '')
              + _repo.url + ' '
-             + (_repo.suite | default(ansible_distribution_release)) + ' '
+             + (_repo.suite | default(ansible_facts['distribution_release'])) + ' '
              + (_repo.components | default('main')) + "\n" }}
       register: _apt_src
-      when: (_repo.enabled | default(false)) and ansible_os_family == 'Debian'
+      when: (_repo.enabled | default(false)) and ansible_facts['os_family'] == 'Debian'
 
     - name: apt update after repo change (Debian)
       apt:
         update_cache: yes
-      when: (_apt_src is defined) and (_apt_src is changed) and ansible_os_family == 'Debian'
+      when: (_apt_src is defined) and (_apt_src is changed) and ansible_facts['os_family'] == 'Debian'
 
     # ── RedHat family (yum/dnf) ─────────────────────────────────────────────────
     - name: Write the yum repo file (RedHat)
@@ -122,16 +122,16 @@
         gpgkey: "{{ _repo.gpg_key | default('') }}"
         enabled: yes
         file: "{{ _repo.name }}"
-      when: (_repo.enabled | default(false)) and ansible_os_family == 'RedHat'
+      when: (_repo.enabled | default(false)) and ansible_facts['os_family'] == 'RedHat'
 
     - name: Refresh the dnf/yum cache (RedHat)
       shell: (dnf makecache -y || yum makecache -y) 2>&1 | tail -3
       args:
         executable: /bin/bash
       changed_when: false
-      when: (_repo.enabled | default(false)) and ansible_os_family == 'RedHat'
+      when: (_repo.enabled | default(false)) and ansible_facts['os_family'] == 'RedHat'
 
     - name: Report the enforced repository
       debug:
-        msg: "Package repository '{{ _repo.name }}' → {{ _repo.url }} enforced on {{ inventory_hostname }} ({{ ansible_os_family }})."
+        msg: "Package repository '{{ _repo.name }}' → {{ _repo.url }} enforced on {{ inventory_hostname }} ({{ ansible_facts['os_family'] }})."
       when: (_repo.enabled | default(false))
