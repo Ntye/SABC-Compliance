@@ -85,6 +85,53 @@
         path: /var/ossec/bin/wazuh-agentd
       register: wazuh_agent_installed
 
+    # A binary without its configuration is a BROKEN half-install (interrupted
+    # dpkg/rpm, manual deletion, failed prior run). Left alone it wedges the
+    # playbook forever: every install task skips ("already installed") and the
+    # post-install config patch then fails on the missing ossec.conf. Purge it
+    # and continue as a fresh install.
+    - name: Check the agent configuration exists (detect broken half-installs)
+      stat:
+        path: /var/ossec/etc/ossec.conf
+      register: ossec_conf_pre
+
+    - name: Broken half-install detected — purge and reinstall
+      when:
+        - wazuh_agent_installed.stat.exists
+        - not ossec_conf_pre.stat.exists
+      block:
+        - name: Report the broken state
+          debug:
+            msg: >-
+              /var/ossec/bin/wazuh-agentd exists but /var/ossec/etc/ossec.conf
+              does not — the previous install is broken. Purging wazuh-agent
+              and reinstalling from scratch.
+
+        - name: Purge the broken wazuh-agent package (Debian)
+          apt:
+            name: wazuh-agent
+            state: absent
+            purge: yes
+          when: ansible_facts['os_family'] == 'Debian'
+          failed_when: false
+
+        - name: Remove the broken wazuh-agent package (RedHat)
+          package:
+            name: wazuh-agent
+            state: absent
+          when: ansible_facts['os_family'] == 'RedHat'
+          failed_when: false
+
+        - name: Remove leftover /var/ossec tree
+          file:
+            path: /var/ossec
+            state: absent
+
+        - name: Re-check installation state after purge
+          stat:
+            path: /var/ossec/bin/wazuh-agentd
+          register: wazuh_agent_installed
+
     # ── Cleanup: remove any invalid <force> block left by a prior failed run ───
     - name: Clean up any residual force-enrollment block in ossec.conf
       shell: |
@@ -184,6 +231,10 @@
           {{ ansible_facts['os_family'] }} family).
           Manager: {{ wazuh_manager }}.
           Mode: {{ 'AIRGAP — packages from ' + agent_pkg_dir if wazuh_airgap else 'ONLINE' }}.
+          Matching packages ({{ agent_pkg_regex | trim }}):
+          {{ agent_offline_pkgs.files | default([])
+             | selectattr('path', 'search', agent_pkg_regex | trim)
+             | map(attribute='path') | map('basename') | list }}.
           Already installed: {{ wazuh_agent_installed.stat.exists }}.
 
     - name: Fail on unsupported OS family
@@ -493,12 +544,14 @@
         msg: >-
           The wazuh-agent package did not get installed —
           /var/ossec/etc/ossec.conf is missing after the install phase.
+          Diagnostics: airgap={{ wazuh_airgap }},
+          already_installed={{ wazuh_agent_installed.stat.exists }},
+          pattern='{{ agent_pkg_regex | default("wazuh-agent*") | trim }}',
+          packages_found={{ agent_offline_pkgs.files | default([])
+                            | map(attribute='path') | map('basename') | list }}.
           {% if wazuh_airgap %}Airgap mode was active but installation still
           failed; check the package install task output above.{% else %}No
-          package in {{ agent_pkg_dir }} matches this target (needs one
-          matching '{{ agent_pkg_regex | default("wazuh-agent*") | trim }}';
-          found: {{ agent_offline_pkgs.files | default([])
-                     | map(attribute='path') | map('basename') | list }}).
+          package in {{ agent_pkg_dir }} matches this target.
           Run ./deploy/get-wazuh-agents.sh on the platform host (use ARCH=all
           for mixed architectures), then re-run this job.{% endif %}
       when: not ossec_conf_stat.stat.exists
