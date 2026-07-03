@@ -156,9 +156,24 @@
       become: no
       failed_when: false
 
-    - name: Set airgap mode
+    # Airgap only counts when a package matches THIS target's OS family AND
+    # architecture. A directory holding only the .rpm must not flip a Debian
+    # target into airgap mode — the online tasks would be skipped (airgap) AND
+    # the airgap loop would be empty (no .deb), installing nothing and failing
+    # later with a cryptic "ossec.conf does not exist".
+    - name: Compute the package pattern for this target (OS family + architecture)
       set_fact:
-        wazuh_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
+        agent_pkg_regex: >-
+          {{ '_(' ~ ('arm64' if ansible_facts['architecture'] in ['aarch64','arm64'] else 'amd64') ~ '|all)\.deb$'
+             if ansible_facts['os_family'] == 'Debian'
+             else '\.(' ~ ('aarch64' if ansible_facts['architecture'] in ['aarch64','arm64'] else 'x86_64') ~ '|noarch)\.rpm$' }}
+
+    - name: Set airgap mode (only when a package matches this target)
+      set_fact:
+        wazuh_airgap: >-
+          {{ agent_offline_pkgs.files | default([])
+             | selectattr('path', 'search', agent_pkg_regex | trim)
+             | list | length > 0 }}
 
     # ── OS detection and dispatch ─────────────────────────────────────────────
     - name: Report OS family, install mode, and manager
@@ -312,7 +327,10 @@
         # inherited by every task, so anything after this flip is skipped.
         - name: Switch to airgap install mode (controller-downloaded package)
           set_fact:
-            wazuh_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
+            wazuh_airgap: >-
+              {{ agent_offline_pkgs.files | default([])
+                 | selectattr('path', 'search', agent_pkg_regex | trim)
+                 | list | length > 0 }}
       rescue:
         - name: Controller fallback failed — record the reason
           set_fact:
@@ -463,6 +481,28 @@
       when: ansible_facts['os_family'] == 'RedHat'
 
     # ── Common post-install configuration ─────────────────────────────────────
+    # Fail HERE with the real diagnosis if the package never got installed,
+    # instead of a cryptic "ossec.conf does not exist" from the patch below.
+    - name: Verify the Wazuh agent package is installed
+      stat:
+        path: /var/ossec/etc/ossec.conf
+      register: ossec_conf_stat
+
+    - name: Abort — the wazuh-agent package was not installed
+      fail:
+        msg: >-
+          The wazuh-agent package did not get installed —
+          /var/ossec/etc/ossec.conf is missing after the install phase.
+          {% if wazuh_airgap %}Airgap mode was active but installation still
+          failed; check the package install task output above.{% else %}No
+          package in {{ agent_pkg_dir }} matches this target (needs one
+          matching '{{ agent_pkg_regex | default("wazuh-agent*") | trim }}';
+          found: {{ agent_offline_pkgs.files | default([])
+                     | map(attribute='path') | map('basename') | list }}).
+          Run ./deploy/get-wazuh-agents.sh on the platform host (use ARCH=all
+          for mixed architectures), then re-run this job.{% endif %}
+      when: not ossec_conf_stat.stat.exists
+
     # Belt-and-suspenders: patch ossec.conf directly in addition to the
     # WAZUH_MANAGER env var that was set during package install.
     - name: Set manager address in ossec.conf

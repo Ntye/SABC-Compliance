@@ -107,7 +107,7 @@
   copy:
     src: "{{ item.path }}"
     dest: "/tmp/{{ item.path | basename }}"
-  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', agent_pkg_regex | trim) | list }}"
   when:
     - wazuh_airgap
     - not wazuh_agent_installed.stat.exists
@@ -119,7 +119,7 @@
   environment:
     WAZUH_MANAGER: "{{ wazuh_manager }}"
     WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
-  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', '\\.deb$') | list }}"
+  loop: "{{ agent_offline_pkgs.files | default([]) | selectattr('path', 'search', agent_pkg_regex | trim) | list }}"
   when:
     - wazuh_airgap
     - not wazuh_agent_installed.stat.exists
