@@ -179,29 +179,158 @@
       when: ansible_facts['os_family'] not in ['Debian', 'RedHat']
 
     # Check internet connectivity before attempting an online install.
-    # Lab/VM environments often have internet on the controller but not on
-    # managed nodes — detect this early with a clear actionable error.
+    # Uses the uri module (runs on the target's Python, which the bootstrap
+    # phase guarantees) instead of curl — minimal cloud images often ship
+    # without curl, and a curl exit of 127 (command not found) used to be
+    # misreported here as "no internet".
     - name: Check target internet connectivity to packages.wazuh.com
-      shell: >-
-        curl -s --connect-timeout 10 --max-time 15
-          -o /dev/null -w "%{http_code}"
-          https://packages.wazuh.com/key/GPG-KEY-WAZUH
+      uri:
+        url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+        method: GET
+        timeout: 15
+        validate_certs: no
       register: inet_check
-      changed_when: false
       failed_when: false
       when:
         - not wazuh_airgap
         - not wazuh_agent_installed.stat.exists
 
-    - name: Show airgap setup instructions (no internet on target)
+    - name: Set target connectivity fact
+      set_fact:
+        wazuh_target_online: "{{ (inet_check.status | default(-1)) == 200 }}"
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+
+    # ── Controller fallback ──────────────────────────────────────────────────
+    # Lab/VM environments often have internet on the CONTROLLER but not on the
+    # managed nodes (private subnet, no NAT). Instead of aborting, download the
+    # agent package on the controller into the packages dir and switch to the
+    # airgap install path automatically. The agent version is read from the
+    # manager's API so agent == manager (an agent newer than its manager is
+    # unsupported); override with -e wazuh_agent_version=X.Y.Z if needed.
+    - name: Controller fallback — download the agent package on the controller
+      when:
+        - not wazuh_airgap
+        - not wazuh_agent_installed.stat.exists
+        - not (wazuh_target_online | default(false))
+      block:
+        - name: Check CONTROLLER internet connectivity to packages.wazuh.com
+          uri:
+            url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+            method: GET
+            timeout: 15
+            validate_certs: no
+          delegate_to: localhost
+          become: no
+          register: ctrl_inet
+
+        - name: Authenticate to the Wazuh manager API (controller)
+          uri:
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/security/user/authenticate?raw=true"
+            method: POST
+            url_username: "{{ wazuh_api_user | default('wazuh') }}"
+            url_password: "{{ wazuh_api_pass | default('wazuh') }}"
+            force_basic_auth: yes
+            validate_certs: no
+            return_content: yes
+            timeout: 15
+          delegate_to: localhost
+          become: no
+          register: mgr_auth
+          failed_when: false
+
+        - name: Read the manager version (controller)
+          uri:
+            url: "https://{{ wazuh_manager }}:{{ wazuh_api_port | default(55000) }}/"
+            headers:
+              Authorization: "Bearer {{ mgr_auth.content | default('') }}"
+            validate_certs: no
+            return_content: yes
+            timeout: 15
+          delegate_to: localhost
+          become: no
+          register: mgr_info
+          failed_when: false
+          when: (mgr_auth.status | default(0)) == 200
+
+        - name: Resolve agent package version and architecture
+          set_fact:
+            _agent_ver: >-
+              {{ (wazuh_agent_version | default(''))
+                 or (mgr_info.json.data.api_version | default(''))
+                 or '4.14.6' }}
+            _deb_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64','arm64'] else 'amd64' }}"
+            _rpm_arch: "{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64','arm64'] else 'x86_64' }}"
+
+        - name: Compute package file name and URL
+          set_fact:
+            _agent_pkg_name: >-
+              {{ 'wazuh-agent_' ~ (_agent_ver | trim) ~ '-1_' ~ _deb_arch ~ '.deb'
+                 if ansible_facts['os_family'] == 'Debian'
+                 else 'wazuh-agent-' ~ (_agent_ver | trim) ~ '-1.' ~ _rpm_arch ~ '.rpm' }}
+            _agent_pkg_url: >-
+              {{ 'https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_' ~ (_agent_ver | trim) ~ '-1_' ~ _deb_arch ~ '.deb'
+                 if ansible_facts['os_family'] == 'Debian'
+                 else 'https://packages.wazuh.com/4.x/yum/wazuh-agent-' ~ (_agent_ver | trim) ~ '-1.' ~ _rpm_arch ~ '.rpm' }}
+
+        - name: Ensure the agent packages directory exists on the controller
+          file:
+            path: "{{ agent_pkg_dir }}"
+            state: directory
+            mode: "0755"
+          delegate_to: localhost
+          become: no
+
+        - name: Download the agent package on the controller (target has no internet)
+          get_url:
+            url: "{{ _agent_pkg_url | trim }}"
+            dest: "{{ agent_pkg_dir }}/{{ _agent_pkg_name | trim }}"
+            mode: "0644"
+            timeout: 120
+          delegate_to: localhost
+          become: no
+
+        - name: Re-scan offline Wazuh agent packages after controller download
+          find:
+            paths: "{{ agent_pkg_dir }}"
+            patterns:
+              - "wazuh-agent*.deb"
+              - "wazuh-agent*.rpm"
+          register: agent_offline_pkgs
+          delegate_to: localhost
+          become: no
+
+        - name: Report controller fallback result
+          debug:
+            msg: >-
+              Target has no internet — downloaded {{ _agent_pkg_name | trim }}
+              (agent version {{ _agent_ver | trim }}) on the controller;
+              switching to the airgap install path.
+
+        # Keep this LAST in the block: the block's `when: not wazuh_airgap` is
+        # inherited by every task, so anything after this flip is skipped.
+        - name: Switch to airgap install mode (controller-downloaded package)
+          set_fact:
+            wazuh_airgap: "{{ agent_offline_pkgs.files | length > 0 }}"
+      rescue:
+        - name: Controller fallback failed — record the reason
+          set_fact:
+            _ctrl_fallback_error: >-
+              controller download failed:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+
+    - name: Show airgap setup instructions (no internet on target OR controller)
       debug:
         msg:
           - "╔══════════════════════════════════════════════════════════════╗"
           - "║         WAZUH AGENT — AIRGAP SETUP REQUIRED                 ║"
           - "╚══════════════════════════════════════════════════════════════╝"
           - ""
-          - "  The target node cannot reach packages.wazuh.com."
-          - "  (curl exit={{ inet_check.rc }}, HTTP={{ inet_check.stdout | default('—') }})"
+          - "  The target node cannot reach packages.wazuh.com"
+          - "  (HTTP status: {{ inet_check.status | default('—') }}), and the automatic"
+          - "  controller-side download did not succeed"
+          - "  ({{ _ctrl_fallback_error | default('see errors above') }})."
           - ""
           - "  Download the package matching your manager version on an internet-connected machine."
           - "  Check manager version: /var/ossec/bin/wazuh-control info | grep version"
@@ -224,15 +353,18 @@
       when:
         - not wazuh_airgap
         - not wazuh_agent_installed.stat.exists
-        - inet_check.stdout | default('000') != '200'
+        - not (wazuh_target_online | default(false))
 
-    - name: Abort — target has no internet access (see instructions above)
+    - name: Abort — no internet on target and controller fallback failed
       fail:
-        msg: "No internet on target. Follow the airgap instructions printed above, then re-run."
+        msg: >-
+          No internet on the target and the controller could not download the
+          agent package. Follow the airgap instructions printed above, then
+          re-run.
       when:
         - not wazuh_airgap
         - not wazuh_agent_installed.stat.exists
-        - inet_check.stdout | default('000') != '200'
+        - not (wazuh_target_online | default(false))
 
     # ══════════════════════════════════════════════════════════════════════════
     # PREFLIGHT — catch the common Wazuh enrollment failure scenarios early
