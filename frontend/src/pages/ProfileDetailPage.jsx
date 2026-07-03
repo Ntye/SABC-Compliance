@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Plus, X, Search, Pencil, Trash2,
   ChevronDown, ChevronRight, Lock, ListChecks,
   Layers, Save, FolderPlus, Copy, History, RotateCcw,
+  Download, Upload,
 } from 'lucide-react'
 import {
   getProfile, updateProfile, addProfileControl,
   updateProfileControl, deleteProfileControl, searchAllControls,
   getControlHistory, importScanControls, revertProfile, getUserRole,
+  duplicateProfile, exportProfileCsv, importProfileCsv,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -526,9 +528,11 @@ function ControlDrawer({ control, profileId, onClose, onSave, saving, t }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function ProfileDetailPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const t = useT()
   const toast = useToast()
   const isAdmin = getUserRole() === 'admin'
+  const csvInputRef = useRef(null)
   const { data: profile, loading, error, refetch } = useApi(() => getProfile(id), { deps: [id] })
 
   const [query,      setQuery]      = useState('')
@@ -590,6 +594,37 @@ export default function ProfileDetailPage() {
     }
   }
 
+  async function handleExportCsv() {
+    try {
+      await exportProfileCsv(id)
+    } catch (e) {
+      toast(e.message || t('profiles.exportFailed'), 'error')
+    }
+  }
+
+  async function handleDuplicate() {
+    try {
+      const copy = await duplicateProfile(id)
+      toast(t('profiles.duplicated'), 'success')
+      navigate(`/profiles/${copy.id}`)
+    } catch (e) {
+      toast(e.message || t('profiles.duplicateFailed'), 'error')
+    }
+  }
+
+  async function handleImportCsvFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file
+    if (!file) return
+    try {
+      const res = await importProfileCsv(file, { profileId: id })
+      toast(t('profiles.importCsvDone', { created: res.created, updated: res.updated, unchanged: res.unchanged }), 'success')
+      refetch()
+    } catch (err) {
+      toast(err.message || t('profiles.importCsvFailed'), 'error')
+    }
+  }
+
   if (loading) return <div className="py-16 flex justify-center"><Spinner /></div>
   if (error)   return <div className="p-6 text-[13px] text-red-600 bg-red-50 rounded-lg m-6">{error}</div>
   if (!profile) return null
@@ -637,6 +672,40 @@ export default function ProfileDetailPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+            <button
+              onClick={handleExportCsv}
+              title={t('profiles.exportCsv')}
+              className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"
+            >
+              <Download size={13} />{t('profiles.exportCsv')}
+            </button>
+            {isAdmin && (
+              <button
+                onClick={handleDuplicate}
+                title={t('profiles.duplicate')}
+                className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"
+              >
+                <Copy size={13} />{t('profiles.duplicate')}
+              </button>
+            )}
+            {!readOnly && (
+              <>
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleImportCsvFile}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => csvInputRef.current?.click()}
+                  title={t('profiles.importCsvUpdateHint')}
+                  className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-gray-50"
+                >
+                  <Upload size={13} />{t('profiles.importCsvIntoThis')}
+                </button>
+              </>
+            )}
             {!readOnly && profile.source === 'builtin' && (
               <button
                 onClick={async () => {

@@ -1,7 +1,10 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, X, FileCode, Layers, ListChecks, Lock, Trash2, Pencil } from 'lucide-react'
-import { listProfiles, createProfile, deleteProfile, getUserRole } from '../lib/api.js'
+import { Plus, X, FileCode, Layers, ListChecks, Lock, Trash2, Pencil, Copy, Download, Upload, FileSpreadsheet } from 'lucide-react'
+import {
+  listProfiles, createProfile, deleteProfile, getUserRole,
+  duplicateProfile, exportProfileCsv, downloadProfileCsvTemplate, importProfileCsv,
+} from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -69,6 +72,64 @@ export default function ProfilesPage() {
     }
   }
 
+  async function handleDuplicate(p, e) {
+    e.stopPropagation()
+    try {
+      const copy = await duplicateProfile(p.id)
+      toast(t('profiles.duplicated'), 'success')
+      navigate(`/profiles/${copy.id}`)
+    } catch (err) {
+      toast(err.message || t('profiles.duplicateFailed'), 'error')
+    }
+  }
+
+  async function handleExport(p, e) {
+    e.stopPropagation()
+    try {
+      await exportProfileCsv(p.id)
+    } catch (err) {
+      toast(err.message || t('profiles.exportFailed'), 'error')
+    }
+  }
+
+  async function handleTemplate() {
+    try {
+      await downloadProfileCsvTemplate()
+    } catch (err) {
+      toast(err.message || t('profiles.exportFailed'), 'error')
+    }
+  }
+
+  // ── CSV import (create a new profile from a file) ──────────────────────────
+  const [showImport, setShowImport] = useState(false)
+  const [importName, setImportName] = useState('')
+  const [importFile, setImportFile] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const fileRef = useRef(null)
+
+  async function handleImport() {
+    if (!importName.trim()) {
+      toast(t('profiles.nameRequired'), 'error')
+      return
+    }
+    if (!importFile) {
+      toast(t('profiles.importCsvFile'), 'error')
+      return
+    }
+    setImporting(true)
+    try {
+      const res = await importProfileCsv(importFile, { name: importName.trim() })
+      toast(t('profiles.importCsvDone', { created: res.created, updated: res.updated, unchanged: res.unchanged }), 'success')
+      setShowImport(false)
+      setImportName(''); setImportFile(null)
+      navigate(`/profiles/${res.profile_id}`)
+    } catch (err) {
+      toast(err.message || t('profiles.importCsvFailed'), 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -77,15 +138,35 @@ export default function ProfilesPage() {
           <h2 className="text-[18px] font-semibold text-gray-900">{t('profiles.title')}</h2>
           <p className="text-[13px] text-gray-500 mt-0.5">{t('profiles.subtitle')}</p>
         </div>
-        {isAdmin && (
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors flex-shrink-0"
+            onClick={handleTemplate}
+            className="flex items-center gap-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+            title={t('profiles.csvTemplate')}
           >
-            <Plus size={14} />
-            {t('profiles.newProfile')}
+            <FileSpreadsheet size={14} />
+            {t('profiles.csvTemplate')}
           </button>
-        )}
+          {isAdmin && (
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+              title={t('profiles.importCsv')}
+            >
+              <Upload size={14} />
+              {t('profiles.importCsv')}
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-1.5 bg-brand text-white text-[12px] font-medium px-3.5 py-2 rounded-lg hover:bg-brand/90 transition-colors"
+            >
+              <Plus size={14} />
+              {t('profiles.newProfile')}
+            </button>
+          )}
+        </div>
       </div>
 
       {loading && <div className="py-16 flex justify-center"><Spinner /></div>}
@@ -154,6 +235,22 @@ export default function ProfilesPage() {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={(e) => handleExport(p, e)}
+                          className="p-1.5 text-gray-300 hover:text-brand rounded transition-colors"
+                          title={t('profiles.exportCsv')}
+                        >
+                          <Download size={14} />
+                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={(e) => handleDuplicate(p, e)}
+                            className="p-1.5 text-gray-300 hover:text-brand rounded transition-colors"
+                            title={t('profiles.duplicate')}
+                          >
+                            <Copy size={14} />
+                          </button>
+                        )}
                         {isAdmin && p.source !== 'builtin' && (
                           <button
                             onClick={(e) => handleDelete(p, e)}
@@ -178,6 +275,43 @@ export default function ProfilesPage() {
             </table>
           )}
         </div>
+      )}
+
+      {/* Import CSV modal (create a new profile) */}
+      {showImport && (
+        <Modal title={t('profiles.importCsvTitle')} onClose={() => setShowImport(false)}>
+          <div className="space-y-4">
+            <p className="text-[12px] text-gray-500">{t('profiles.importCsvHint')}</p>
+            <div>
+              <label className="block text-[12px] font-medium text-gray-700 mb-1">{t('profiles.importCsvNewName')}</label>
+              <input
+                autoFocus
+                value={importName}
+                onChange={(e) => setImportName(e.target.value)}
+                placeholder={t('profiles.namePlaceholder')}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-brand"
+              />
+            </div>
+            <div>
+              <label className="block text-[12px] font-medium text-gray-700 mb-1">{t('profiles.importCsvFile')}</label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                className="w-full text-[12px] text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border file:border-gray-200 file:bg-gray-50 file:text-[12px] file:font-medium file:text-gray-700 hover:file:bg-gray-100"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowImport(false)} className="px-3.5 py-2 text-[12px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg">
+                {t('common.cancel')}
+              </button>
+              <button onClick={handleImport} disabled={importing} className="px-3.5 py-2 text-[12px] font-medium bg-brand text-white rounded-lg hover:bg-brand/90 disabled:opacity-50">
+                {importing ? t('common.saving') : t('profiles.importCsv')}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Create modal */}

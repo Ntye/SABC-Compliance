@@ -348,3 +348,307 @@ class ProfileUseCases:
         if not query or len(query.strip()) < 2:
             return []
         return await self._repo.search_controls(query.strip(), limit)
+
+    # ── duplicate ─────────────────────────────────────────────────────────────
+    async def duplicate_profile(self, profile_id: str, new_name: str | None = None) -> Profile:
+        """Clone any profile (builtin or custom) into a fresh CUSTOM profile.
+
+        The copy is always ``source="custom", framework=None`` so it is freely
+        editable and deletable regardless of the original's lock state — this is
+        the sanctioned way to derive a working referential from the CIS original.
+        Controls are cloned with new ids, preserving order and every field.
+        """
+        src = await self._repo.find_by_id(profile_id)
+        if not src:
+            raise ValidationError("Profile not found.")
+        name = (new_name or "").strip() or f"{src.name} (copy)"
+        existing_names = {p.name for p in await self._repo.find_all()}
+        if name in existing_names:
+            i = 2
+            while f"{name} ({i})" in existing_names:
+                i += 1
+            name = f"{name} ({i})"
+
+        now = datetime.utcnow()
+        copy = Profile(
+            id=str(uuid.uuid4()),
+            name=name,
+            description=src.description,
+            os_family=src.os_family,
+            version=src.version,
+            source="custom",
+            framework=None,
+            controls=[],
+            created_at=now,
+            updated_at=now,
+        )
+        copy.controls = [
+            ProfileControl(
+                id=str(uuid.uuid4()),
+                profile_id=copy.id,
+                section_id=c.section_id, section=c.section, title=c.title,
+                position=c.position, kind=c.kind, cis_id=c.cis_id,
+                description=c.description, recommended_value=c.recommended_value,
+                agreed_value=c.agreed_value, risk_profile=c.risk_profile,
+                rationale=c.rationale, validate_guideline=c.validate_guideline,
+                configure_guideline=c.configure_guideline, regulatory=c.regulatory,
+                notes=c.notes, check_command=c.check_command, enabled=c.enabled,
+                created_at=now, updated_at=now,
+            )
+            for c in sorted(src.controls, key=lambda c: c.position)
+        ]
+        await self._repo.save(copy)
+        logger.info("Duplicated profile '%s' → '%s' (%d controls)",
+                    src.name, name, len(copy.controls))
+        return await self._repo.find_by_id(copy.id)
+
+    # ── CSV export / template / import ────────────────────────────────────────
+    # Column order for exports, templates and imports. `position` is optional on
+    # import (row order is used when absent); `enabled` accepts true/false,
+    # 1/0, yes/no, oui/non.
+    CSV_COLUMNS = [
+        "position", "kind", "section_id", "section", "title", "cis_id",
+        "description", "recommended_value", "agreed_value", "risk_profile",
+        "rationale", "validate_guideline", "configure_guideline", "regulatory",
+        "notes", "check_command", "enabled",
+    ]
+    _CSV_REQUIRED = {"title"}
+    _CSV_MAX_ROWS = 5000
+
+    async def export_profile_csv(self, profile_id: str) -> tuple[str, str]:
+        """Render a profile's controls as CSV. Returns (filename, csv_text)."""
+        import csv as _csv
+        import io
+        import re as _re
+
+        profile = await self._repo.find_by_id(profile_id)
+        if not profile:
+            raise ValidationError("Profile not found.")
+        buf = io.StringIO()
+        w = _csv.writer(buf, lineterminator="\r\n")
+        w.writerow(self.CSV_COLUMNS)
+        for c in sorted(profile.controls, key=lambda c: c.position):
+            w.writerow([
+                c.position, c.kind, c.section_id, c.section, c.title,
+                c.cis_id or "", c.description or "", c.recommended_value or "",
+                c.agreed_value or "", c.risk_profile or "", c.rationale or "",
+                c.validate_guideline or "", c.configure_guideline or "",
+                c.regulatory or "", c.notes or "", c.check_command or "",
+                "true" if c.enabled else "false",
+            ])
+        slug = _re.sub(r"[^A-Za-z0-9._-]+", "-", profile.name).strip("-").lower() or "profile"
+        return f"{slug}.csv", buf.getvalue()
+
+    def csv_template(self) -> str:
+        """A ready-to-edit CSV: header + one section row + two sample controls."""
+        import csv as _csv
+        import io
+
+        buf = io.StringIO()
+        w = _csv.writer(buf, lineterminator="\r\n")
+        w.writerow(self.CSV_COLUMNS)
+        w.writerow([1, "section", "5", "Access, Authentication & Authorization",
+                    "5 — Access, Authentication & Authorization", "", "", "", "", "",
+                    "", "", "", "", "", "", "true"])
+        w.writerow([2, "control", "5.2.8", "Access, Authentication & Authorization",
+                    "Ensure SSH root login is disabled", "5.2.8",
+                    "Disallow direct root SSH logins.", "PermitRootLogin no",
+                    "PermitRootLogin no", "High",
+                    "Direct root logins remove accountability.",
+                    "sshd -T | grep permitrootlogin",
+                    "Set 'PermitRootLogin no' in /etc/ssh/sshd_config then restart sshd.",
+                    "", "", "", "true"])
+        w.writerow([3, "control", "5.2.9", "Access, Authentication & Authorization",
+                    "Ensure SSH PermitEmptyPasswords is disabled", "5.2.9",
+                    "Reject SSH logins with empty passwords.", "PermitEmptyPasswords no",
+                    "", "High", "", "sshd -T | grep permitemptypasswords",
+                    "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.",
+                    "", "", "", "true"])
+        return buf.getvalue()
+
+    @staticmethod
+    def _control_key(kind: str, section_id: str, title: str) -> tuple:
+        """Identity used for duplicate detection and update matching: a control is
+        'the same' when kind + normalised section_id (fallback title) match."""
+        sid = (section_id or "").strip().lower()
+        return (kind or "control", sid if sid else (title or "").strip().lower())
+
+    @staticmethod
+    def _parse_bool(value: str, row_num: int, errors: list[str]) -> bool:
+        v = (value or "").strip().lower()
+        if v in ("", "true", "1", "yes", "oui", "y", "x"):
+            return True
+        if v in ("false", "0", "no", "non", "n"):
+            return False
+        errors.append(f"row {row_num}: enabled must be true/false (got '{value}')")
+        return True
+
+    def _parse_csv_rows(self, text: str) -> tuple[list[dict], list[str]]:
+        """Parse + validate CSV content. Returns (rows, errors); rows carry
+        normalised values keyed by CSV_COLUMNS plus '_row' (line number)."""
+        import csv as _csv
+        import io
+
+        errors: list[str] = []
+        reader = _csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            return [], ["The file is empty — download the template to get started."]
+        headers = [h.strip() for h in reader.fieldnames]
+        unknown = [h for h in headers if h and h not in self.CSV_COLUMNS]
+        missing = self._CSV_REQUIRED - set(headers)
+        if missing:
+            errors.append(f"Missing required column(s): {', '.join(sorted(missing))}")
+        if unknown:
+            errors.append(
+                f"Unknown column(s): {', '.join(unknown)} — expected columns are: "
+                + ", ".join(self.CSV_COLUMNS)
+            )
+        if errors:
+            return [], errors
+
+        rows: list[dict] = []
+        seen: dict[tuple, int] = {}
+        for i, raw in enumerate(reader, start=2):  # header is line 1
+            if i - 1 > self._CSV_MAX_ROWS:
+                errors.append(f"Too many rows (max {self._CSV_MAX_ROWS}).")
+                break
+            vals = {k: (raw.get(k) or "").strip() for k in self.CSV_COLUMNS}
+            if not any(vals.values()):
+                continue  # skip blank lines
+            kind = vals["kind"].lower() or "control"
+            if kind not in ("control", "section"):
+                errors.append(f"row {i}: kind must be 'control' or 'section' (got '{vals['kind']}')")
+                continue
+            if not vals["title"] and not vals["section_id"]:
+                errors.append(f"row {i}: title (or section_id) is required")
+                continue
+            position: int | None = None
+            if vals["position"]:
+                try:
+                    position = int(float(vals["position"]))
+                except ValueError:
+                    errors.append(f"row {i}: position must be a number (got '{vals['position']}')")
+                    continue
+            enabled = self._parse_bool(vals["enabled"], i, errors)
+
+            # Duplicate detection WITHIN the file — the "repetitive controls" gate.
+            key = self._control_key(kind, vals["section_id"], vals["title"])
+            if key in seen:
+                errors.append(
+                    f"row {i}: duplicate of row {seen[key]} "
+                    f"(same {kind} '{vals['section_id'] or vals['title']}') — "
+                    "remove or merge repeated controls before importing"
+                )
+                continue
+            seen[key] = i
+
+            rows.append({
+                **vals,
+                "kind": kind,
+                "title": vals["title"] or vals["section_id"],
+                "position": position,
+                "enabled": enabled,
+                "_row": i,
+            })
+        if not rows and not errors:
+            errors.append("The file contains no control rows.")
+        return rows, errors
+
+    async def import_profile_csv(
+        self,
+        text: str,
+        profile_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        os_family: str | None = None,
+        version: str | None = None,
+    ) -> dict:
+        """Apply a CSV to a profile — update an existing one or create a new one.
+
+        Validation-first: the whole file is parsed and checked (unknown columns,
+        missing titles, bad kinds/positions, duplicate controls within the file)
+        and NOTHING is written unless the file is fully valid.
+
+        Update mode (``profile_id`` given): rows are matched to existing controls
+        by kind + section_id (fallback title). Matched rows update the control's
+        fields — empty CSV cells leave the current value unchanged; changed
+        fields are snapshotted to control history. Unmatched rows create new
+        controls. Existing controls absent from the CSV are left untouched.
+
+        Create mode (no ``profile_id``): a new custom profile named ``name`` is
+        created with every row as a fresh control.
+        """
+        rows, errors = self._parse_csv_rows(text)
+        if errors:
+            raise ValidationError("CSV validation failed:\n" + "\n".join(errors[:25]))
+
+        now = datetime.utcnow()
+
+        if profile_id:
+            profile = await self._repo.find_by_id(profile_id)
+            if not profile:
+                raise ValidationError("Profile not found.")
+            self._ensure_editable(profile)
+            existing = {
+                self._control_key(c.kind, c.section_id, c.title): c
+                for c in profile.controls
+            }
+            created = updated = unchanged = 0
+            max_pos = max((c.position for c in profile.controls), default=0)
+            for r in rows:
+                key = self._control_key(r["kind"], r["section_id"], r["title"])
+                current = existing.get(key)
+                if current is None:
+                    max_pos += 1
+                    data = {k: (r[k] or None) for k in self.CSV_COLUMNS
+                            if k not in ("position", "enabled")}
+                    data["position"] = r["position"] if r["position"] is not None else max_pos
+                    data["enabled"] = r["enabled"]
+                    await self.add_control(profile_id, data)
+                    created += 1
+                else:
+                    changes: dict = {}
+                    for fld in self.CSV_COLUMNS:
+                        if fld in ("position", "enabled"):
+                            continue
+                        val = r[fld]
+                        if val and val != (getattr(current, fld) or ""):
+                            changes[fld] = val
+                    if r["position"] is not None and r["position"] != current.position:
+                        changes["position"] = r["position"]
+                    if r["enabled"] != current.enabled:
+                        changes["enabled"] = r["enabled"]
+                    if changes:
+                        await self.update_control(current.id, changes)
+                        updated += 1
+                    else:
+                        unchanged += 1
+            profile.updated_at = now
+            await self._repo.update(profile)
+            fresh = await self._repo.find_by_id(profile_id)
+            return {
+                "mode": "update", "profile_id": profile_id, "profile_name": fresh.name,
+                "created": created, "updated": updated, "unchanged": unchanged,
+                "total_rows": len(rows), "control_count": fresh.control_count,
+            }
+
+        # Create mode
+        pname = (name or "").strip()
+        if not pname:
+            raise ValidationError("A profile name is required to create a profile from CSV.")
+        profile = await self.create_profile({
+            "name": pname, "description": description,
+            "os_family": os_family, "version": version,
+        })
+        for order, r in enumerate(rows, start=1):
+            data = {k: (r[k] or None) for k in self.CSV_COLUMNS
+                    if k not in ("position", "enabled")}
+            data["position"] = r["position"] if r["position"] is not None else order
+            data["enabled"] = r["enabled"]
+            await self.add_control(profile.id, data)
+        fresh = await self._repo.find_by_id(profile.id)
+        return {
+            "mode": "create", "profile_id": profile.id, "profile_name": fresh.name,
+            "created": len(rows), "updated": 0, "unchanged": 0,
+            "total_rows": len(rows), "control_count": fresh.control_count,
+        }

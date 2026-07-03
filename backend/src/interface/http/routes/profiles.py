@@ -1,5 +1,6 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal, Profile, ProfileControl
@@ -22,6 +23,10 @@ class ProfileUpdateRequest(BaseModel):
     description: str | None = None
     os_family: str | None = None
     version: str | None = None
+
+
+class DuplicateRequest(BaseModel):
+    name: str | None = None  # defaults to "<original name> (copy)"
 
 
 class ControlRequest(BaseModel):
@@ -120,6 +125,55 @@ async def search_controls(
     return [_control_dict(c) for c in controls]
 
 
+@router.get("/-/csv-template", summary="Download the CSV template for profile import")
+async def csv_template(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Header + sample rows showing the expected columns. Edit it, then upload
+    via *Import CSV* to create a new profile or update an existing one."""
+    return PlainTextResponse(
+        content=_uc.csv_template(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="profile-template.csv"'},
+    )
+
+
+@router.post("/-/import-csv", summary="Import a CSV to create or update a profile")
+async def import_csv(
+    file: UploadFile = File(..., description="CSV file (see /profiles/-/csv-template)"),
+    profile_id: str | None = Form(None, description="Update this profile; omit to create a new one"),
+    name: str | None = Form(None, description="New profile name (create mode)"),
+    description: str | None = Form(None),
+    os_family: str | None = Form(None),
+    version: str | None = Form(None),
+    principal: AuthPrincipal = Depends(require_admin),
+):
+    """
+    Validation-first import: the whole file is checked (columns, kinds,
+    positions, and duplicate controls within the file) and nothing is written
+    unless it is fully valid — repeated controls are reported with their row
+    numbers instead of being silently created twice.
+
+    With ``profile_id``: rows are matched to existing controls by kind +
+    section_id (fallback title); matches update fields (empty cells leave the
+    current value unchanged, changes are recorded in control history), new rows
+    are added, and controls absent from the CSV are left untouched.
+    Without ``profile_id``: creates a new custom profile named ``name``.
+    """
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="CSV file too large (max 5 MB).")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded CSV.")
+    try:
+        return await _uc.import_profile_csv(
+            text, profile_id=profile_id or None, name=name,
+            description=description, os_family=os_family, version=version,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.post("", summary="Create a custom compliance profile")
 async def create_profile(body: ProfileCreateRequest, principal: AuthPrincipal = Depends(require_admin)):
     try:
@@ -144,6 +198,36 @@ async def update_profile(profile_id: str, body: ProfileUpdateRequest, principal:
         return _profile_detail(p)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/{profile_id}/duplicate", summary="Duplicate a profile into a new custom profile")
+async def duplicate_profile(
+    profile_id: str,
+    body: DuplicateRequest | None = None,
+    principal: AuthPrincipal = Depends(require_admin),
+):
+    """Clone any profile (including the read-only CIS Benchmark) into a fresh,
+    fully editable custom profile with all its controls."""
+    try:
+        p = await _uc.duplicate_profile(profile_id, body.name if body else None)
+        return _profile_detail(p)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/{profile_id}/export.csv", summary="Export a profile's controls as CSV")
+async def export_csv(profile_id: str, principal: AuthPrincipal = Depends(get_current_principal)):
+    """Full CSV of the profile's controls — edit offline and re-upload via
+    *Import CSV* to apply changes, or use it as the base for a new profile."""
+    try:
+        filename, content = await _uc.export_profile_csv(profile_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return PlainTextResponse(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{profile_id}/revert", summary="Reset the Internal Referential to the CIS Benchmark original")

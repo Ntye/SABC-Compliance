@@ -452,6 +452,69 @@ export async function importScanControls(profileId) {
   return request('POST', `/profiles/${profileId}/import-scan-controls`)
 }
 
+export async function duplicateProfile(id, name = null) {
+  return request('POST', `/profiles/${id}/duplicate`, name ? { name } : {})
+}
+
+// Shared helper: authenticated GET that saves the response as a file download.
+async function downloadCsv(path, fallbackName) {
+  const base = getGatewayUrl()
+  const headers = {}
+  const apiKey = getStoredApiKey()
+  const jwt = getJwt()
+  if (apiKey) headers['X-API-Key'] = apiKey
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+  const res = await fetch(`${base}${path}`, { headers })
+  if (!res.ok) {
+    if (res.status === 401) logout()
+    throw new Error(`Download failed (HTTP ${res.status})`)
+  }
+  const dispo = res.headers.get('content-disposition') || ''
+  const m = dispo.match(/filename="([^"]+)"/)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = m ? m[1] : fallbackName
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function exportProfileCsv(id) {
+  return downloadCsv(`/profiles/${id}/export.csv`, 'profile.csv')
+}
+
+export async function downloadProfileCsvTemplate() {
+  return downloadCsv('/profiles/-/csv-template', 'profile-template.csv')
+}
+
+export async function importProfileCsv(file, { profileId = null, name = null, description = null } = {}) {
+  // multipart/form-data — do NOT set Content-Type (browser adds the boundary).
+  const base = getGatewayUrl()
+  const headers = {}
+  const apiKey = getStoredApiKey()
+  const jwt = getJwt()
+  if (apiKey) headers['X-API-Key'] = apiKey
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+
+  const form = new FormData()
+  form.append('file', file)
+  if (profileId) form.append('profile_id', profileId)
+  if (name) form.append('name', name)
+  if (description) form.append('description', description)
+
+  const res = await fetch(`${base}/profiles/-/import-csv`, { method: 'POST', headers, body: form })
+  let data
+  try { data = await res.json() } catch { data = {} }
+  if (!res.ok) {
+    const msg = data?.detail || data?.error || `HTTP ${res.status}`
+    if (res.status === 401) logout()
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+  return data
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {
