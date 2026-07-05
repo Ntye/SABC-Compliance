@@ -13,14 +13,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, ConfigChangeEvent, Job, Node, NodeGroup,
-    Profile, ProfileControl, RemediationEvent, Rule, User, UserGroup,
+    ApiKey, ComplianceGroup, ComplianceReport, ConfigChangeEvent, Job, Node,
+    NodeGroup, Profile, ProfileControl, RemediationEvent, Rule, Tier, User,
+    UserGroup,
 )
 from core.domain.interfaces import (
-    IApiKeyRepository, IAuditRepository, IComplianceRepository,
-    IDetectionRepository, IJobRepository, INodeGroupRepository, INodeRepository,
-    IPlatformConfigRepository, IProfileRepository, IRuleRepository,
-    IUserRepository, IUserGroupRepository,
+    IApiKeyRepository, IAuditRepository, IComplianceGroupRepository,
+    IComplianceRepository, IDetectionRepository, IJobRepository,
+    INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
+    IProfileRepository, IRuleRepository, ITierRepository, IUserRepository,
+    IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,7 @@ nodes_table = Table(
     Column("puppet_enrolled", Integer, default=0),
     Column("detection_enrolled", Integer, default=0),
     Column("scan_ready", Integer, default=0),
+    Column("tier_id", Text),
     Column("last_seen", Text),
     Column("created_at", Text),
     Column("updated_at", Text),
@@ -94,6 +97,13 @@ compliance_reports_table = Table(
     Column("profile", Text),
     Column("duration", Text),
     Column("skipped_checks", Integer, default=0),
+    # ── Scan context (compliance-group / tier / family at scan time) ──────────
+    Column("compliance_group_id", Text),
+    Column("profile_id", Text),
+    Column("profile_version", Text),
+    Column("tier_id", Text),
+    Column("tier_name", Text),
+    Column("os_family", Text),
     Column("collected_at", Text),
     # ── De-duplication (keyframe / confirmation) ──────────────────────────────
     # content_hash: hash of the normalized control state (control_id+status),
@@ -236,6 +246,19 @@ profile_controls_table = Table(
     Column("title", Text, nullable=False),
     Column("position", Integer, default=0),
     Column("kind", Text, default="control"),
+    # ── Unified referential identity + scoping ────────────────────────────────
+    Column("control_id", Text),                 # THE key (internal referential id)
+    Column("control_key", Text),                # auto-derived slug
+    Column("applies_to", Text, default="debian;redhat"),
+    Column("cis_level", Integer, default=1),
+    Column("framework_reference", Text),        # provenance text only
+    Column("status", Text, default="active"),   # active | retired
+    # ── Per-family guidance ───────────────────────────────────────────────────
+    Column("validate_debian", Text),
+    Column("configure_debian", Text),
+    Column("validate_redhat", Text),
+    Column("configure_redhat", Text),
+    # ── Shared / legacy display fields ────────────────────────────────────────
     Column("cis_id", Text),
     Column("description", Text),
     Column("recommended_value", Text),
@@ -250,6 +273,49 @@ profile_controls_table = Table(
     Column("enabled", Integer, default=1),
     Column("created_at", Text),
     Column("updated_at", Text),
+)
+
+# ── Tiers (platform criticality classification) ───────────────────────────────
+tiers_table = Table(
+    "tiers", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    Column("includes_level_2", Integer, default=0),
+    Column("is_system", Integer, default=0),
+    Column("created_by", Text),
+    Column("created_at", Text),
+)
+
+tier_extra_controls_table = Table(
+    "tier_extra_controls", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tier_id", Text, nullable=False),
+    Column("control_id", Text, nullable=False),   # a real CIS Level-2 control_id
+)
+
+# ── Compliance node groups (platform-only; NEVER Puppet NC) ───────────────────
+compliance_groups_table = Table(
+    "compliance_groups", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+compliance_group_profiles_table = Table(
+    "compliance_group_profiles", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("profile_id", Text, nullable=False),
+)
+
+compliance_group_members_table = Table(
+    "compliance_group_members", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("node_id", Text, nullable=False),
 )
 
 profile_control_history_table = Table(
@@ -384,6 +450,37 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 await conn.execute(text("ALTER TABLE profile_controls ADD COLUMN check_command TEXT"))
             except Exception:
                 pass
+            # Unified multi-OS referential columns on profile_controls.
+            for col, typ in [
+                ("control_id", "TEXT"), ("control_key", "TEXT"),
+                ("applies_to", "TEXT DEFAULT 'debian;redhat'"),
+                ("cis_level", "INTEGER DEFAULT 1"),
+                ("framework_reference", "TEXT"),
+                ("status", "TEXT DEFAULT 'active'"),
+                ("validate_debian", "TEXT"), ("configure_debian", "TEXT"),
+                ("validate_redhat", "TEXT"), ("configure_redhat", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE profile_controls ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+            try:
+                await conn.execute(text("ALTER TABLE nodes ADD COLUMN tier_id TEXT"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE profiles ADD COLUMN is_system INTEGER DEFAULT 0"))
+            except Exception:
+                pass
+            for col, typ in [
+                ("compliance_group_id", "TEXT"), ("profile_id", "TEXT"),
+                ("profile_version", "TEXT"), ("tier_id", "TEXT"),
+                ("tier_name", "TEXT"), ("os_family", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
             for col, typ in [("description", "TEXT"), ("role", "TEXT"),
                              ("permissions", "TEXT"), ("is_default", "INTEGER")]:
                 try:
@@ -466,7 +563,25 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("nodes",              "dns_resolves",          "BOOLEAN"),
             ("nodes",              "scan_ready",            "BOOLEAN DEFAULT false"),
             ("api_keys",           "user_id",               "TEXT"),
+            ("nodes",              "tier_id",               "TEXT"),
+            ("profiles",           "is_system",             "INTEGER DEFAULT 0"),
             ("profile_controls",   "check_command",         "TEXT"),
+            ("profile_controls",   "control_id",            "TEXT"),
+            ("profile_controls",   "control_key",           "TEXT"),
+            ("profile_controls",   "applies_to",            "TEXT DEFAULT 'debian;redhat'"),
+            ("profile_controls",   "cis_level",             "INTEGER DEFAULT 1"),
+            ("profile_controls",   "framework_reference",   "TEXT"),
+            ("profile_controls",   "status",                "TEXT DEFAULT 'active'"),
+            ("profile_controls",   "validate_debian",       "TEXT"),
+            ("profile_controls",   "configure_debian",      "TEXT"),
+            ("profile_controls",   "validate_redhat",       "TEXT"),
+            ("profile_controls",   "configure_redhat",      "TEXT"),
+            ("compliance_reports", "compliance_group_id",   "TEXT"),
+            ("compliance_reports", "profile_id",            "TEXT"),
+            ("compliance_reports", "profile_version",       "TEXT"),
+            ("compliance_reports", "tier_id",               "TEXT"),
+            ("compliance_reports", "tier_name",             "TEXT"),
+            ("compliance_reports", "os_family",             "TEXT"),
             ("user_groups",        "description",           "TEXT"),
             ("user_groups",        "role",                  "TEXT"),
             ("user_groups",        "permissions",           "TEXT DEFAULT '[]'"),
@@ -535,6 +650,7 @@ class NodeRepository(INodeRepository):
             puppet_enrolled=bool(row.puppet_enrolled),
             detection_enrolled=bool(row.detection_enrolled),
             scan_ready=bool(getattr(row, 'scan_ready', None) or getattr(row, 'inspec_installed', None)),
+            tier_id=getattr(row, 'tier_id', None),
             last_seen=_dt(row.last_seen),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -559,6 +675,7 @@ class NodeRepository(INodeRepository):
             "puppet_enrolled": int(node.puppet_enrolled),
             "detection_enrolled": int(node.detection_enrolled),
             "scan_ready": int(node.scan_ready),
+            "tier_id": node.tier_id,
             "last_seen": _ts(node.last_seen),
             "created_at": _ts(node.created_at),
             "updated_at": _ts(node.updated_at),
@@ -752,6 +869,12 @@ class ComplianceRepository(IComplianceRepository):
             profile=getattr(row, "profile", None),
             duration=(float(row.duration) if getattr(row, "duration", None) else None),
             skipped_checks=getattr(row, "skipped_checks", None) or 0,
+            compliance_group_id=getattr(row, "compliance_group_id", None),
+            profile_id=getattr(row, "profile_id", None),
+            profile_version=getattr(row, "profile_version", None),
+            tier_id=getattr(row, "tier_id", None),
+            tier_name=getattr(row, "tier_name", None),
+            os_family=getattr(row, "os_family", None),
             collected_at=_dt(row.collected_at) or datetime.utcnow(),
         )
 
@@ -786,12 +909,17 @@ class ComplianceRepository(IComplianceRepository):
         state_hash = self._state_hash(report.details)
         c = compliance_reports_table.c
         async with self._session() as s:
-            latest = (await s.execute(
+            # De-dup scope: (node, source, profile). Adding profile_id keeps two
+            # profiles scanned for the same node from sharing a keyframe.
+            q = (
                 select(compliance_reports_table)
                 .where(c.node_id == report.node_id)
                 .where(c.source == report.source)
-                .order_by(c.collected_at.desc())
-                .limit(1)
+            )
+            if report.profile_id is not None:
+                q = q.where(c.profile_id == report.profile_id)
+            latest = (await s.execute(
+                q.order_by(c.collected_at.desc()).limit(1)
             )).first()
 
             make_keyframe = True
@@ -819,6 +947,12 @@ class ComplianceRepository(IComplianceRepository):
                 profile=report.profile,
                 duration=(str(report.duration) if report.duration is not None else None),
                 skipped_checks=report.skipped_checks,
+                compliance_group_id=report.compliance_group_id,
+                profile_id=report.profile_id,
+                profile_version=report.profile_version,
+                tier_id=report.tier_id,
+                tier_name=report.tier_name,
+                os_family=report.os_family,
                 collected_at=_ts(report.collected_at),
                 content_hash=state_hash,
                 is_keyframe=(1 if make_keyframe else 0),
@@ -1333,6 +1467,7 @@ class ProfileRepository(IProfileRepository):
 
     # ── mapping ──
     def _control_to_entity(self, row) -> ProfileControl:
+        lvl = getattr(row, "cis_level", None)
         return ProfileControl(
             id=row.id,
             profile_id=row.profile_id,
@@ -1341,6 +1476,16 @@ class ProfileRepository(IProfileRepository):
             title=row.title,
             position=row.position or 0,
             kind=getattr(row, "kind", None) or "control",
+            control_id=getattr(row, "control_id", None),
+            control_key=getattr(row, "control_key", None),
+            applies_to=getattr(row, "applies_to", None) or "debian;redhat",
+            cis_level=int(lvl) if lvl else 1,
+            framework_reference=getattr(row, "framework_reference", None),
+            status=getattr(row, "status", None) or "active",
+            validate_debian=getattr(row, "validate_debian", None),
+            configure_debian=getattr(row, "configure_debian", None),
+            validate_redhat=getattr(row, "validate_redhat", None),
+            configure_redhat=getattr(row, "configure_redhat", None),
             cis_id=row.cis_id,
             description=row.description,
             recommended_value=row.recommended_value,
@@ -1361,7 +1506,13 @@ class ProfileRepository(IProfileRepository):
         return {
             "id": c.id, "profile_id": c.profile_id, "section_id": c.section_id,
             "section": c.section, "title": c.title, "position": c.position,
-            "kind": c.kind, "cis_id": c.cis_id, "description": c.description,
+            "kind": c.kind,
+            "control_id": c.control_id, "control_key": c.control_key,
+            "applies_to": c.applies_to, "cis_level": c.cis_level,
+            "framework_reference": c.framework_reference, "status": c.status,
+            "validate_debian": c.validate_debian, "configure_debian": c.configure_debian,
+            "validate_redhat": c.validate_redhat, "configure_redhat": c.configure_redhat,
+            "cis_id": c.cis_id, "description": c.description,
             "recommended_value": c.recommended_value, "agreed_value": c.agreed_value,
             "risk_profile": c.risk_profile, "rationale": c.rationale,
             "validate_guideline": c.validate_guideline,
@@ -1381,6 +1532,7 @@ class ProfileRepository(IProfileRepository):
             version=row.version or "1.0.0",
             source=row.source or "custom",
             framework=getattr(row, "framework", None),
+            is_system=bool(getattr(row, "is_system", 0)),
             controls=controls,
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -1390,7 +1542,7 @@ class ProfileRepository(IProfileRepository):
         return {
             "id": p.id, "name": p.name, "description": p.description,
             "os_family": p.os_family, "version": p.version, "source": p.source,
-            "framework": p.framework,
+            "framework": p.framework, "is_system": int(p.is_system),
             "created_at": _ts(p.created_at), "updated_at": _ts(p.updated_at),
         }
 
@@ -1763,4 +1915,206 @@ class NodeGroupRepository(INodeGroupRepository):
                 .where(node_group_nodes_table.c.group_id == group_id)
                 .where(node_group_nodes_table.c.node_id == node_id)
             )
+            await s.commit()
+
+
+# ── Tier Repository ───────────────────────────────────────────────────────────
+
+class TierRepository(ITierRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _extra(self, session, tier_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(tier_extra_controls_table.c.control_id)
+            .where(tier_extra_controls_table.c.tier_id == tier_id)
+        )).all()
+        return [r.control_id for r in rows]
+
+    def _to_entity(self, row, extra: list[str] | None = None) -> Tier:
+        return Tier(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            includes_level_2=bool(row.includes_level_2),
+            is_system=bool(row.is_system),
+            created_by=getattr(row, "created_by", None),
+            extra_control_ids=extra or [],
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    async def save(self, tier: Tier) -> None:
+        async with self._session() as s:
+            await s.execute(tiers_table.insert().values(
+                id=tier.id, name=tier.name, description=tier.description,
+                includes_level_2=int(tier.includes_level_2),
+                is_system=int(tier.is_system), created_by=tier.created_by,
+                created_at=_ts(tier.created_at),
+            ))
+            for cid in tier.extra_control_ids:
+                await s.execute(tier_extra_controls_table.insert().values(
+                    tier_id=tier.id, control_id=cid))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> Tier | None:
+        async with self._session() as s:
+            row = (await s.execute(select(tiers_table).where(tiers_table.c.id == id))).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._extra(s, id))
+
+    async def find_by_name(self, name: str) -> Tier | None:
+        async with self._session() as s:
+            row = (await s.execute(select(tiers_table).where(tiers_table.c.name == name))).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._extra(s, row.id))
+
+    async def find_all(self) -> list[Tier]:
+        async with self._session() as s:
+            rows = (await s.execute(select(tiers_table).order_by(tiers_table.c.created_at))).all()
+            out = []
+            for row in rows:
+                out.append(self._to_entity(row, await self._extra(s, row.id)))
+            return out
+
+    async def update(self, tier: Tier) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(tiers_table).where(tiers_table.c.id == tier.id).values(
+                    name=tier.name, description=tier.description,
+                    includes_level_2=int(tier.includes_level_2),
+                )
+            )
+            # Replace the extra-controls set wholesale.
+            await s.execute(delete(tier_extra_controls_table)
+                            .where(tier_extra_controls_table.c.tier_id == tier.id))
+            for cid in tier.extra_control_ids:
+                await s.execute(tier_extra_controls_table.insert().values(
+                    tier_id=tier.id, control_id=cid))
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(tier_extra_controls_table)
+                            .where(tier_extra_controls_table.c.tier_id == id))
+            await s.execute(delete(tiers_table).where(tiers_table.c.id == id))
+            await s.commit()
+
+
+# ── Compliance Group Repository (platform-only; never Puppet NC) ──────────────
+
+class ComplianceGroupRepository(IComplianceGroupRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _profiles(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(compliance_group_profiles_table.c.profile_id)
+            .where(compliance_group_profiles_table.c.group_id == group_id)
+        )).all()
+        return [r.profile_id for r in rows]
+
+    async def _members(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(compliance_group_members_table.c.node_id)
+            .where(compliance_group_members_table.c.group_id == group_id)
+        )).all()
+        return [r.node_id for r in rows]
+
+    def _to_entity(self, row, profile_ids=None, node_ids=None) -> ComplianceGroup:
+        return ComplianceGroup(
+            id=row.id, name=row.name, description=row.description,
+            profile_ids=profile_ids or [], node_ids=node_ids or [],
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    async def save(self, g: ComplianceGroup) -> None:
+        async with self._session() as s:
+            await s.execute(compliance_groups_table.insert().values(
+                id=g.id, name=g.name, description=g.description,
+                created_at=_ts(g.created_at), updated_at=_ts(g.updated_at),
+            ))
+            for pid in g.profile_ids:
+                await s.execute(compliance_group_profiles_table.insert().values(
+                    group_id=g.id, profile_id=pid))
+            for nid in g.node_ids:
+                await s.execute(compliance_group_members_table.insert().values(
+                    group_id=g.id, node_id=nid))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> ComplianceGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_groups_table).where(compliance_groups_table.c.id == id)
+            )).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._profiles(s, id), await self._members(s, id))
+
+    async def find_by_name(self, name: str) -> ComplianceGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_groups_table).where(compliance_groups_table.c.name == name)
+            )).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._profiles(s, row.id), await self._members(s, row.id))
+
+    async def find_all(self) -> list[ComplianceGroup]:
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(compliance_groups_table).order_by(compliance_groups_table.c.created_at)
+            )).all()
+            out = []
+            for row in rows:
+                out.append(self._to_entity(
+                    row, await self._profiles(s, row.id), await self._members(s, row.id)))
+            return out
+
+    async def find_for_node(self, node_id: str) -> list[ComplianceGroup]:
+        """Every compliance group the node is a member of."""
+        async with self._session() as s:
+            gids = (await s.execute(
+                select(compliance_group_members_table.c.group_id)
+                .where(compliance_group_members_table.c.node_id == node_id)
+            )).all()
+            out = []
+            for (gid,) in [(r.group_id,) for r in gids]:
+                row = (await s.execute(
+                    select(compliance_groups_table).where(compliance_groups_table.c.id == gid)
+                )).first()
+                if row:
+                    out.append(self._to_entity(
+                        row, await self._profiles(s, gid), await self._members(s, gid)))
+            return out
+
+    async def update(self, g: ComplianceGroup) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(compliance_groups_table)
+                .where(compliance_groups_table.c.id == g.id)
+                .values(name=g.name, description=g.description, updated_at=_ts(g.updated_at))
+            )
+            await s.execute(delete(compliance_group_profiles_table)
+                            .where(compliance_group_profiles_table.c.group_id == g.id))
+            for pid in g.profile_ids:
+                await s.execute(compliance_group_profiles_table.insert().values(
+                    group_id=g.id, profile_id=pid))
+            await s.execute(delete(compliance_group_members_table)
+                            .where(compliance_group_members_table.c.group_id == g.id))
+            for nid in g.node_ids:
+                await s.execute(compliance_group_members_table.insert().values(
+                    group_id=g.id, node_id=nid))
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(compliance_group_profiles_table)
+                            .where(compliance_group_profiles_table.c.group_id == id))
+            await s.execute(delete(compliance_group_members_table)
+                            .where(compliance_group_members_table.c.group_id == id))
+            await s.execute(delete(compliance_groups_table)
+                            .where(compliance_groups_table.c.id == id))
             await s.commit()

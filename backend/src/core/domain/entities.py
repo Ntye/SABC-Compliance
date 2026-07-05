@@ -18,6 +18,9 @@ FRAMEWORK_IDS = tuple(f["id"] for f in FRAMEWORKS)
 # and can be reverted back to it.
 CIS_BENCHMARK_PROFILE_ID = "cis-benchmark"
 INTERNAL_PROFILE_ID = "sabc-linux-baseline"
+# The unified multi-OS referential shipped built-in and seeded from
+# platform/seed/referentials/sabc_baseline/. System profile (undeletable).
+SABC_BASELINE_PROFILE_ID = "sabc-baseline"
 
 
 @dataclass
@@ -39,6 +42,9 @@ class Node:
     puppet_enrolled: bool = False
     detection_enrolled: bool = False
     scan_ready: bool = False
+    # Criticality tier — decides which CIS Levels are scanned/enforced. Defaults
+    # to Non-critical on enrolment; every reassignment is audited.
+    tier_id: str | None = None
     last_seen: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
@@ -121,6 +127,14 @@ class ComplianceReport:
     profile: str | None = None
     duration: float | None = None
     skipped_checks: int = 0
+    # ── Scan context (so "which servers scanned against X, at what tier" is a
+    #    query). Recorded at scan time; nullable for legacy rows. ──────────────
+    compliance_group_id: str | None = None
+    profile_id: str | None = None
+    profile_version: str | None = None
+    tier_id: str | None = None
+    tier_name: str | None = None
+    os_family: str | None = None          # 'debian' | 'redhat' at scan time
     collected_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
@@ -340,35 +354,89 @@ class Rule:
     scan_blocks: dict = field(default_factory=dict)
 
 
+# OS families the platform branches on. Everything keys on the FAMILY, never a
+# distro name — one implementation per family covers Ubuntu/Debian/Mint (Debian)
+# and RHEL/Alma/Rocky/CentOS (RedHat).
+OS_FAMILIES = ("debian", "redhat")
+
+
+def normalize_family(value: str | None) -> str | None:
+    """Map a node's os_family fact (or a referential token) to 'debian'|'redhat'.
+
+    Accepts the puppet/facter form ('Debian'/'RedHat') and the referential form
+    ('debian'/'redhat'); returns None for anything unrecognised."""
+    v = (value or "").strip().lower()
+    if v in ("debian", "ubuntu", "mint"):
+        return "debian"
+    if v in ("redhat", "rhel", "centos", "rocky", "almalinux", "alma", "fedora"):
+        return "redhat"
+    return v or None
+
+
 @dataclass
 class ProfileControl:
     """A single control/parameter within a compliance profile (referential).
 
-    Mirrors the SABC "Tech Spec" referential columns: a stable SABC Section ID,
-    the CIS mapping, the recommended and (client-specific) agreed values, the
-    security rationale and the validate/configure guidelines.
+    Mirrors the unified multi-OS referential columns: the internal SABC
+    **Control ID** (the identity, e.g. "JR2.C.1.1.1"), the auto-derived
+    **control_key** (its slug), which OS families it **applies_to**, its
+    **cis_level** (1|2), the framework provenance reference, and — the core of
+    the multi-OS model — per-family Validate/Configure guidance for both the
+    Debian and Red Hat families.
+
+    The legacy single ``validate_guideline``/``configure_guideline`` columns are
+    retained (mirrored from the Debian family) so existing UI/CSV paths keep
+    working while artifact generation and scans consume the per-family columns.
     """
     id: str
     profile_id: str
-    section_id: str               # SABC Section ID, e.g. "JR2.C.1.1.0"
-    section: str                  # Section heading, e.g. "Filesystem Configuration"
+    section_id: str               # section heading id, e.g. "JR2.C.1.1.0"
+    section: str                  # section heading, e.g. "Filesystem Configuration"
     title: str
     position: int = 0
-    kind: str = "control"         # "control" (Type S) | "section" (Type I header)
+    kind: str = "control"         # "control" | "section" (grouping metadata)
+    # ── Unified referential identity + scoping ────────────────────────────────
+    control_id: str | None = None         # THE key (internal referential id)
+    control_key: str | None = None        # auto-derived slug of control_id
+    applies_to: str = "debian;redhat"     # "debian;redhat" | "debian" | "redhat"
+    cis_level: int = 1                     # 1 | 2 (blank in source => 1)
+    framework_reference: str | None = None  # provenance text only, never parsed
+    status: str = "active"                # "active" | "retired" (soft delete)
+    # ── Per-family guidance (the multi-OS core) ───────────────────────────────
+    validate_debian: str | None = None
+    configure_debian: str | None = None
+    validate_redhat: str | None = None
+    configure_redhat: str | None = None
+    # ── Shared / legacy display fields ────────────────────────────────────────
     cis_id: str | None = None
     description: str | None = None
     recommended_value: str | None = None
     agreed_value: str | None = None
     risk_profile: str | None = None       # High / Medium / Low
     rationale: str | None = None
-    validate_guideline: str | None = None
-    configure_guideline: str | None = None
+    validate_guideline: str | None = None   # mirror of Debian validate (legacy)
+    configure_guideline: str | None = None  # mirror of Debian configure (legacy)
     regulatory: str | None = None
     notes: str | None = None
-    check_command: str | None = None     # scan check snippet for this control
+    check_command: str | None = None
     enabled: bool = True
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    def families(self) -> list[str]:
+        """Families this control applies to, normalised to ('debian','redhat')."""
+        out: list[str] = []
+        for tok in (self.applies_to or "debian;redhat").replace(",", ";").split(";"):
+            fam = normalize_family(tok)
+            if fam in OS_FAMILIES and fam not in out:
+                out.append(fam)
+        return out or ["debian", "redhat"]
+
+    def validate_for(self, family: str) -> str | None:
+        return self.validate_redhat if family == "redhat" else self.validate_debian
+
+    def configure_for(self, family: str) -> str | None:
+        return self.configure_redhat if family == "redhat" else self.configure_debian
 
 
 @dataclass
@@ -395,9 +463,17 @@ class Profile:
     version: str = "1.0.0"
     source: str = "custom"        # "builtin" (seeded) | "custom" (user-created)
     framework: str | None = None  # "cis" | "internal" | None (custom) — see FRAMEWORKS
+    # Unified referential ships as a built-in SYSTEM profile: undeletable, but
+    # re-seedable (version increments on re-import). Distinct from ``locked``
+    # (the CIS original is read-only; the SABC Baseline is editable via import).
+    is_system: bool = False
     controls: list[ProfileControl] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    @property
+    def is_builtin(self) -> bool:
+        return self.source == "builtin"
 
     @property
     def locked(self) -> bool:
@@ -411,4 +487,53 @@ class Profile:
     @property
     def section_count(self) -> int:
         return len({c.section for c in self.controls})
+
+    def active_controls(self) -> list["ProfileControl"]:
+        """Enforceable, non-retired controls (excludes section rows)."""
+        return [c for c in self.controls
+                if c.kind == "control" and c.status != "retired"]
+
+
+# ── Tiers — platform criticality classification driven by CIS Level ───────────
+
+NON_CRITICAL_TIER_ID = "tier-non-critical"
+CRITICAL_TIER_ID = "tier-critical"
+
+
+@dataclass
+class Tier:
+    """A node criticality tier. Decides which CIS Levels apply to a node's scan
+    and enforcement — a control property (its CIS Level) meets a node property
+    (its tier) here. System tiers are undeletable; custom tiers (e.g. "1.5")
+    add individually-chosen Level-2 controls on top of Level 1."""
+    id: str
+    name: str
+    description: str | None = None
+    includes_level_2: bool = False
+    is_system: bool = False
+    created_by: str | None = None
+    # For custom tiers: individually selected Level-2 control_ids added to L1.
+    extra_control_ids: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+    def effective_levels(self) -> set[int]:
+        """Levels applied wholesale. Custom extra controls are resolved
+        per-control in the scan layer (they may be a subset of Level 2)."""
+        return {1, 2} if self.includes_level_2 else {1}
+
+
+@dataclass
+class ComplianceGroup:
+    """A platform-only grouping of nodes scanned against a set of profiles.
+
+    Entirely separate from Puppet node groups — these NEVER touch the Puppet NC
+    API. A node may belong to several compliance groups (scanned against each
+    group's bound profiles)."""
+    id: str
+    name: str
+    description: str | None = None
+    profile_ids: list[str] = field(default_factory=list)
+    node_ids: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
