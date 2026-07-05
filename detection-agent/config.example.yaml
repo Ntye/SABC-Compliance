@@ -1,0 +1,47 @@
+# SABC Compliance Detection Agent — /etc/compliance-agent/config.yaml
+#
+# Parsed by the agent's built-in minimal YAML reader: nested mappings by
+# 2-space indentation, "- item" lists, scalars, and # comments. Keep it simple.
+
+# Hostname reported with every event; must match the node's hostname in the
+# platform's Node Registry (defaults to the system hostname when omitted).
+node_hostname: web-01
+
+gateway:
+  url: https://platform.example.com:8443/api/webhooks/detection
+  api_key: sabcdet_REPLACE_ME
+  # The platform ships a self-signed certificate by default; set true once a
+  # CA-signed certificate is installed through the console.
+  verify_tls: false
+
+# Paths to watch (directories are watched recursively).
+watch:
+  - /etc/ssh/
+  - /etc/pam.d/
+  - /etc/sudoers
+  - /etc/sudoers.d/
+  - /etc/passwd
+  - /etc/group
+  - /etc/shadow
+
+# Per-path snapshot policy: "full" ships the file content (base64) as evidence,
+# "hash-only" ships only SHA-256 + metadata. Built-in defaults already force
+# hash-only for /etc/shadow and any *key*, *.pem, *.crt basename — list entries
+# here only to override or extend.
+snapshot_policies:
+  - path: /etc/shadow
+    snapshot: hash-only
+
+# Collapse bursts of events on the same path (seconds).
+debounce_seconds: 2
+
+# Liveness heartbeat interval (seconds). 600 = 10 minutes.
+heartbeat_interval_seconds: 600
+
+# Where undelivered events queue while the gateway is unreachable.
+spool_dir: /var/spool/compliance-agent
+# Where the last-known-hash cache lives (drives prev_hash across restarts).
+state_dir: /var/lib/compliance-agent
+
+# Files larger than this fall back to hash-only even under a "full" policy.
+max_content_bytes: 262144

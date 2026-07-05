@@ -62,6 +62,8 @@ services:
       - backend-keys:/app/keys
       # Airgap packages — bind-mount so you can drop files in without rebuild.
       - ./backend/packages:/app/packages
+      # Detection agent sources shipped to nodes by install_detection_agent.yml.
+      - ./detection-agent:/app/detection-agent:ro
       # Frontend TLS cert/key — same volume the frontend serves from.
       - frontend-certs:/app/certs
     depends_on:

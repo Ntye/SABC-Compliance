@@ -45,6 +45,13 @@ wget https://apt.puppet.com/puppet8-release-jammy.deb \
      -O packages/puppet-agent/puppet8-release-jammy.deb
 ```
 
+### detection-agent/
+
+| What you put here | Mode |
+|---|---|
+| `watchdog*.whl` (+ deps) | **AIRGAP** — installed with `pip --no-index` |
+| *(empty)* | **ONLINE** — distro `python3-watchdog` package, then pip |
+
 ### Puppet Server + Agent (.rpm, Rocky Linux 9)
 
 ```bash

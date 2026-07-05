@@ -1,0 +1,21 @@
+[Unit]
+Description=SABC Compliance Detection Agent (config-change watch + evidence)
+Documentation=https://github.com/ntye/sabc-compliance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/compliance-agent/agent.py --config /etc/compliance-agent/config.yaml
+Restart=always
+RestartSec=5
+User=root
+
+# Hardening — the agent only reads watched paths and writes its own state/spool.
+NoNewPrivileges=yes
+ProtectHome=read-only
+ReadWritePaths=/var/lib/compliance-agent /var/spool/compliance-agent
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -62,6 +62,7 @@ services:
       - ./backend/ansible:/app/ansible   # live — playbook edits take effect on next run
       - ./backend/scan-profiles:/app/scan-profiles  # live — bundled scan profile, no rebuild needed
       - ./backend/puppet:/app/puppet     # live — sabc_compliance Puppet module shipped to the master
+      - ./detection-agent:/app/detection-agent:ro  # live — agent sources shipped to nodes
     depends_on:
       postgres:
         condition: service_healthy
