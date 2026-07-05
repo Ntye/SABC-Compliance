@@ -12,8 +12,7 @@ import CopyButton from '../components/common/CopyButton.jsx'
 const SERVICE_LABELS = {
   'puppet-master':         'Puppet Master Install',
   'puppet-agent':          'Puppet Agent Install',
-  'wazuh-manager':         'Wazuh Manager Install',
-  'wazuh-agent':           'Wazuh Agent Install',
+  'install_detection_agent': 'Detection Agent Install',
   'provision':             'Server Provision (Add Server)',
   'scan-verify':           'Compliance Scan',
   'install_check_health':  'Node Health Check',

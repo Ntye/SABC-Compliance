@@ -37,7 +37,7 @@ class Node:
     fqdn: str | None = None
     dns_resolves: bool | None = None
     puppet_enrolled: bool = False
-    wazuh_enrolled: bool = False
+    detection_enrolled: bool = False
     scan_ready: bool = False
     last_seen: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -263,20 +263,19 @@ class NodeGroup:
     name: str
     description: str | None = None
     parent: str = "All Nodes"            # parent group name (PE hierarchy)
-    environment: str = "production"      # PE environment / shared Wazuh env
+    environment: str = "production"      # PE environment
     is_environment_group: bool = False   # PE environment-group flag
     match_type: str = "all"              # "all" (AND) | "any" (OR)
     rules: list[dict] = field(default_factory=list)   # [{fact, operator, value}]
     node_ids: list[str] = field(default_factory=list)  # explicitly pinned nodes
     puppet_group_id: str | None = None   # UUID from PE node classifier
-    wazuh_synced: bool = False
     puppet_synced: bool = False
     # "system" = built-in auto-seeded (non-deletable); "user" = admin-created
     group_type: str = "user"
     # InSpec profile to use when scanning members; child groups inherit parent's profile
     inspec_profile_id: str | None = None
-    # When true, a Wazuh alert for any member node drives the closed remediation
-    # loop across this whole group (active response). Off by default.
+    # When true, a detection event for any member node drives the closed
+    # remediation loop across this whole group (active response). Off by default.
     active_response_enabled: bool = False
     # OS package repository the group's member nodes pull from. Enforced first by
     # Ansible (works with no Puppet master) and, once a master is up, by Puppet.
@@ -293,7 +292,9 @@ class RemediationEvent:
     node_id: str
     puppet_job_id: str
     triggered_at: datetime
-    wazuh_alert_id: str | None = None
+    # Links back to the config_change_events row that triggered this remediation
+    # (formerly wazuh_alert_id — renamed when the detection plane was replaced).
+    detection_event_id: str | None = None
     completed_at: datetime | None = None
     outcome: str = "pending"
     resources_fixed: int = 0

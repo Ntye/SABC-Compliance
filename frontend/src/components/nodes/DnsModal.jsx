@@ -112,7 +112,6 @@ export default function DnsModal({ node, onClose, onRefetch }) {
     backend_to_node: t('nodes.dnsModal.checkPlatformToNode'),
     node_to_backend: t('nodes.dnsModal.checkNodeToPlatform'),
     node_to_puppet:  t('nodes.dnsModal.checkNodeToPuppet'),
-    node_to_wazuh:   t('nodes.dnsModal.checkNodeToWazuh'),
   }
 
   const checks = result

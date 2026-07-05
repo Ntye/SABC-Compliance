@@ -41,7 +41,7 @@ nodes_table = Table(
     Column("tags", Text, default="[]"),
     Column("status", Text, default="registered"),
     Column("puppet_enrolled", Integer, default=0),
-    Column("wazuh_enrolled", Integer, default=0),
+    Column("detection_enrolled", Integer, default=0),
     Column("scan_ready", Integer, default=0),
     Column("last_seen", Text),
     Column("created_at", Text),
@@ -109,7 +109,9 @@ remediation_events_table = Table(
     "remediation_events", metadata,
     Column("id", Text, primary_key=True),
     Column("node_id", Text, nullable=False),
-    Column("wazuh_alert_id", Text),
+    # Renamed from wazuh_alert_id when the detection plane was replaced by the
+    # custom agent — links to the config_change_events row that triggered this.
+    Column("detection_event_id", Text),
     Column("puppet_job_id", Text),
     Column("triggered_at", Text),
     Column("completed_at", Text),
@@ -255,7 +257,6 @@ node_groups_table = Table(
     Column("match_type", Text),
     Column("rules", Text),
     Column("puppet_group_id", Text),
-    Column("wazuh_synced", Integer, default=0),
     Column("puppet_synced", Integer, default=0),
     Column("group_type", Text, default="user"),
     Column("inspec_profile_id", Text),
@@ -318,6 +319,24 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             # SQLite does not support IF NOT EXISTS on ADD COLUMN, so we use
             # try/except. Each statement is independent; a duplicate-column
             # error does NOT abort the SQLite transaction.
+            #
+            # Wazuh → custom detection agent migration (renames, data kept):
+            #   nodes.wazuh_enrolled            → nodes.detection_enrolled
+            #   remediation_events.wazuh_alert_id → remediation_events.detection_event_id
+            #   platform_config 'wazuh_webhook_source_ip' → 'detection_webhook_source_ip'
+            for stmt in [
+                "ALTER TABLE nodes RENAME COLUMN wazuh_enrolled TO detection_enrolled",
+                "ALTER TABLE remediation_events RENAME COLUMN wazuh_alert_id TO detection_event_id",
+                "UPDATE platform_config SET key = 'detection_webhook_source_ip' "
+                "WHERE key = 'wazuh_webhook_source_ip' AND NOT EXISTS "
+                "(SELECT 1 FROM platform_config WHERE key = 'detection_webhook_source_ip')",
+                "DELETE FROM platform_config WHERE key IN "
+                "('wazuh_webhook_source_ip', 'wazuh_manager_host')",
+            ]:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception:
+                    pass
             for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
@@ -391,6 +410,23 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
         # failure (e.g. column already exists — impossible with IF NOT EXISTS,
         # but harmless) never aborts the other migrations.
         # IF NOT EXISTS is supported since PostgreSQL 9.6 (released 2016).
+        #
+        # Wazuh → custom detection agent migration (renames, data kept). Each
+        # statement fails harmlessly when the old column/key no longer exists.
+        for stmt in [
+            "ALTER TABLE nodes RENAME COLUMN wazuh_enrolled TO detection_enrolled",
+            "ALTER TABLE remediation_events RENAME COLUMN wazuh_alert_id TO detection_event_id",
+            "UPDATE platform_config SET key = 'detection_webhook_source_ip' "
+            "WHERE key = 'wazuh_webhook_source_ip' AND NOT EXISTS "
+            "(SELECT 1 FROM platform_config WHERE key = 'detection_webhook_source_ip')",
+            "DELETE FROM platform_config WHERE key IN "
+            "('wazuh_webhook_source_ip', 'wazuh_manager_host')",
+        ]:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(stmt))
+            except Exception:
+                pass
         pg_cols = [
             ("nodes",              "fqdn",                  "TEXT"),
             ("nodes",              "dns_resolves",          "BOOLEAN"),
@@ -463,7 +499,7 @@ class NodeRepository(INodeRepository):
             tags=json.loads(row.tags or "[]"),
             status=row.status or "registered",
             puppet_enrolled=bool(row.puppet_enrolled),
-            wazuh_enrolled=bool(row.wazuh_enrolled),
+            detection_enrolled=bool(row.detection_enrolled),
             scan_ready=bool(getattr(row, 'scan_ready', None) or getattr(row, 'inspec_installed', None)),
             last_seen=_dt(row.last_seen),
             created_at=_dt(row.created_at) or datetime.utcnow(),
@@ -487,7 +523,7 @@ class NodeRepository(INodeRepository):
             "tags": json.dumps(node.tags),
             "status": node.status,
             "puppet_enrolled": int(node.puppet_enrolled),
-            "wazuh_enrolled": int(node.wazuh_enrolled),
+            "detection_enrolled": int(node.detection_enrolled),
             "scan_ready": int(node.scan_ready),
             "last_seen": _ts(node.last_seen),
             "created_at": _ts(node.created_at),
@@ -689,7 +725,7 @@ class ComplianceRepository(IComplianceRepository):
         return RemediationEvent(
             id=row.id,
             node_id=row.node_id,
-            wazuh_alert_id=row.wazuh_alert_id,
+            detection_event_id=row.detection_event_id,
             puppet_job_id=row.puppet_job_id or "",
             triggered_at=_dt(row.triggered_at) or datetime.utcnow(),
             completed_at=_dt(row.completed_at),
@@ -798,7 +834,7 @@ class ComplianceRepository(IComplianceRepository):
                     "os_family": node.os_family,
                     "status": node.status,
                     "puppet_enrolled": node.puppet_enrolled,
-                    "wazuh_enrolled": node.wazuh_enrolled,
+                    "detection_enrolled": node.detection_enrolled,
                     "scan_ready": node.scan_ready,
                     "reports": [
                         {
@@ -817,7 +853,7 @@ class ComplianceRepository(IComplianceRepository):
                             "resources_fixed": r.resources_fixed,
                             "triggered_at": r.triggered_at.isoformat(),
                             "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                            "wazuh_alert_id": r.wazuh_alert_id,
+                            "detection_event_id": r.detection_event_id,
                             "puppet_job_id": r.puppet_job_id,
                         }
                         for r in remediations
@@ -828,7 +864,7 @@ class ComplianceRepository(IComplianceRepository):
     async def save_remediation(self, event: RemediationEvent) -> None:
         async with self._session() as s:
             await s.execute(remediation_events_table.insert().values(
-                id=event.id, node_id=event.node_id, wazuh_alert_id=event.wazuh_alert_id,
+                id=event.id, node_id=event.node_id, detection_event_id=event.detection_event_id,
                 puppet_job_id=event.puppet_job_id, triggered_at=_ts(event.triggered_at),
                 completed_at=_ts(event.completed_at), outcome=event.outcome,
                 resources_fixed=event.resources_fixed,
@@ -1432,7 +1468,6 @@ class NodeGroupRepository(INodeGroupRepository):
             rules=json.loads(getattr(row, "rules", None) or "[]"),
             node_ids=node_ids or [],
             puppet_group_id=row.puppet_group_id,
-            wazuh_synced=bool(row.wazuh_synced),
             puppet_synced=bool(row.puppet_synced),
             group_type=getattr(row, "group_type", None) or "user",
             inspec_profile_id=getattr(row, "inspec_profile_id", None),
@@ -1450,7 +1485,6 @@ class NodeGroupRepository(INodeGroupRepository):
                 is_environment_group=int(g.is_environment_group),
                 match_type=g.match_type, rules=json.dumps(g.rules),
                 puppet_group_id=g.puppet_group_id,
-                wazuh_synced=int(g.wazuh_synced),
                 puppet_synced=int(g.puppet_synced),
                 group_type=g.group_type,
                 inspec_profile_id=g.inspec_profile_id,
@@ -1495,7 +1529,6 @@ class NodeGroupRepository(INodeGroupRepository):
                     is_environment_group=int(g.is_environment_group),
                     match_type=g.match_type, rules=json.dumps(g.rules),
                     puppet_group_id=g.puppet_group_id,
-                    wazuh_synced=int(g.wazuh_synced),
                     puppet_synced=int(g.puppet_synced),
                     group_type=g.group_type,
                     inspec_profile_id=g.inspec_profile_id,

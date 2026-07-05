@@ -16,7 +16,7 @@ host is Docker — nothing else is installed on your machine.
 3. [First-time setup](#3-first-time-setup)
 4. [Authentication](#4-authentication)
 5. [Adding managed servers](#5-adding-managed-servers)
-6. [Infrastructure (Puppet & Wazuh)](#6-infrastructure-puppet--wazuh)
+6. [Infrastructure (Puppet & Detection agent)](#6-infrastructure-puppet--detection-agent)
 7. [Compliance](#7-compliance)
 8. [Day-to-day operations](#8-day-to-day-operations)
 9. [EC2 deployment](#9-ec2-deployment)
@@ -246,7 +246,7 @@ instances in another account, simply add an inbound rule to their security group
 
 ---
 
-## 6. Infrastructure (Puppet & Wazuh)
+## 6. Infrastructure (Puppet & Detection agent)
 
 Before enrolling agents on nodes, set up the master services on the **Infrastructure** page.
 
@@ -262,36 +262,20 @@ master or install one on a registered node:
 
 Then **Install Puppet agent** on each managed node from the Infrastructure page.
 
-### Wazuh (security monitoring & threat detection)
+### Detection agent (config-change detection & evidence)
 
-Wazuh detects violations, fires a webhook, and the platform triggers Puppet remediation —
-closing the compliance feedback loop automatically.
+The platform ships its own lightweight detection agent — a small Python daemon
+(`detection-agent/agent.py`, inotify-based) that watches the compliance-critical
+paths (`/etc/ssh/`, `/etc/pam.d/`, `/etc/sudoers*`, `/etc/passwd`, `/etc/group`,
+`/etc/shadow`, …), snapshots every change as evidence (SHA-256 + metadata, file
+content only where policy allows), and reports to the platform's detection
+webhook. There is no separate manager service to install.
 
-1. **Infrastructure → Wazuh Manager → Install on a node**
-   Deploys Wazuh (manager + indexer + dashboard) as Docker containers with self-signed TLS.
-2. Or **Connect existing** for an already-running Wazuh stack.
-
-Then **Install Wazuh agent** on each managed node.
-
-#### Wazuh offline (airgap)
-
-In airgap environments, export the Wazuh Docker images on a connected machine and place
-them in `backend/packages/wazuh-manager/`:
-
-```bash
-# On a machine with internet access:
-docker pull wazuh/wazuh-manager:4.10.4
-docker pull wazuh/wazuh-indexer:4.10.4
-docker pull wazuh/wazuh-dashboard:4.10.4
-
-docker save \
-  wazuh/wazuh-manager:4.10.4 \
-  wazuh/wazuh-indexer:4.10.4 \
-  wazuh/wazuh-dashboard:4.10.4 \
-  | gzip > backend/packages/wazuh-manager/wazuh-images.tar.gz
-```
-
-The install playbook detects the tarball and uses it instead of pulling from Docker Hub.
+**Install detection agent** on each managed node from the Infrastructure page —
+the platform injects the gateway URL and the shared API key automatically. The
+agent needs only Python 3 and the `watchdog` library (installed by the playbook
+from the distro repo or pip; drop a wheel into `backend/packages/detection-agent/`
+for airgap installs).
 
 ---
 
@@ -319,13 +303,15 @@ job that applies the relevant Puppet manifests. Job output streams live in the *
 ### Closed feedback loop
 
 ```
-Wazuh detects violation
+Detection agent spots a config change (inotify)
         ↓
-Webhook fires to platform backend
+Event posted to the platform (evidence stored: hashes, metadata, content)
         ↓
-Puppet remediation job triggered automatically
+Suppression rules applied (active remediation window? scheduled Puppet run?)
         ↓
-Compliance status updated
+Genuine drift → Puppet remediation job triggered automatically
+        ↓
+Compliance status updated; event visible on the Detection Events page
 ```
 
 ---
@@ -472,10 +458,10 @@ HOST_IP=10.0.x.x
 
 ## 10. Airgap / offline deployment
 
-For environments with no internet access, bundle the Wazuh images into the backend image:
+For environments with no internet access, bundle the offline installers into the backend image:
 
 ```bash
-# 1. Export Wazuh images on a connected machine (see §6 Wazuh offline above)
+# 1. Place offline installers into backend/packages/ (see backend/packages/README.md)
 
 # 2. Build the bundled image (bakes packages/ into the image):
 ./deploy/ship.sh --bundle
@@ -540,8 +526,8 @@ Copy `backend/.env.example` to `.env` in the project root before starting.
 | `HOST_ADMIN_USER` | _(auto-detect)_ | — | Your SSH admin user on this machine (used as a hint in the UI) |
 | `PUPPET_MASTER_HOST` | — | — | Pre-configure Puppet master host (also settable from UI) |
 | `PUPPET_MASTER_PORT` | `8143` | — | Puppet orchestrator port |
-| `WAZUH_MANAGER_HOST` | — | — | Pre-configure Wazuh manager host (also settable from UI) |
-| `WAZUH_API_PORT` | `55000` | — | Wazuh API port |
+| `DETECTION_WEBHOOK_API_KEY` | — | — | Shared key detection agents present (auto-generated on first agent install) |
+| `DETECTION_WEBHOOK_SOURCE_IP` | — | — | Optional CIDR allowlist for the detection webhook |
 | `CORS_ORIGINS` | _(defaults)_ | — | Comma-separated list of allowed browser origins |
 
 Generate a strong JWT secret:
@@ -573,8 +559,8 @@ SABC-Compliance/
 │   │   ├── infrastructure/ DB adapter (SQLite), SSH adapter, Ansible adapter
 │   │   └── interface/     FastAPI routes, WebSocket manager, middleware
 │   ├── ansible/
-│   │   ├── playbooks/     provision.yml, install_puppet_*.yml, install_wazuh_*.yml
-│   │   └── templates/     Jinja2 templates (wazuh-compose.yml.j2)
+│   │   ├── playbooks/     provision.yml, install_puppet_*.yml, install_detection_agent.yml
+│   │   └── templates/     Jinja2 templates
 │   ├── packages/          Drop airgap archives here (empty by default)
 │   ├── Dockerfile
 │   ├── Dockerfile.bundle  Builds backend image with packages/ baked in

@@ -17,7 +17,7 @@ const ALL_PERMISSIONS = [
   { id: 'register_nodes',      label: 'Register nodes',             group: 'Nodes'       },
   { id: 'delete_nodes',        label: 'Delete nodes',               group: 'Nodes'       },
   { id: 'run_playbooks',       label: 'Run Ansible playbooks',      group: 'Automation'  },
-  { id: 'install_agents',      label: 'Install Puppet/Wazuh agents',group: 'Automation'  },
+  { id: 'install_agents',      label: 'Install Puppet/Detection agents',group: 'Automation'  },
   { id: 'view_compliance',     label: 'View compliance reports',    group: 'Compliance'  },
   { id: 'collect_compliance',  label: 'Collect compliance data',    group: 'Compliance'  },
   { id: 'trigger_remediation', label: 'Trigger remediation',        group: 'Compliance'  },

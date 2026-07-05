@@ -79,11 +79,10 @@ Key variables:
 | `JWT_SECRET` | `change-me-...` | **Change this in production** |
 | `JWT_EXPIRE_HOURS` | `24` | JWT token lifetime |
 | `PUPPET_MASTER_HOST` | _(empty)_ | Leave blank for stub mode |
-| `WAZUH_MANAGER_HOST` | _(empty)_ | Leave blank for stub mode |
 
 ### Stub Mode
 
-When `PUPPET_MASTER_HOST` and `WAZUH_MANAGER_HOST` are not set, all calls to those services return safe empty responses. Every endpoint works. **This is the expected state during development.**
+When `PUPPET_MASTER_HOST` is not set, all calls to the Puppet APIs return safe empty responses. Every endpoint works. **This is the expected state during development.**
 
 ---
 
@@ -193,7 +192,6 @@ backend/
       ssh/               # (Feature 2)
       ansible/           # (Feature 3)
       puppet/            # (Feature 4)
-      wazuh/             # (Feature 4)
     interface/
       http/routes/       # FastAPI route modules
       websocket/         # WebSocket manager (Feature 3)
@@ -237,7 +235,7 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 | 1 — Auth | ✅ Done | Login, API keys, users, JWT |
 | 2 — Node Registry | ✅ Done | Register servers, SSH ping, OS detection |
 | 3 — Jobs | 🔜 | Ansible provisioning, WebSocket log stream |
-| 4 — Compliance | 🔜 | Puppet/Wazuh integration, webhook, remediation |
+| 4 — Compliance | 🔜 | Puppet integration, detection webhook, remediation |
 | 5 — Rules | 🔜 | Puppet compliance rules library |
 | 6 — Health & Audit | 🔜 | Health checks, HTTP audit log, overview |
 | 7 — Scripts | 🔜 | Ansible playbooks, install scripts |

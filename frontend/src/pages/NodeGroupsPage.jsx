@@ -176,9 +176,8 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated, defaultParent
         rules,
         node_ids: pinnedIds,
       })
-      const allSynced = created.wazuh_synced && created.puppet_synced
+      const allSynced = created.puppet_synced
       const parts = [
-        created.wazuh_synced ? 'Wazuh ✓' : 'Wazuh sync failed',
         created.puppet_synced ? 'Puppet ✓' : 'Puppet sync failed',
       ]
       toast(`${t('nodeGroups.created')} — ${parts.join(', ')}`, allSynced ? 'success' : 'warning')
@@ -547,7 +546,6 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, onClose
 
         {/* sync icons */}
         <span className="flex-shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <SyncIcon ok={group.wazuh_synced} />
           <SyncIcon ok={group.puppet_synced} />
         </span>
 
@@ -929,7 +927,6 @@ export default function NodeGroupsPage() {
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.name')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.environment')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.matchingNodes')}</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.wazuhSync')}</th>
                       <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.puppetSync')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
                       <th className="px-4 py-3" />
@@ -963,7 +960,6 @@ export default function NodeGroupsPage() {
                             <span className="ml-1 text-[10px] text-gray-400">({g.rules.length} rule{g.rules.length !== 1 ? 's' : ''})</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.wazuh_synced} /></span></td>
                         <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.puppet_synced} /></span></td>
                         <td className="px-4 py-3 text-gray-400">{relativeTime(g.created_at)}</td>
                         <td className="px-4 py-3">

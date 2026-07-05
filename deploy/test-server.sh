@@ -22,7 +22,7 @@
 #   BASE_URL         platform base URL           (default https://localhost:8443)
 #   API_PREFIX       path prefix                 (default /api; use "" against backend :3000)
 #   API_KEY          operator API key (X-API-Key)  — required for authed cases
-#   WEBHOOK_SECRET   wazuh_webhook_secret          — required for webhook cases
+#   WEBHOOK_KEY      detection_webhook_api_key     — required for webhook cases
 #   NODE_ID          a real node id                — for closed-loop node cases
 #   GROUP_ID         a real node group id          — for closed-loop group cases
 #   AGENT_NAME       a real node hostname          — for the webhook-accepted case
@@ -35,7 +35,7 @@ BASE_URL="${BASE_URL:-https://localhost:8443}"
 # the backend directly on :3000) is respected rather than forced back to /api.
 API_PREFIX="${API_PREFIX-/api}"
 API_KEY="${API_KEY:-}"
-WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
+WEBHOOK_KEY="${WEBHOOK_KEY:-}"
 NODE_ID="${NODE_ID:-}"
 GROUP_ID="${GROUP_ID:-}"
 AGENT_NAME="${AGENT_NAME:-}"
@@ -109,20 +109,18 @@ else
   skip "closed-loop validation" "no API_KEY"
 fi
 
-# ── 4. Webhook — UNUSUAL / security (safe: unmatched/ignored do not enforce) ─
-section "Wazuh webhook — security & malformed"
-WH="$(url /webhooks/wazuh)"
-check "POST /webhooks/wazuh no token"            "401 503" -X POST -H "Content-Type: application/json" -d '{}'       "$WH"
-if [ -n "$WEBHOOK_SECRET" ]; then
-  WT=(-H "X-Wazuh-Webhook-Token: $WEBHOOK_SECRET" -H "Content-Type: application/json")
-  check "POST /webhooks/wazuh WRONG token"        "401" -X POST -H "X-Wazuh-Webhook-Token: wrong" -H "Content-Type: application/json" -d '{}' "$WH"
-  check "POST /webhooks/wazuh non-JSON body"      "400" -X POST "${WT[@]}" -d 'garbage-not-json'                     "$WH"
-  check "POST /webhooks/wazuh JSON array body"    "400" -X POST "${WT[@]}" -d '[1,2,3]'                              "$WH"
-  check "POST /webhooks/wazuh empty alert"        "200" -X POST "${WT[@]}" -d '{}'                                  "$WH"
-  check "POST /webhooks/wazuh low-level alert"    "200" -X POST "${WT[@]}" -d '{"id":"1","rule":{"level":2,"description":"noise"},"agent":{"name":"whatever"}}' "$WH"
-  check "POST /webhooks/wazuh unknown agent"      "200" -X POST "${WT[@]}" -d '{"id":"2","rule":{"level":12,"description":"crit"},"agent":{"name":"ghost-host-zzz","ip":"203.0.113.9"}}' "$WH"
+# ── 4. Webhook — UNUSUAL / security (safe: unknown nodes do not enforce) ─────
+section "Detection webhook — security & malformed"
+WH="$(url /webhooks/detection)"
+check "POST /webhooks/detection no key"          "401 503" -X POST -H "Content-Type: application/json" -d '{}'       "$WH"
+if [ -n "$WEBHOOK_KEY" ]; then
+  WT=(-H "X-API-Key: $WEBHOOK_KEY" -H "Content-Type: application/json")
+  check "POST /webhooks/detection WRONG key"      "401" -X POST -H "X-API-Key: wrong" -H "Content-Type: application/json" -d '{}' "$WH"
+  check "POST /webhooks/detection non-JSON body"  "400" -X POST "${WT[@]}" -d 'garbage-not-json'                     "$WH"
+  check "POST /webhooks/detection JSON array"     "400" -X POST "${WT[@]}" -d '[1,2,3]'                              "$WH"
+  check "POST /webhooks/detection unknown node"   "404" -X POST "${WT[@]}" -d '{"node_hostname":"ghost-host-zzz","path":"/etc/passwd","event_type":"modified"}' "$WH"
 else
-  skip "webhook authed cases" "no WEBHOOK_SECRET"
+  skip "webhook authed cases" "no WEBHOOK_KEY"
 fi
 
 # ── 5. Positive / MUTATING happy paths (opt-in) ──────────────────────────────
@@ -135,11 +133,11 @@ if [ "$RUN_ENFORCE" = "1" ] && [ -n "$API_KEY" ]; then
   if [ -n "$GROUP_ID" ]; then
     check "POST /closed-loop {group_id} (REAL)"   "200" -X POST "${H[@]}" -d "{\"group_id\":\"$GROUP_ID\"}"         "$(url /compliance/closed-loop)"
   else skip "closed-loop group happy path" "no GROUP_ID"; fi
-  if [ -n "$WEBHOOK_SECRET" ] && [ -n "$AGENT_NAME" ]; then
-    WT=(-H "X-Wazuh-Webhook-Token: $WEBHOOK_SECRET" -H "Content-Type: application/json")
-    check "POST /webhooks/wazuh known agent (REAL)" "202 200" -X POST "${WT[@]}" \
-          -d "{\"id\":\"9\",\"rule\":{\"level\":12,\"description\":\"cis drift\"},\"agent\":{\"name\":\"$AGENT_NAME\"}}" "$WH"
-  else skip "webhook accepted happy path" "need WEBHOOK_SECRET + AGENT_NAME"; fi
+  if [ -n "$WEBHOOK_KEY" ] && [ -n "$AGENT_NAME" ]; then
+    WT=(-H "X-API-Key: $WEBHOOK_KEY" -H "Content-Type: application/json")
+    check "POST /webhooks/detection known node (REAL)" "202" -X POST "${WT[@]}" \
+          -d "{\"node_hostname\":\"$AGENT_NAME\",\"path\":\"/etc/passwd\",\"event_type\":\"modified\",\"new_hash\":\"deadbeef\"}" "$WH"
+  else skip "webhook accepted happy path" "need WEBHOOK_KEY + AGENT_NAME"; fi
 else
   skip "real enforcement suite" "set RUN_ENFORCE=1 (mutates nodes)"
 fi

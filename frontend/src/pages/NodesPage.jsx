@@ -113,7 +113,7 @@ export default function NodesPage() {
     t('nodes.colOs'),
     t('nodes.colSshPort'),
     t('nodes.colPuppet'),
-    t('nodes.colWazuh'),
+    t('nodes.colDetection'),
     t('nodes.colLastSeen'),
     t('nodes.colActions'),
   ]
@@ -246,10 +246,10 @@ export default function NodesPage() {
                       </span>
                     </td>
 
-                    {/* Wazuh */}
+                    {/* Detection agent */}
                     <td className="px-4 py-3">
-                      <span className={badge(node.wazuh_enrolled ? 'success' : 'gray')}>
-                        {node.wazuh_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
+                      <span className={badge(node.detection_enrolled ? 'success' : 'gray')}>
+                        {node.detection_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
                       </span>
                     </td>
 

@@ -32,7 +32,7 @@ class NodeResponse(BaseModel):
     tags: list[str]
     status: str
     puppet_enrolled: bool
-    wazuh_enrolled: bool
+    detection_enrolled: bool
     scan_ready: bool
     last_seen: datetime | None = None
     created_at: datetime
@@ -97,9 +97,6 @@ class ChangeIdentityResponse(BaseModel):
     steps: dict
     dns_resolves: bool | None = None
     warnings: list[str] = []
-    # Present when the changed node is the Wazuh manager: reports the new manager
-    # address and the per-agent re-point results.
-    wazuh_manager_reconfig: dict | None = None
     node: NodeResponse
 
 
@@ -156,7 +153,7 @@ def _to_response(node, detect_job_id: str | None = None) -> NodeResponse:
         tags=node.tags,
         status=node.status,
         puppet_enrolled=node.puppet_enrolled,
-        wazuh_enrolled=node.wazuh_enrolled,
+        detection_enrolled=node.detection_enrolled,
         scan_ready=node.scan_ready,
         last_seen=node.last_seen,
         created_at=node.created_at,
@@ -368,11 +365,11 @@ async def ping_node(id: str, principal: AuthPrincipal = Depends(require_operator
 @router.post("/{id}/check-dns", response_model=DnsCheckResponse, summary="Run full multi-directional DNS check")
 async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_operator)):
     """
-    Runs four DNS checks:
+    Runs three DNS checks:
     - Platform server → node hostname (backend resolves the node)
-    - Node → platform server hostname (node resolves the backend)
+    - Node → platform server hostname (node resolves the backend — needed by
+      the detection agent to reach the gateway by name)
     - Node → Puppet master hostname (required for Puppet agent enrollment)
-    - Node → Wazuh manager hostname (required for Wazuh agent enrollment)
 
     Updates dns_resolves on the node and returns per-check results with descriptions.
     """
@@ -405,7 +402,6 @@ async def fix_node_dns(id: str, body: DnsFixRequest, principal: AuthPrincipal = 
     - backend_to_node:  writes node IP → hostname to the platform's /etc/hosts
     - node_to_backend:  SSHes to node (ansible user) and writes platform IP → hostname
     - node_to_puppet:   SSHes to node and writes puppet master IP → hostname
-    - node_to_wazuh:    SSHes to node and writes wazuh manager IP → hostname
 
     Returns per-check result with ok, entry written, or error message.
     """
@@ -427,7 +423,7 @@ async def change_node_identity(id: str, body: ChangeIdentityRequest, principal: 
 
     Set `apply_system_hostname=true` to also rename the server itself via
     hostnamectl (opt-in; off by default). Returns the updated node plus any
-    warnings (e.g. Puppet/Wazuh agents bound to the old hostname).
+    warnings (e.g. a Puppet agent certificate bound to the old hostname).
     """
     try:
         result = await _change_identity_uc.execute(id, body.model_dump())

@@ -78,7 +78,7 @@ class GetNodeComplianceUseCase:
             "os_family": node.os_family,
             "status": node.status,
             "puppet_enrolled": node.puppet_enrolled,
-            "wazuh_enrolled": node.wazuh_enrolled,
+            "detection_enrolled": node.detection_enrolled,
             "scan_ready": node.scan_ready,
             "reports": [
                 {
@@ -97,7 +97,7 @@ class GetNodeComplianceUseCase:
                     "id": r.id, "outcome": r.outcome, "resources_fixed": r.resources_fixed,
                     "triggered_at": r.triggered_at.isoformat(),
                     "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                    "wazuh_alert_id": r.wazuh_alert_id, "puppet_job_id": r.puppet_job_id,
+                    "detection_event_id": r.detection_event_id, "puppet_job_id": r.puppet_job_id,
                 }
                 for r in remediations
             ],
@@ -485,7 +485,7 @@ class TriggerRemediationUseCase:
         self,
         id_or_hostname: str,
         description: str | None = None,
-        wazuh_alert_id: str | None = None,
+        detection_event_id: str | None = None,
     ) -> dict:
         node = await _resolve_node(self._nodes, id_or_hostname)
 
@@ -494,7 +494,7 @@ class TriggerRemediationUseCase:
             node_id=node.id,
             puppet_job_id="ssh-puppet-run",
             triggered_at=datetime.utcnow(),
-            wazuh_alert_id=wazuh_alert_id,
+            detection_event_id=detection_event_id,
         )
 
         if not node.puppet_enrolled:
@@ -502,7 +502,7 @@ class TriggerRemediationUseCase:
             event.completed_at = datetime.utcnow()
             await self._repo.save_remediation(event)
             return {
-                "id": event.id, "node_id": node.id, "wazuh_alert_id": wazuh_alert_id,
+                "id": event.id, "node_id": node.id, "detection_event_id": detection_event_id,
                 "outcome": event.outcome, "resources_fixed": 0,
                 "message": "Node has no Puppet agent — nothing to enforce. Enroll Puppet first.",
             }
@@ -519,7 +519,7 @@ class TriggerRemediationUseCase:
             event.completed_at = datetime.utcnow()
             await self._repo.update_remediation(event)
             return {
-                "id": event.id, "node_id": node.id, "wazuh_alert_id": wazuh_alert_id,
+                "id": event.id, "node_id": node.id, "detection_event_id": detection_event_id,
                 "outcome": "failed", "resources_fixed": 0, "message": str(exc),
             }
 
@@ -539,7 +539,7 @@ class TriggerRemediationUseCase:
         return {
             "id": event.id,
             "node_id": node.id,
-            "wazuh_alert_id": wazuh_alert_id,
+            "detection_event_id": detection_event_id,
             "outcome": event.outcome,
             "resources_fixed": event.resources_fixed,
             "message": "Puppet enforcement run complete.",
@@ -584,7 +584,7 @@ class RunClosedLoopUseCase:
         group_id: str | None = None,
         description: str | None = None,
         rescan: bool = True,
-        wazuh_alert_id: str | None = None,
+        detection_event_id: str | None = None,
     ) -> dict:
         if bool(node_id) == bool(group_id):
             raise ValidationError("Provide exactly one of node_id or group_id.")
@@ -617,7 +617,7 @@ class RunClosedLoopUseCase:
 
         async def _one(nid: str) -> dict:
             async with sem:
-                return await self._process_node(nid, desc, rescan, wazuh_alert_id)
+                return await self._process_node(nid, desc, rescan, detection_event_id)
 
         results = await asyncio.gather(
             *[_one(nid) for nid in node_ids], return_exceptions=True
@@ -655,13 +655,13 @@ class RunClosedLoopUseCase:
         return summary
 
     async def _process_node(
-        self, node_id: str, description: str, rescan: bool, wazuh_alert_id: str | None
+        self, node_id: str, description: str, rescan: bool, detection_event_id: str | None
     ) -> dict:
         await self._broadcast(node_id, "closed_loop_started", {"message": "Enforcement starting."})
         entry: dict = {"node_id": node_id, "status": "success"}
         try:
             enforce = await self._remediate.execute(
-                node_id, description=description, wazuh_alert_id=wazuh_alert_id,
+                node_id, description=description, detection_event_id=detection_event_id,
             )
             entry["enforcement"] = enforce
             outcome = (enforce or {}).get("outcome")

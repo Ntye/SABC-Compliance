@@ -5,7 +5,7 @@
 // the active language at render time. When you fix a new class of problem, add
 // an entry here so the knowledge stays with the product.
 //
-// platform: 'sabc' | 'puppet' | 'wazuh' | 'general'
+// platform: 'sabc' | 'puppet' | 'detection' | 'general'
 // severity: 'fixed'   → shipped fix, usually no user action needed
 //           'action'  → requires an operator action (documented in steps)
 //           'info'    → expected behaviour / good-to-know
@@ -13,7 +13,7 @@
 export const PLATFORMS = [
   { key: 'sabc',    label: { en: 'SABC Compliance Platform', fr: 'Plateforme de conformité SABC' } },
   { key: 'puppet',  label: { en: 'Puppet Enterprise',        fr: 'Puppet Enterprise' } },
-  { key: 'wazuh',   label: { en: 'Wazuh',                    fr: 'Wazuh' } },
+  { key: 'detection', label: { en: 'Detection agent',        fr: 'Agent de détection' } },
   { key: 'general', label: { en: 'Cross-platform',           fr: 'Multi-plateforme' } },
 ]
 
@@ -248,61 +248,6 @@ export const TROUBLESHOOTING = [
     },
   },
 
-  // ── Wazuh ──────────────────────────────────────────────────────────────────
-  {
-    id: 'wazuh-agents-dark-after-move',
-    platform: 'wazuh',
-    severity: 'info',
-    title: {
-      en: 'Agents go dark after the Wazuh manager address changes',
-      fr: 'Les agents disparaissent après un changement d’adresse du gestionnaire Wazuh',
-    },
-    symptom: {
-      en: 'After repointing the Wazuh manager, previously-enrolled agents stop reporting.',
-      fr: 'Après un changement de gestionnaire Wazuh, les agents déjà enrôlés cessent de rapporter.',
-    },
-    cause: {
-      en: 'Agents keep contacting the old manager address until their configuration is updated.',
-      fr: "Les agents continuent de contacter l'ancienne adresse du gestionnaire jusqu'à la mise à jour de leur configuration.",
-    },
-    steps: {
-      en: [
-        'The platform handles this: changing the manager host re-points every enrolled agent automatically to the new address.',
-        'If an agent stays dark, check connectivity to the new manager on ports 1514/1515 and confirm DNS resolution.',
-      ],
-      fr: [
-        'La plateforme gère cela : changer l’hôte du gestionnaire re-pointe automatiquement chaque agent enrôlé vers la nouvelle adresse.',
-        'Si un agent reste muet, vérifiez la connectivité vers le nouveau gestionnaire sur les ports 1514/1515 et la résolution DNS.',
-      ],
-    },
-  },
-  {
-    id: 'wazuh-enroll-dns',
-    platform: 'wazuh',
-    severity: 'action',
-    title: {
-      en: 'Agent fails to enroll (name resolution / connectivity)',
-      fr: 'L’agent échoue à s’enrôler (résolution de nom / connectivité)',
-    },
-    symptom: {
-      en: 'Agent installation completes but the node never registers with the manager.',
-      fr: "L'installation de l'agent se termine mais le nœud ne s'enregistre jamais auprès du gestionnaire.",
-    },
-    cause: {
-      en: 'The node cannot resolve the manager hostname, or registration/communication ports are blocked.',
-      fr: "Le nœud ne peut pas résoudre le nom d'hôte du gestionnaire, ou les ports d'enregistrement/communication sont bloqués.",
-    },
-    steps: {
-      en: [
-        'Run the DNS check on the node (⚠ button in Node Registry) before enrolling — the platform auto-adds an /etc/hosts entry when a name does not resolve.',
-        'Verify the manager is reachable on 1515 (registration) and 1514 (events) from the node.',
-      ],
-      fr: [
-        'Lancez la vérification DNS sur le nœud (bouton ⚠ dans le Registre des nœuds) avant l’enrôlement — la plateforme ajoute automatiquement une entrée /etc/hosts quand un nom ne se résout pas.',
-        'Vérifiez que le gestionnaire est joignable sur 1515 (enregistrement) et 1514 (événements) depuis le nœud.',
-      ],
-    },
-  },
 
   // ── Cross-platform ───────────────────────────────────────────────────────
   {

@@ -290,10 +290,6 @@ export async function setPuppetCredentials(adminUser, adminPassword) {
   return request('POST', '/infrastructure/puppet-credentials', { admin_user: adminUser, admin_password: adminPassword })
 }
 
-export async function setWazuhManagerHost(host) {
-  return request('POST', '/infrastructure/wazuh-manager', { host })
-}
-
 export async function getPuppetEdition() {
   return request('GET', '/infrastructure/puppet-edition')
 }
@@ -304,12 +300,8 @@ export async function switchPuppetEdition(edition, nodeId) {
   return request('POST', '/infrastructure/puppet-edition/switch', { edition, node_id: nodeId })
 }
 
-export async function probeWazuhDashboardPort(nodeId) {
-  return request('GET', `/infrastructure/probe-dashboard-port?node_id=${encodeURIComponent(nodeId)}`)
-}
-
 export async function installService(service, nodeId, options = {}) {
-  // service: 'puppet-master' | 'wazuh-manager' | 'puppet-agent' | 'wazuh-agent'
+  // service: 'puppet-master' | 'puppet-agent' | 'detection-agent'
   return request('POST', `/infrastructure/install/${service}`, { node_id: nodeId, ...options })
 }
 

@@ -41,8 +41,7 @@ fi
 
 # Create directories
 mkdir -p "$ROOT/keys" "$ROOT/data" \
-         "$ROOT/packages/puppet-master" "$ROOT/packages/puppet-agent" \
-         "$ROOT/packages/wazuh-manager" "$ROOT/packages/wazuh-agent"
+         "$ROOT/packages/puppet-master" "$ROOT/packages/puppet-agent"
 
 # Generate SSH key if missing
 SSH_KEY_PATH="${SSH_KEY_PATH:-$ROOT/keys/ansible_id_rsa}"

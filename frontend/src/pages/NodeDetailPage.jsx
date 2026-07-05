@@ -44,7 +44,7 @@ function ChangeIdentityModal({ node, onClose, onDone }) {
   const [result, setResult] = useState(null)
 
   const dirty = ip.trim() !== node.ip || hostname.trim() !== node.hostname || applySys
-  const enrolled = node.puppet_enrolled || node.wazuh_enrolled
+  const enrolled = node.puppet_enrolled || node.detection_enrolled
 
   async function apply() {
     setSaving(true)
@@ -193,46 +193,12 @@ function ResultPanel({ result, t }) {
           ))}
         </div>
       )}
-      {result.wazuh_manager_reconfig?.is_wazuh_manager && (
-        <WazuhRepointPanel reconfig={result.wazuh_manager_reconfig} />
-      )}
       {result.warnings?.length > 0 && (
         <div className="px-3 py-2 bg-amber-50 rounded-lg space-y-1">
           {result.warnings.map((w, i) => (
             <div key={i} className="flex items-start gap-2 text-[11px] text-amber-700">
               <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
               <span>{w}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Shown when the changed node is the Wazuh manager: confirms its agents were
-// automatically re-pointed at the new address so they keep reporting.
-function WazuhRepointPanel({ reconfig }) {
-  const a = reconfig.agents || {}
-  const total = a.agents_total ?? 0
-  const ok = a.agents_repointed ?? 0
-  const failed = a.agents_failed ?? 0
-  const allGood = failed === 0
-  return (
-    <div className={`px-3 py-2 rounded-lg space-y-1.5 ${allGood ? 'bg-green-50' : 'bg-amber-50'}`}>
-      <div className={`flex items-start gap-2 text-[11px] font-medium ${allGood ? 'text-green-700' : 'text-amber-700'}`}>
-        {allGood ? <ShieldCheck size={12} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />}
-        <span>
-          This node is the Wazuh manager. New address{' '}
-          <span className="font-mono">{reconfig.new_address}</span>
-          {' '}propagated{total > 0 ? ` to ${ok}/${total} agent${total === 1 ? '' : 's'}` : ' (no enrolled agents)'}.
-        </span>
-      </div>
-      {Array.isArray(a.results) && a.results.some((r) => !r.ok) && (
-        <div className="pl-5 space-y-0.5">
-          {a.results.filter((r) => !r.ok).map((r) => (
-            <div key={r.node_id} className="text-[10px] font-mono text-amber-700">
-              {r.hostname}: {r.error}
             </div>
           ))}
         </div>
@@ -405,7 +371,7 @@ export default function NodeDetailPage() {
     )
   }
 
-  const enrolled = node.puppet_enrolled || node.wazuh_enrolled
+  const enrolled = node.puppet_enrolled || node.detection_enrolled
   const reports = compliance?.reports || []
   const remediations = compliance?.remediations || []
 
@@ -468,9 +434,9 @@ export default function NodeDetailPage() {
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[12px] text-gray-600">Wazuh</span>
-              <span className={badge(node.wazuh_enrolled ? 'success' : 'gray')}>
-                {node.wazuh_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
+              <span className="text-[12px] text-gray-600">{t('nodeDetail.detectionAgent')}</span>
+              <span className={badge(node.detection_enrolled ? 'success' : 'gray')}>
+                {node.detection_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
               </span>
             </div>
             <div className="flex items-center justify-between">

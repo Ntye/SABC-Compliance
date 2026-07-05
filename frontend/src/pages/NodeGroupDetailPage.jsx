@@ -56,7 +56,7 @@ function ActiveResponseCard({ group, onToggled }) {
           <div>
             <h3 className="text-[13px] font-semibold text-gray-900">Active response</h3>
             <p className="text-[11px] text-gray-500 mt-0.5 max-w-md">
-              When on, a Wazuh alert for any member server drives the closed remediation
+              When on, a detection event for any member server drives the closed remediation
               loop (Puppet enforce → re-scan) across the whole group automatically.
             </p>
           </div>
@@ -324,7 +324,7 @@ function MembersCard({ group, nodes, navigate }) {
                 <div className="text-[11px] text-gray-400 font-mono truncate">{n.ip}{n.os_name ? ` · ${n.os_name}` : ''}</div>
               </div>
               <SyncPip ok={n.puppet_enrolled} label="Puppet" />
-              <SyncPip ok={n.wazuh_enrolled} label="Wazuh" />
+              <SyncPip ok={n.detection_enrolled} label="Detection" />
               <ChevronRight size={14} className="text-gray-300 flex-shrink-0" />
             </button>
           ))}
@@ -395,7 +395,6 @@ export default function NodeGroupDetailPage() {
               {group.parent && group.parent !== 'All Nodes' && (
                 <span className="text-[11px] text-gray-400">⤷ {group.parent}</span>
               )}
-              <SyncPip ok={group.wazuh_synced} label="Wazuh sync" />
               <SyncPip ok={group.puppet_synced} label="Puppet sync" />
             </div>
           </div>

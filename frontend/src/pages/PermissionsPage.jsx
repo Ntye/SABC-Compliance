@@ -11,7 +11,7 @@ const MATRIX = [
   { action: 'Register nodes',              readonly: false, operator: true,  admin: true  },
   { action: 'Delete nodes',               readonly: false, operator: false, admin: true  },
   { action: 'Run Ansible playbooks',       readonly: false, operator: true,  admin: true  },
-  { action: 'Install Puppet/Wazuh agents', readonly: false, operator: true,  admin: true  },
+  { action: 'Install Puppet/Detection agents', readonly: false, operator: true,  admin: true  },
   { action: 'View compliance reports',     readonly: true,  operator: true,  admin: true  },
   { action: 'Collect compliance data',     readonly: false, operator: true,  admin: true  },
   { action: 'Trigger remediation',         readonly: false, operator: true,  admin: true  },

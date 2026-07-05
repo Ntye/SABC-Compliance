@@ -1,6 +1,6 @@
 # Infrastructure lifecycle & failure-scenario handling
 
-This document maps the Puppet + Wazuh install lifecycle to the **automatic
+This document maps the Puppet + detection-agent install lifecycle to the **automatic
 preflight checks** and **self-healing** the platform performs, so installs
 succeed across the common failure scenarios instead of failing opaquely.
 
@@ -21,15 +21,6 @@ Legend: ✅ handled automatically · ⚠️ detected & warned · 📋 operator a
 | DNS hostname mismatch | ✅ `certname`/`server` pinned to FQDN in `puppet.conf` |
 | Service startup / cert gen | ✅ Waits for port 8140; verifies version; reports console URL |
 
-### Wazuh manager (`install_wazuh_manager.yml`)
-| Scenario | Handling |
-|----------|----------|
-| Memory shortage (indexer OOM) | ⚠️ Preflight warns (<4 GB), continues |
-| Disk space | ⚠️ Preflight warns (<20 GB on `/`), continues |
-| Port conflicts (1514/1515/55000/443/9200) | ⚠️ Preflight lists any existing listeners |
-| Incorrect repository / no internet | ✅ Online vs. airgap auto-detected; 📋 offline-package steps printed |
-| API / indexer / dashboard bring-up | ✅ Waits for API port 55000; verifies `wazuh-control` |
-
 ---
 
 ## 2. Agent enrollment
@@ -44,42 +35,40 @@ Legend: ✅ handled automatically · ⚠️ detected & warned · 📋 operator a
 | SSL mismatch (reinstalled server/agent) | ✅ Self-heal: detects, cleans cert both ends, re-enrolls once |
 | Time sync (`cert not yet valid`) | ✅ chrony installed + `chronyc makestep` before cert ops |
 
-### Wazuh agent (`install_wazuh_agent.yml`)
+### Detection agent (`install_detection_agent.yml`)
 | Scenario | Handling |
 |----------|----------|
-| Manager unreachable | 📋 Preflight **blocks** if 1514/1515 unreachable, prints causes |
-| Firewall blocking ports | 📋 Same preflight block + `nc -vz` verification hint |
-| Incorrect manager address | ✅ `WAZUH_MANAGER` env + `ossec.conf <address>` both set |
-| Agent ID conflict (VM clone) | ✅ Self-heal: resets `client.keys`, re-enrolls once if not connected |
-| Registration key / handshake | ✅ Confirms “Connected to the server” in `ossec.log` |
-| Time sync | ✅ chrony installed + stepped |
+| Gateway unreachable at install | ⚠️ Install proceeds; the agent spools events locally and flushes on reconnect |
+| Missing python3 / watchdog | ✅ Installed from the distro repo, falling back to pip |
+| Wrong gateway address / API key | ✅ Both injected from platform config at install time |
+| Service startup | ✅ systemd unit enabled + started; active state verified |
 
 ---
 
 ## 3. Network, DNS & PKI (cross-cutting)
 
 - **DNS** — the Node Registry **DNS check** (⚠ button) verifies resolution in
-  every direction (platform↔node, node→puppet, node→wazuh) and pre-fills the
-  exact `/etc/hosts` fix. Playbooks also self-add host entries during install.
+  every direction (platform↔node, node→puppet) and pre-fills the exact
+  `/etc/hosts` fix. Playbooks also self-add host entries during install.
 - **Firewall / routing** — connectivity preflights fail **before** install with
   a boxed remediation block rather than hanging mid-run.
 - **PKI** — stale/duplicate/expired certs from cloning or reinstalls are
   detected from the first-run output and recovered automatically (Puppet `ca
-  clean` + ssl reset; Wazuh `client.keys` reset), then re-enrolled exactly once.
+  clean` + ssl reset), then re-enrolled exactly once.
 
 ---
 
 ## 4. Beyond the installer (operator-owned)
 
 These lifecycle areas from the design notes are **operational**, not install-time,
-and are intentionally out of the installer's scope (monitored via Puppet/Wazuh
-themselves once enrolled):
+and are intentionally out of the installer's scope (handled by Puppet and the
+detection agent once enrolled):
 
-- Configuration drift detection & correction (Puppet catalog runs)
-- Ongoing monitoring, alert tuning, missing/excessive alerts (Wazuh rules)
+- Configuration drift detection & correction (detection agent + Puppet catalog runs)
+- Ongoing monitoring and event triage (Detection Events page)
 - Resource saturation over time (CPU/memory/disk growth)
 - Security posture (unauthorized/compromised agents, manager hardening)
 - High availability / failover and multi-site / hybrid-cloud topology
 
 The installer's job is to get every node **cleanly enrolled and reporting**;
-the two platforms own the steady-state lifecycle from there.
+Puppet and the detection agent own the steady-state lifecycle from there.

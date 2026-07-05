@@ -18,7 +18,6 @@ from infrastructure.database.adapter import (
     JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
     ProfileRepository, RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
-from infrastructure.http.wazuh_client import WazuhRESTClient
 from infrastructure.http.puppet_nc_client import PuppetNCClient
 from infrastructure.http.puppet_core_client import PuppetCoreClient
 from infrastructure.http.ollama_client import OllamaClient
@@ -46,7 +45,7 @@ from modules.nodes.usecases import (
     ChangeNodeIdentityUseCase, CheckNodeDnsUseCase, DeleteNodeUseCase,
     FixNodeDnsUseCase, GetNodeUseCase, ListNodesUseCase,
     PingAllNodesUseCase, PingNodeUseCase, RegisterNodeUseCase,
-    RepointWazuhAgentsUseCase, UpdateNodeUseCase,
+    UpdateNodeUseCase,
 )
 from modules.provisioning.usecases import (
     CancelJobUseCase, DetectAgentsUseCase, GetInfrastructureStatusUseCase,
@@ -58,7 +57,6 @@ from modules.compliance.usecases import (
     GetNodeComplianceUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
-from modules.compliance.wazuh_webhook import ReceiveWazuhAlertUseCase
 from modules.profiles.usecases import ProfileUseCases
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
@@ -111,13 +109,6 @@ async def lifespan(app: FastAPI):
     node_group_repo = NodeGroupRepository(session_factory)
 
     # -- External service clients --
-    wazuh_client = WazuhRESTClient(
-        host=settings.wazuh_manager_host,
-        port=settings.wazuh_api_port,
-        user=settings.wazuh_api_user,
-        password=settings.wazuh_api_pass,
-        token_refresh_seconds=settings.wazuh_token_refresh_seconds,
-    )
     puppet_nc_client = PuppetNCClient(
         host=settings.puppet_master_host,
         rbac_port=settings.puppet_rbac_port,
@@ -204,16 +195,16 @@ async def lifespan(app: FastAPI):
     # -- Node group use cases --
     list_node_groups_uc = ListNodeGroupsUseCase(node_group_repo, node_repo)
     get_node_group_uc = GetNodeGroupUseCase(node_group_repo, node_repo)
-    create_node_group_uc = CreateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
-    update_node_group_uc = UpdateNodeGroupUseCase(node_group_repo, node_repo, wazuh_client, puppet_nc_client)
-    delete_node_group_uc = DeleteNodeGroupUseCase(node_group_repo, wazuh_client, puppet_nc_client)
-    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo, wazuh_client)
+    create_node_group_uc = CreateNodeGroupUseCase(node_group_repo, node_repo, puppet_nc_client)
+    update_node_group_uc = UpdateNodeGroupUseCase(node_group_repo, node_repo, puppet_nc_client)
+    delete_node_group_uc = DeleteNodeGroupUseCase(node_group_repo, puppet_nc_client)
+    add_node_to_group_uc = AddNodeToGroupUseCase(node_group_repo, node_repo)
     remove_node_from_group_uc = RemoveNodeFromGroupUseCase(node_group_repo, node_repo)
     list_facts_uc = ListFactsUseCase(node_repo)
     preview_matching_uc = PreviewMatchingUseCase(node_repo)
     seed_node_groups_uc = SeedDefaultNodeGroupsUseCase(node_group_repo)
     sync_node_groups_uc = SyncAllNodeGroupsUseCase(
-        node_group_repo, node_repo, wazuh_client, puppet_nc_client,
+        node_group_repo, node_repo, puppet_nc_client,
         puppet_core_client=puppet_core_client, config_repo=platform_config_repo,
     )
 
@@ -259,22 +250,15 @@ async def lifespan(app: FastAPI):
         node_repo, ssh_client,
         platform_config_repo,
         puppet_master_host_env=settings.puppet_master_host,
-        wazuh_manager_host_env=settings.wazuh_manager_host,
     )
     fix_dns_uc = FixNodeDnsUseCase(
         node_repo, ssh_client,
         platform_config_repo,
         puppet_master_host_env=settings.puppet_master_host,
-        wazuh_manager_host_env=settings.wazuh_manager_host,
-    )
-    repoint_wazuh_agents_uc = RepointWazuhAgentsUseCase(
-        node_repo, ssh_client, platform_config_repo,
     )
     change_identity_uc = ChangeNodeIdentityUseCase(
         node_repo, ssh_client,
         platform_config=platform_config_repo,
-        wazuh_manager_host_env=settings.wazuh_manager_host,
-        repoint_uc=repoint_wazuh_agents_uc,
     )
 
     nodes_routes.set_use_cases(
@@ -295,46 +279,34 @@ async def lifespan(app: FastAPI):
     get_infra_status_uc = GetInfrastructureStatusUseCase(
         platform_config_repo,
         settings.puppet_master_host,
-        settings.wazuh_manager_host,
         settings.puppet_master_port,
-        settings.wazuh_api_port,
     )
     set_master_host_uc = SetMasterHostUseCase(
         platform_config_repo,
         settings.puppet_master_port,
-        settings.wazuh_api_port,
-        repoint_wazuh_agents_uc=repoint_wazuh_agents_uc,
     )
     list_jobs_uc = ListJobsUseCase(job_repo)
     get_job_uc = GetJobUseCase(job_repo)
     cancel_job_uc = CancelJobUseCase(job_repo, ansible)
 
-    install_puppet_master_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
-    install_wazuh_manager_uc           = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager")
-    install_wazuh_manager_colocated_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_manager_colocated")
-    install_puppet_agent_uc            = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
-    install_wazuh_agent_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_agent")
-    check_health_uc                    = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
-    configure_wazuh_remediation_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_remediation")
-    configure_puppet_core_enc_uc       = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_core_enc")
-    deploy_compliance_module_uc        = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "compliance_module")
-    configure_wazuh_sca_uc             = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "wazuh_sca")
-    switch_puppet_edition_uc           = SwitchPuppetEditionUseCase(start_job_uc, platform_config_repo, node_repo, configure_puppet_core_enc_uc)
-    scan_engine_uc                     = ScanEngineUseCase(node_repo, settings.ssh_key_path)
+    install_puppet_master_uc     = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_master")
+    install_puppet_agent_uc      = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_agent")
+    install_detection_agent_uc   = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "detection_agent")
+    check_health_uc              = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "check_health")
+    configure_puppet_core_enc_uc = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "puppet_core_enc")
+    deploy_compliance_module_uc  = InstallServiceUseCase(start_job_uc, platform_config_repo, node_repo, "compliance_module")
+    switch_puppet_edition_uc     = SwitchPuppetEditionUseCase(start_job_uc, platform_config_repo, node_repo, configure_puppet_core_enc_uc)
+    scan_engine_uc               = ScanEngineUseCase(node_repo, settings.ssh_key_path)
 
     infrastructure_routes.set_use_cases(
         get_status_uc=get_infra_status_uc,
         set_master_uc=set_master_host_uc,
         install_puppet_master_uc=install_puppet_master_uc,
-        install_wazuh_manager_uc=install_wazuh_manager_uc,
-        install_wazuh_manager_colocated_uc=install_wazuh_manager_colocated_uc,
-        configure_wazuh_remediation_uc=configure_wazuh_remediation_uc,
         configure_puppet_core_enc_uc=configure_puppet_core_enc_uc,
         deploy_compliance_module_uc=deploy_compliance_module_uc,
-        configure_wazuh_sca_uc=configure_wazuh_sca_uc,
         switch_puppet_edition_uc=switch_puppet_edition_uc,
         install_puppet_agent_uc=install_puppet_agent_uc,
-        install_wazuh_agent_uc=install_wazuh_agent_uc,
+        install_detection_agent_uc=install_detection_agent_uc,
         check_health_uc=check_health_uc,
         scan_engine_uc=scan_engine_uc,
         node_repo=node_repo,
@@ -382,26 +354,16 @@ async def lifespan(app: FastAPI):
         config_repo=platform_config_repo,
     )
 
-    # -- Wazuh webhook receiver: closes the detection → remediation loop --
-    # Wazuh detects a violation → POST /api/webhooks/wazuh → Puppet enforcement
-    # over SSH → automatic compliance re-scan → live WebSocket + event-bus updates.
-    receive_wazuh_uc = ReceiveWazuhAlertUseCase(
-        node_repo=node_repo,
-        compliance_repo=compliance_repo,
-        remediate_uc=remediate_uc,
-        collect_uc=collect_uc,
-        event_bus=event_bus,
-        ws_manager=ws_manager,
-        min_level=settings.wazuh_webhook_min_level,
-        rescan=settings.wazuh_webhook_rescan,
-        closed_loop_uc=closed_loop_uc,
-        list_groups_uc=list_node_groups_uc,
-        remediate_group=settings.wazuh_webhook_remediate_group,
-    )
+    # -- Detection webhook receiver: closes the detection → remediation loop --
+    # The custom detection agent spots a config change → POST
+    # /api/webhooks/detection → evidence stored → suppression rules applied →
+    # Puppet enforcement over SSH → live WebSocket + event-bus updates.
+    # (The receiver use case is wired in with the gateway module.)
     webhooks_routes.set_use_cases(
-        receive_wazuh_uc=receive_wazuh_uc,
-        webhook_secret=settings.wazuh_webhook_secret,
-        allowed_source_ips=settings.wazuh_webhook_source_ip,
+        receive_detection_uc=None,
+        config_repo=platform_config_repo,
+        webhook_api_key=settings.detection_webhook_api_key,
+        allowed_source_ips=settings.detection_webhook_source_ip,
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
@@ -435,10 +397,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Default group seeding: %s", exc)
 
-    # -- Bootstrap: seed OS-family node group hierarchy, then push to PE/Wazuh
+    # -- Bootstrap: seed OS-family node group hierarchy, then push to Puppet
     #    so already-registered nodes are classified. Sync is best-effort: if the
-    #    Puppet master / Wazuh manager is not yet reachable the groups stay marked
-    #    unsynced and an admin can re-run it from the UI (POST /node-groups/sync).
+    #    Puppet master is not yet reachable the groups stay marked unsynced and
+    #    an admin can re-run it from the UI (POST /node-groups/sync).
     try:
         n = await seed_node_groups_uc.execute()
         if n:
@@ -508,7 +470,8 @@ baseline) and **Internal Referential** (SABC company-specific baseline, independ
 maintained and distinct from the CIS framework).
 
 ### Closed Feedback Loop
-Wazuh detects a violation → webhook → Puppet remediation → recorded result.
+The SABC detection agent spots a config change → webhook → suppression rules →
+Puppet remediation → recorded result.
 
 ### Authentication
 Two methods accepted on all protected endpoints:
@@ -520,8 +483,8 @@ Two methods accepted on all protected endpoints:
             {"name": "Health", "description": "Platform health checks"},
             {"name": "Auth", "description": "Authentication — API keys and user login"},
             {"name": "Nodes", "description": "Linux server node registry"},
-            {"name": "Node Groups", "description": "Node group management with Wazuh and Puppet NC sync"},
-            {"name": "Infrastructure", "description": "Puppet and Wazuh infrastructure setup"},
+            {"name": "Node Groups", "description": "Node group management with Puppet NC sync"},
+            {"name": "Infrastructure", "description": "Puppet and detection agent infrastructure setup"},
             {"name": "Jobs", "description": "Ansible provisioning jobs and log streaming"},
             {"name": "Compliance", "description": "Compliance reports and remediation"},
             {"name": "Rules", "description": "Puppet compliance rules library"},
@@ -578,7 +541,7 @@ Two methods accepted on all protected endpoints:
             "services": {
                 "api": {"status": "up"},
                 "puppet": {"status": "not_configured"},
-                "wazuh": {"status": "not_configured"},
+                "detection": {"status": "not_configured"},
                 "ansible": {"status": "unknown"},
             }
         }

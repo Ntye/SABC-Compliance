@@ -42,8 +42,7 @@ COPY migrate_to_postgres.py .
 
 # Persistent directories (overridden by volumes at runtime)
 RUN mkdir -p data keys \
-    packages/puppet-master packages/puppet-agent \
-    packages/wazuh-manager packages/wazuh-agent
+    packages/puppet-master packages/puppet-agent
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # Strip any CR characters before making the script executable. When the repo is

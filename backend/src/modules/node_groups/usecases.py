@@ -20,7 +20,7 @@ FACT_ATTRS = {
     "status": "status",
     "tags": "tags",
     "puppet_enrolled": "puppet_enrolled",
-    "wazuh_enrolled": "wazuh_enrolled",
+    "detection_enrolled": "detection_enrolled",
 }
 
 VALID_OPERATORS = {"=", "!=", "~", ">", ">=", "<", "<="}
@@ -90,7 +90,7 @@ async def resolve_matching(group: NodeGroup, node_repo) -> dict:
 
     Returns:
         ids              node ids of pinned ∪ rule-matched nodes
-        hostnames        their hostnames (for Wazuh agent assignment)
+        hostnames        their hostnames
         pinned_certnames certnames of *explicitly pinned* nodes only
         certnames        certnames of *all* matched nodes (pinned ∪ rule)
 
@@ -224,7 +224,7 @@ DEFAULT_NODE_GROUP_TREE = [
         "match_type": "any",
         "rules": [
             {"fact": "puppet_enrolled", "operator": "=", "value": "true"},
-            {"fact": "wazuh_enrolled", "operator": "=", "value": "true"},
+            {"fact": "detection_enrolled", "operator": "=", "value": "true"},
         ],
         "inspec_profile_id": "sabc-linux-baseline",
         "children": [
@@ -302,9 +302,9 @@ DEFAULT_NODE_GROUP_TREE = [
 class SeedDefaultNodeGroupsUseCase:
     """Idempotently seeds the OS-family node group hierarchy at startup.
 
-    Only writes to the local DB — does not call Wazuh or Puppet Enterprise,
-    which may not be reachable at startup. System groups appear as unsynced
-    and can be pushed to PE once the master host is configured.
+    Only writes to the local DB — does not call Puppet Enterprise, which may
+    not be reachable at startup. System groups appear as unsynced and can be
+    pushed to PE once the master host is configured.
     """
     def __init__(self, repo):
         self._repo = repo
@@ -381,7 +381,7 @@ class SeedDefaultNodeGroupsUseCase:
 
 
 class SyncAllNodeGroupsUseCase:
-    """Reconcile node groups with Puppet Enterprise and Wazuh.
+    """Reconcile node groups with Puppet Enterprise.
 
     Only groups that actually contain nodes are materialised in the Puppet
     console — the auto-seeded OS-family tree would otherwise litter PE with
@@ -408,11 +408,10 @@ class SyncAllNodeGroupsUseCase:
     (reverse order) because PE refuses to delete a group that still has
     children.
     """
-    def __init__(self, repo, node_repo, wazuh_client, puppet_client,
+    def __init__(self, repo, node_repo, puppet_client,
                  puppet_core_client=None, config_repo=None):
         self._repo = repo
         self._node_repo = node_repo
-        self._wazuh = wazuh_client
         self._puppet = puppet_client
         self._core = puppet_core_client
         self._config_repo = config_repo
@@ -596,21 +595,15 @@ class SyncAllNodeGroupsUseCase:
         for g in reversed(ordered):
             if should_push(g) or g.group_type != "system":
                 continue
-            if not g.puppet_group_id and not g.wazuh_synced:
+            if not g.puppet_group_id:
                 continue
             try:
-                if g.puppet_group_id:
-                    await self._puppet.delete_node_group(g.puppet_group_id)
+                await self._puppet.delete_node_group(g.puppet_group_id)
             except Exception as e:
                 logger.warning("Puppet remove empty group '%s' failed: %s", g.name, e)
-            try:
-                await self._wazuh.delete_agent_group(g.name)
-            except Exception as e:
-                logger.warning("Wazuh remove empty group '%s' failed: %s", g.name, e)
             pe_ids.pop(g.name, None)
             g.puppet_group_id = None
             g.puppet_synced = False
-            g.wazuh_synced = False
             g.updated_at = datetime.utcnow()
             await self._repo.update(g)
             removed += 1
@@ -621,14 +614,7 @@ class SyncAllNodeGroupsUseCase:
                 skipped += 1
                 continue
             certnames = resolved[g.id]["certnames"]
-            hostnames = resolved[g.id]["hostnames"]
-            wazuh_ok = puppet_ok = True
-            try:
-                await self._wazuh.create_agent_group(g.name)
-                await self._wazuh.assign_agents_to_group(g.name, hostnames)
-            except Exception as e:
-                wazuh_ok = False
-                logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
+            puppet_ok = True
             try:
                 parent_id = parent_pe_id(g)
                 if g.puppet_group_id:
@@ -669,11 +655,10 @@ class SyncAllNodeGroupsUseCase:
                 puppet_ok = False
             elif g.puppet_group_id:
                 pushed += 1
-            g.wazuh_synced = wazuh_ok
             g.puppet_synced = puppet_ok
             g.updated_at = datetime.utcnow()
             await self._repo.update(g)
-            if wazuh_ok and puppet_ok:
+            if puppet_ok:
                 synced += 1
             else:
                 failed += 1
@@ -694,8 +679,7 @@ class SyncAllNodeGroupsUseCase:
 
         Builds one ENC document per managed node — its environment, every group
         it belongs to (``sabc_groups``) and the most-specific bound InSpec
-        profile — and pushes the data to the master over SSH. Wazuh agent-group
-        sync still runs, exactly as in the PE path, since it is edition-agnostic.
+        profile — and pushes the data to the master over SSH.
 
         No RBAC token, no Node Classifier API: nothing here calls a Puppet
         Enterprise-only endpoint.
@@ -738,20 +722,6 @@ class SyncAllNodeGroupsUseCase:
 
         classifications = list(classmap.values())
 
-        # Wazuh agent-group sync (same as the PE path; edition-independent).
-        wazuh_failed = 0
-        for g in ordered:
-            if g.group_type == "system" and not resolved[g.id]["certnames"]:
-                continue
-            try:
-                await self._wazuh.create_agent_group(g.name)
-                await self._wazuh.assign_agents_to_group(
-                    g.name, resolved[g.id]["hostnames"]
-                )
-            except Exception as e:
-                wazuh_failed += 1
-                logger.warning("Wazuh sync failed for '%s': %s", g.name, e)
-
         # Deploy the ENC data to the Puppet Core master.
         core_ready = False
         deployed = 0
@@ -778,15 +748,13 @@ class SyncAllNodeGroupsUseCase:
             "nodes_classified": total_nodes,
             "enc_nodes_deployed": deployed,
             "puppet_configured": core_ready,
-            "wazuh_failed": wazuh_failed,
         }
 
 
 class CreateNodeGroupUseCase:
-    def __init__(self, repo, node_repo, wazuh_client, puppet_client):
+    def __init__(self, repo, node_repo, puppet_client):
         self._repo = repo
         self._node_repo = node_repo
-        self._wazuh = wazuh_client
         self._puppet = puppet_client
 
     async def execute(self, data: dict) -> NodeGroup:
@@ -827,14 +795,8 @@ class CreateNodeGroupUseCase:
 
     async def _sync(self, group: NodeGroup, parent_id=None) -> None:
         resolved = await resolve_matching(group, self._node_repo)
-        wazuh_ok = puppet_ok = True
+        puppet_ok = True
         puppet_gid = group.puppet_group_id or ""
-        try:
-            await self._wazuh.create_agent_group(group.name)
-            await self._wazuh.assign_agents_to_group(group.name, resolved["hostnames"])
-        except Exception as e:
-            wazuh_ok = False
-            logger.warning("Wazuh group sync failed: %s", e)
         try:
             puppet_gid = await self._puppet.create_node_group(
                 group.name, group.description,
@@ -845,7 +807,6 @@ class CreateNodeGroupUseCase:
         except Exception as e:
             puppet_ok = False
             logger.warning("Puppet NC group sync failed: %s", e)
-        group.wazuh_synced = wazuh_ok
         group.puppet_synced = puppet_ok
         group.puppet_group_id = puppet_gid or None
         group.updated_at = datetime.utcnow()
@@ -853,10 +814,9 @@ class CreateNodeGroupUseCase:
 
 
 class UpdateNodeGroupUseCase:
-    def __init__(self, repo, node_repo, wazuh_client, puppet_client):
+    def __init__(self, repo, node_repo, puppet_client):
         self._repo = repo
         self._node_repo = node_repo
-        self._wazuh = wazuh_client
         self._puppet = puppet_client
 
     async def execute(self, group_id: str, data: dict) -> NodeGroup:
@@ -904,13 +864,7 @@ class UpdateNodeGroupUseCase:
     async def _resync(self, group: NodeGroup) -> None:
         resolved = await resolve_matching(group, self._node_repo)
         parent_id = await self._parent_id(group.parent)
-        wazuh_ok = puppet_ok = True
-        try:
-            await self._wazuh.create_agent_group(group.name)
-            await self._wazuh.assign_agents_to_group(group.name, resolved["hostnames"])
-        except Exception as e:
-            wazuh_ok = False
-            logger.warning("Wazuh group re-sync failed: %s", e)
+        puppet_ok = True
         try:
             if group.puppet_group_id:
                 found = await self._puppet.update_node_group(
@@ -931,15 +885,13 @@ class UpdateNodeGroupUseCase:
         except Exception as e:
             puppet_ok = False
             logger.warning("Puppet NC group re-sync failed: %s", e)
-        group.wazuh_synced = wazuh_ok
         group.puppet_synced = puppet_ok
         await self._repo.update(group)
 
 
 class DeleteNodeGroupUseCase:
-    def __init__(self, repo, wazuh_client, puppet_client):
+    def __init__(self, repo, puppet_client):
         self._repo = repo
-        self._wazuh = wazuh_client
         self._puppet = puppet_client
 
     async def execute(self, group_id: str) -> dict:
@@ -952,10 +904,6 @@ class DeleteNodeGroupUseCase:
             await self._puppet.delete_node_group(group.puppet_group_id or "")
         except Exception as e:
             logger.warning("Puppet NC delete group failed: %s", e)
-        try:
-            await self._wazuh.delete_agent_group(group.name)
-        except Exception as e:
-            logger.warning("Wazuh delete group failed: %s", e)
         await self._repo.delete(group_id)
         return {"message": f"Node group '{group.name}' deleted"}
 
@@ -1076,10 +1024,9 @@ class PreviewMatchingUseCase:
 
 
 class AddNodeToGroupUseCase:
-    def __init__(self, repo, node_repo, wazuh_client=None):
+    def __init__(self, repo, node_repo):
         self._repo = repo
         self._node_repo = node_repo
-        self._wazuh = wazuh_client
 
     async def execute(self, group_id: str, node_id: str) -> dict:
         g = await self._repo.find_by_id(group_id)
@@ -1089,11 +1036,6 @@ class AddNodeToGroupUseCase:
         if not n:
             raise NotFoundError(f"Node '{node_id}' not found")
         await self._repo.add_node(group_id, node_id)
-        if self._wazuh:
-            try:
-                await self._wazuh.assign_agents_to_group(g.name, [n.hostname])
-            except Exception as e:
-                logger.warning("Wazuh assign on pin failed: %s", e)
         return {"message": f"Node '{n.hostname}' added to group '{g.name}'"}
 
 

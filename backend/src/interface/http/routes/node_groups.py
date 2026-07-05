@@ -36,7 +36,6 @@ class NodeGroupResponse(BaseModel):
     node_ids: list[str] = []           # pinned nodes
     matching_node_ids: list[str] = []  # pinned ∪ rule-matched
     puppet_group_id: str | None = None
-    wazuh_synced: bool = False
     puppet_synced: bool = False
     group_type: str = "user"
     inspec_profile_id: str | None = None
@@ -132,7 +131,7 @@ def _resp(g, matching=None) -> NodeGroupResponse:
         rules=[RuleModel(**r) for r in (g.rules or [])],
         node_ids=g.node_ids, matching_node_ids=matching or [],
         puppet_group_id=g.puppet_group_id,
-        wazuh_synced=g.wazuh_synced, puppet_synced=g.puppet_synced,
+        puppet_synced=g.puppet_synced,
         group_type=g.group_type,
         inspec_profile_id=g.inspec_profile_id,
         active_response_enabled=g.active_response_enabled,
@@ -148,7 +147,7 @@ def _resp(g, matching=None) -> NodeGroupResponse:
 @router.post("/seed-defaults", status_code=200)
 async def seed_default_groups(principal=Depends(require_admin)):
     """Re-seed the OS-family hierarchy (idempotent) and push every group to
-    Puppet & Wazuh so already-registered nodes are classified immediately."""
+    Puppet so already-registered nodes are classified immediately."""
     created = await _seed_uc.execute()
     sync = await _sync_uc.execute() if _sync_uc else {}
     return {
@@ -161,8 +160,8 @@ async def seed_default_groups(principal=Depends(require_admin)):
 
 @router.post("/sync", status_code=200)
 async def sync_node_groups(principal=Depends(require_admin)):
-    """Re-push all node groups to Puppet & Wazuh, assigning currently-matching
-    registered nodes. Use after enrolling nodes or when PE/Wazuh come online."""
+    """Re-push all node groups to Puppet, assigning currently-matching
+    registered nodes. Use after enrolling nodes or when the master comes online."""
     return await _sync_uc.execute()
 
 
