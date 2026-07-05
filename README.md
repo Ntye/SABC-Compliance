@@ -313,24 +313,81 @@ for airgap installs).
 
 ## 7. Compliance
 
-The **Compliance** page shows each node's compliance status against:
+### The unified referential (profiles)
 
-- **CIS Benchmarks** — hardening checks for Ubuntu and RHEL-family systems
-- **ISO/IEC 27001** — information security management controls
-- **PCI-DSS** — payment card industry data security standard
+Compliance **profiles** are hardening referentials imported from the **unified
+multi-OS referential** — one sheet/CSV in the structure of
+`platform/seed/referentials/sabc_baseline/` = one profile. Each control row
+carries:
 
-### Rules
+- an internal **Control ID** (e.g. `JR2.C.1.1.1`) — *the* key; the Control Key is
+  auto-derived from it, and imports never key on the CIS reference;
+- **per-OS-family guidance**: separate Validate/Configure procedures for the
+  **Debian family** (Ubuntu/Debian/Mint) and the **Red Hat family**
+  (Alma/Rocky/RHEL/CentOS);
+- a **CIS Level** (1 or 2; blank = 1).
 
-Manage compliance rules in **Rules**. Each rule has:
-- A Puppet manifest snippet (the desired state)
-- Target OS family (debian / rhel / both)
-- Framework tag (cis / iso27001 / pcidss)
-- Active/inactive toggle
+Import is **UPSERT** (never wipe-and-rebuild): matched by Control ID, existing
+controls are updated (with edit history), new ones inserted, and controls absent
+from a re-import are **retired** (soft — kept so historical reports still read
+them). The **SABC Baseline** ships built-in (system profile, undeletable), seeded
+at first boot through the same importer, complete for **both families** out of
+the box.
+
+From each profile the platform generates, at seed time:
+
+- a **Puppet module** (`sabc_hardening`) — one class per control, branching
+  internally on `$facts['os']['family']`, filled from the two Configure columns;
+- an **InSpec profile** — one control per referential control, guarded by
+  `os.family`, from the two Validate columns.
+
+A family with no runnable authored guidance for a control is reported as
+*implementation pending* and never auto-generated (see
+`backend/puppet/modules/sabc_hardening/IMPLEMENTATION_PENDING.txt`).
+
+### Tiers — which CIS Levels apply
+
+CIS Level is a **control** property; a node's **tier** decides which levels apply
+to it:
+
+- **Non-critical** (system tier): CIS Level 1 only.
+- **Critical** (system tier): CIS Level 1 + 2.
+- **Custom** tiers (e.g. "1.5", admin-only, audited): Level 1 plus a hand-picked
+  set of real Level-2 controls.
+
+Every node has exactly one tier (Non-critical on enrolment; reassignment is
+audited). The generated Puppet classes and InSpec controls exist for **all**
+levels/families — the tier simply gates which ones a given node enforces and is
+scanned against.
+
+### Compliance node groups (distinct from Puppet node groups)
+
+A **compliance group** is a platform-only concept — it binds a set of profiles
+(the standards to scan against) to a set of member nodes, and **never** touches
+the Puppet Node Classifier. A node may belong to several compliance groups.
+Manage them under `/compliance-groups` (kept entirely separate from the Puppet
+`/node-groups`).
+
+### How a scan resolves
+
+```
+compliance group  →  its bound profiles  →  its member nodes
+      per node:  tier decides CIS Levels  →  os.family decides which controls
+                 →  run that subset of the profile's InSpec controls
+```
+
+Each report records the compliance group, profile + version, node, tier at scan
+time, and OS family — so "which servers are scanned against standard X, at what
+tier" is a query. On-demand single-node scans resolve the same way via the
+node's group memberships (falling back to the built-in SABC Baseline when the
+node is in no group); the auto-scan scheduler iterates compliance groups + their
+members.
 
 ### Remediation
 
-On the Compliance page, click **Remediate** on a failing node. This triggers an Ansible
-job that applies the relevant Puppet manifests. Job output streams live in the **Jobs** page.
+On the Compliance page, click **Remediate** on a failing node. This runs the
+generated `sabc_hardening` classes for the node's tier-applicable controls
+(`puppet agent -t` over SSH). Job output streams live in the **Jobs** page.
 
 ### Closed feedback loop
 
