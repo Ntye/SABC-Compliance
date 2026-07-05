@@ -48,16 +48,17 @@ class MemberRequest(BaseModel):
 
 
 _list_uc = _get_uc = _create_uc = _update_uc = _delete_uc = None
-_add_member_uc = _remove_member_uc = None
+_add_member_uc = _remove_member_uc = _scan_uc = None
 
 
 def set_use_cases(list_uc=None, get_uc=None, create_uc=None, update_uc=None,
-                  delete_uc=None, add_member_uc=None, remove_member_uc=None) -> None:
+                  delete_uc=None, add_member_uc=None, remove_member_uc=None,
+                  scan_uc=None) -> None:
     global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc
-    global _add_member_uc, _remove_member_uc
+    global _add_member_uc, _remove_member_uc, _scan_uc
     _list_uc, _get_uc, _create_uc = list_uc, get_uc, create_uc
     _update_uc, _delete_uc = update_uc, delete_uc
-    _add_member_uc, _remove_member_uc = add_member_uc, remove_member_uc
+    _add_member_uc, _remove_member_uc, _scan_uc = add_member_uc, remove_member_uc, scan_uc
 
 
 def _resp(g) -> ComplianceGroupResponse:
@@ -110,6 +111,19 @@ async def update_group(group_id: str, body: UpdateGroupRequest,
 async def delete_group(group_id: str, principal: AuthPrincipal = Depends(require_operator)):
     try:
         return await _delete_uc.execute(group_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/{group_id}/scan", status_code=202,
+             summary="Scan every member against the group's bound profiles")
+async def scan_group(group_id: str, principal: AuthPrincipal = Depends(require_operator)):
+    """Scan each member node against the group's bound profiles, with only the
+    controls the node's tier makes applicable, in the node's OS family."""
+    if _scan_uc is None:
+        raise HTTPException(status_code=503, detail="Group scan not available")
+    try:
+        return await _scan_uc.execute(group_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

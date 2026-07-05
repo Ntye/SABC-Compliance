@@ -55,7 +55,8 @@ from modules.provisioning.usecases import (
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
-    GetNodeComplianceUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
+    GetNodeComplianceUseCase, ScanComplianceGroupUseCase,
+    TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.detection.usecases import (
@@ -342,16 +343,45 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Compliance use cases --
-    # Bundled CIS profile lives at backend/scan-profiles/sabc-linux-baseline.
-    scan_profile_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "scan-profiles", "sabc-linux-baseline",
+    # Bundled scan profiles live under backend/scan-profiles/.
+    _scan_profiles_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scan-profiles",
+    )
+    scan_profile_path = os.path.join(_scan_profiles_dir, "sabc-linux-baseline")
+
+    # Section 6: map a profile → its generated InSpec directory. The built-in
+    # SABC Baseline uses the generated multi-OS profile; the legacy internal/CIS
+    # profiles fall back to the bundled sabc-linux-baseline for back-compat.
+    from core.domain.entities import (
+        CIS_BENCHMARK_PROFILE_ID as _CIS_ID,
+        INTERNAL_PROFILE_ID as _INT_ID,
+        SABC_BASELINE_PROFILE_ID as _BASE_ID,
+    )
+
+    def _inspec_dir_for(profile):
+        mapping = {
+            _BASE_ID: os.path.join(_scan_profiles_dir, "sabc-baseline"),
+            _INT_ID: scan_profile_path,
+            _CIS_ID: scan_profile_path,
+        }
+        d = mapping.get(profile.id)
+        return d if d and os.path.isdir(d) else None
+
+    from modules.compliance.scan_resolver import ScanPlanResolver
+    scan_resolver = ScanPlanResolver(
+        node_repo, compliance_group_repo, tier_repo, profile_repo,
+        inspec_dir_for=_inspec_dir_for,
     )
     collect_uc = CollectNodeComplianceUseCase(
         node_repo, compliance_repo, ssh_client,
         default_ssh_key_path=settings.ssh_key_path,
         profile_path=scan_profile_path,
         scan_ctrl=scan_engine_uc,
+        scan_resolver=scan_resolver,
+    )
+    # Section 6: scan a whole compliance group (members × bound profiles).
+    scan_group_uc = ScanComplianceGroupUseCase(
+        compliance_group_repo, node_repo, scan_resolver, collect_uc,
     )
     remediate_uc = TriggerRemediationUseCase(node_repo, compliance_repo, ssh_client)
     # Closed-loop engine — enforce (Puppet) → re-scan (CINC) for a single node or
@@ -399,7 +429,10 @@ async def lifespan(app: FastAPI):
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
-    auto_scan = AutoScanScheduler(collect_uc, node_repo, platform_config_repo)
+    auto_scan = AutoScanScheduler(
+        collect_uc, node_repo, platform_config_repo,
+        group_repo=compliance_group_repo, scan_group_uc=scan_group_uc,
+    )
     auto_scan.start()
 
     # -- Compliance profiles (referentials) --
@@ -437,6 +470,7 @@ async def lifespan(app: FastAPI):
         delete_uc=DeleteComplianceGroupUseCase(compliance_group_repo),
         add_member_uc=AddGroupMemberUseCase(compliance_group_repo, node_repo),
         remove_member_uc=RemoveGroupMemberUseCase(compliance_group_repo),
+        scan_uc=scan_group_uc,
     )
 
     # -- Offline AI assistant --

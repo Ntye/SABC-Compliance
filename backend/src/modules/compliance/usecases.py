@@ -88,6 +88,10 @@ class GetNodeComplianceUseCase:
                     "skipped_checks": r.skipped_checks, "profile": r.profile,
                     "duration": r.duration, "severity_counts": r.severity_counts,
                     "details": r.details,
+                    "profile_id": r.profile_id, "profile_version": r.profile_version,
+                    "compliance_group_id": r.compliance_group_id,
+                    "tier_id": r.tier_id, "tier_name": r.tier_name,
+                    "os_family": r.os_family,
                     "collected_at": r.collected_at.isoformat(),
                 }
                 for r in reports
@@ -130,6 +134,7 @@ class CollectNodeComplianceUseCase:
         profile_path: str = "",
         scan_bin: str | None = None,
         scan_ctrl=None,
+        scan_resolver=None,
     ) -> None:
         self._nodes = node_repo
         self._repo = compliance_repo
@@ -139,6 +144,10 @@ class CollectNodeComplianceUseCase:
         self._scan_bin = scan_bin or self.SCAN_BIN
         # ScanEngineUseCase — used to install the scan engine on demand.
         self._scan_engine_ctrl = scan_ctrl
+        # ScanPlanResolver — when set, scans resolve applicable profiles via the
+        # node's compliance-group memberships and applicable controls via its
+        # tier + OS family (Section 6). Absent → legacy single-profile scan.
+        self._resolver = scan_resolver
 
     def _scan_engine_available(self) -> bool:
         return bool(
@@ -168,14 +177,27 @@ class CollectNodeComplianceUseCase:
 
         collected: list[dict] = []
 
-        # Complete, structured compliance scan — no shell fallback.
-        scan_report, scan_reason = await self._collect_scan(node)
-        if not scan_report:
-            raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
+        if self._resolver is not None:
+            # Section 6: scan each profile the node's compliance groups bind, but
+            # only the controls its tier makes applicable, in its OS family. Each
+            # report is tagged with the group/profile+version/tier/family context.
+            plan = await self._resolver.for_node(node)
+            reports, last_reason = await self.scan_plan(node, plan)
+            collected.extend(reports)
+            if not collected:
+                raise ValidationError(
+                    last_reason
+                    or "No applicable controls resolved for this node's tier/groups."
+                )
+        else:
+            # Legacy single-profile path (back-compat).
+            scan_report, scan_reason = await self._collect_scan(node)
+            if not scan_report:
+                raise ValidationError(scan_reason or "The compliance scan did not produce any results.")
+            self._apply_profile(scan_report, profile_id)
+            await self._repo.save_report(scan_report)
+            collected.append(self._summarise(scan_report))
 
-        self._apply_profile(scan_report, profile_id)
-        await self._repo.save_report(scan_report)
-        collected.append(self._summarise(scan_report))
         if not node.scan_ready:
             node.scan_ready = True
             node.updated_at = datetime.utcnow()
@@ -192,6 +214,21 @@ class CollectNodeComplianceUseCase:
                 collected.append(self._summarise(puppet_report))
 
         return {"node_id": node.id, "collected": collected}
+
+    async def scan_plan(self, node: Node, plan) -> tuple[list[dict], str | None]:
+        """Run every spec in a resolved NodeScanPlan, persist and summarise each
+        report. Returns (summaries, last_skip_reason). Shared by the single-node
+        scan and the compliance-group scan."""
+        collected: list[dict] = []
+        last_reason: str | None = None
+        for spec in plan.specs:
+            report, reason = await self._collect_scan(node, spec=spec, plan=plan)
+            if report:
+                await self._repo.save_report(report)
+                collected.append(self._summarise(report))
+            else:
+                last_reason = reason
+        return collected, last_reason
 
     def _summarise(self, r: ComplianceReport) -> dict:
         return {
@@ -215,16 +252,32 @@ class CollectNodeComplianceUseCase:
 
     # ── Compliance scan ────────────────────────────────────────────────────────
 
-    async def _collect_scan(self, node: Node) -> tuple[ComplianceReport | None, str | None]:
-        """Run the bundled CIS profile against the node and parse JSON output.
+    async def _collect_scan(
+        self, node: Node, spec=None, plan=None
+    ) -> tuple[ComplianceReport | None, str | None]:
+        """Run an InSpec profile against the node and parse JSON output.
+
+        When *spec* is given (Section 6), the spec's generated InSpec directory
+        is executed, narrowed to the tier/family-applicable controls via
+        ``--controls``, and the resulting report is tagged with the
+        group/profile+version/tier/os_family context. Otherwise the bundled
+        default profile is run whole (legacy path).
 
         Returns ``(report, None)`` on success, or ``(None, reason)`` when the
         scan is skipped or fails so the caller can surface a clear error.
         """
-        if not self._profile_path or not os.path.isdir(self._profile_path):
+        profile_path = (spec.inspec_dir if spec and spec.inspec_dir else self._profile_path)
+        if not profile_path or not os.path.isdir(profile_path):
             return None, (
-                f"Scan profile not found at {self._profile_path or '(unset)'} — "
-                "the bundled profile is missing from the deployment."
+                f"Scan profile not found at {profile_path or '(unset)'} — "
+                "the profile is missing from the deployment."
+            )
+        if spec is not None and not spec.applicable_control_ids:
+            # Nothing is in scope for this node's tier/family on this profile —
+            # not an error, just an empty spec the caller skips.
+            return None, (
+                f"No controls applicable for profile '{spec.profile_name}' at tier "
+                f"'{plan.tier_name if plan else ''}' / family '{node.os_family}'."
             )
 
         # Resolve the scan binary; the configured path may differ per install.
@@ -240,13 +293,17 @@ class CollectNodeComplianceUseCase:
         key = node.ssh_key_path or self._default_key
         target = f"ssh://{node.ssh_user}@{node.ip}"
         args = [
-            scan_bin, "exec", self._profile_path,
+            scan_bin, "exec", profile_path,
             "-t", target,
             "-i", key,
             "--port", str(node.ssh_port),
             "--reporter", "json",
             "--no-color", "--no-distinct-exit",
         ]
+        # Section 6: run only the tier/family-applicable controls.
+        if spec is not None and spec.applicable_control_ids:
+            args.append("--controls")
+            args.extend(spec.applicable_control_ids)
         # Most controls need root to read /etc/shadow, auditd state, etc.
         if (node.ssh_user or "").strip() != "root":
             args.append("--sudo")
@@ -285,6 +342,17 @@ class CollectNodeComplianceUseCase:
         report = self._scan_to_report(node, data)
         if not report:
             return None, "Compliance scan returned no controls."
+        # Section 6: stamp the scan context so "which servers scanned against
+        # standard X, at what tier" is a query.
+        if spec is not None:
+            report.profile = spec.profile_name
+            report.profile_id = spec.profile_id
+            report.profile_version = spec.profile_version
+            report.compliance_group_id = spec.compliance_group_id
+        if plan is not None:
+            report.tier_id = plan.tier_id
+            report.tier_name = plan.tier_name
+            report.os_family = plan.os_family
         return report, None
 
     @staticmethod
@@ -466,6 +534,65 @@ class CollectNodeComplianceUseCase:
             details=details,
             collected_at=datetime.utcnow(),
         )
+
+
+class ScanComplianceGroupUseCase:
+    """Scan every member of a compliance group against the group's bound
+    profiles — the uniform unit of scanning (Section 6).
+
+    For each member node, each bound profile is scanned with only the controls
+    the node's tier makes applicable, in the node's OS family. Every report is
+    tagged with the group/profile+version/tier/family context.
+    """
+
+    def __init__(self, group_repo, node_repo: INodeRepository, resolver, collect_uc) -> None:
+        self._groups = group_repo
+        self._nodes = node_repo
+        self._resolver = resolver
+        self._collect = collect_uc
+
+    async def execute(self, group_id: str) -> dict:
+        group = await self._groups.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Compliance group '{group_id}' not found")
+
+        plans = await self._resolver.for_group(group)
+        nodes_out: list[dict] = []
+        scanned = failed = 0
+        for plan in plans:
+            node = await self._nodes.find_by_id(plan.node_id)
+            if node is None:
+                continue
+            try:
+                reports, reason = await self._collect.scan_plan(node, plan)
+                if reports:
+                    scanned += 1
+                    nodes_out.append({
+                        "node_id": node.id, "hostname": node.hostname,
+                        "os_family": plan.os_family, "tier": plan.tier_name,
+                        "reports": len(reports),
+                    })
+                else:
+                    failed += 1
+                    nodes_out.append({
+                        "node_id": node.id, "hostname": node.hostname,
+                        "os_family": plan.os_family, "tier": plan.tier_name,
+                        "reports": 0, "reason": reason,
+                    })
+            except Exception as exc:
+                failed += 1
+                logger.error("Group scan: node %s failed: %s", node.hostname, exc)
+                nodes_out.append({"node_id": node.id, "hostname": node.hostname,
+                                  "reports": 0, "error": str(exc)})
+        return {
+            "compliance_group_id": group.id,
+            "compliance_group": group.name,
+            "profiles": group.profile_ids,
+            "members": len(group.node_ids),
+            "scanned": scanned,
+            "failed": failed,
+            "nodes": nodes_out,
+        }
 
 
 class TriggerRemediationUseCase:
