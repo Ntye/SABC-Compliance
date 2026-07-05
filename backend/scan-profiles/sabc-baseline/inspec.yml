@@ -1,0 +1,9 @@
+name: sabc-baseline
+title: SABC Baseline (generated, multi-OS)
+maintainer: SABC Compliance Platform
+license: proprietary
+summary: Generated from the unified SABC referential; controls guarded by os.family.
+version: 1.0.0
+supports:
+  - platform-family: debian
+  - platform-family: redhat

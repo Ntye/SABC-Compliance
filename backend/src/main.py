@@ -441,12 +441,30 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Profile seeding: %s", exc)
 
-    # -- Bootstrap: seed the built-in unified SABC Baseline (both OS families) --
+    # -- Bootstrap: seed the built-in unified SABC Baseline (both OS families),
+    #    then (re)generate the sabc_hardening Puppet module + sabc-baseline
+    #    InSpec profile from it. Generation runs only when the referential was
+    #    actually (re)seeded, so restarts don't rewrite the artifact tree.
     try:
+        from core.domain.entities import SABC_BASELINE_PROFILE_ID
+        from modules.profiles.artifact_generator import GenerateBuiltinArtifactsUseCase
         from modules.profiles.seed_referentials import SeedSabcBaselineUseCase
-        await SeedSabcBaselineUseCase(profile_repo, platform_config_repo).execute()
+        seeded = await SeedSabcBaselineUseCase(profile_repo, platform_config_repo).execute()
+        if seeded:
+            _base = os.path.dirname(os.path.abspath(settings.ansible_dir or "/app/ansible"))
+            gen = GenerateBuiltinArtifactsUseCase(
+                profile_repo,
+                os.path.join(_base, "puppet", "modules", "sabc_hardening"),
+                os.path.join(_base, "scan-profiles", "sabc-baseline"),
+            )
+            res = await gen.execute(SABC_BASELINE_PROFILE_ID)
+            logger.info(
+                "Generated built-in artifacts: %d files, %d control/family enforced, "
+                "%d implementation-pending", res.files_written,
+                len(res.generated), len(res.pending),
+            )
     except Exception as exc:
-        logger.debug("SABC Baseline seeding: %s", exc)
+        logger.debug("SABC Baseline seeding/generation: %s", exc)
 
     try:
         user_creds = await init_admin_user_uc.execute()

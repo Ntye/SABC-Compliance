@@ -1,0 +1,24 @@
+Controls with manual-only remediation (no auto-enforcement generated):
+
+JR2.C.4.3.4/debian: no runnable Configure guidance
+JR2.C.4.3.4/redhat: no runnable Configure guidance
+JR2.C.4.5.1.5/debian: no runnable Configure guidance
+JR2.C.4.5.1.5/redhat: no runnable Configure guidance
+JR2.C.5.1.1.1/debian: no runnable Configure guidance
+JR2.C.5.1.1.1/redhat: no runnable Configure guidance
+JR2.C.6.1.12/debian: no runnable Configure guidance
+JR2.C.6.1.12/redhat: no runnable Configure guidance
+JR2.C.6.2.10/debian: no runnable Configure guidance
+JR2.C.6.2.10/redhat: no runnable Configure guidance
+JR2.C.6.2.3/debian: no runnable Configure guidance
+JR2.C.6.2.3/redhat: no runnable Configure guidance
+JR2.C.6.2.5/debian: no runnable Configure guidance
+JR2.C.6.2.5/redhat: no runnable Configure guidance
+JR2.C.6.2.6/debian: no runnable Configure guidance
+JR2.C.6.2.6/redhat: no runnable Configure guidance
+JR2.C.6.2.7/debian: no runnable Configure guidance
+JR2.C.6.2.7/redhat: no runnable Configure guidance
+JR2.C.6.2.8/debian: no runnable Configure guidance
+JR2.C.6.2.8/redhat: no runnable Configure guidance
+JR2.C.6.2.9/debian: no runnable Configure guidance
+JR2.C.6.2.9/redhat: no runnable Configure guidance
