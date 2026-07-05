@@ -67,6 +67,11 @@ from modules.tiers.usecases import (
     AssignNodeTierUseCase, CreateTierUseCase, DeleteTierUseCase, GetTierUseCase,
     ListTiersUseCase, SeedSystemTiersUseCase, UpdateTierUseCase,
 )
+from modules.compliance_groups.usecases import (
+    AddGroupMemberUseCase, CreateComplianceGroupUseCase, DeleteComplianceGroupUseCase,
+    GetComplianceGroupUseCase, ListComplianceGroupsUseCase, RemoveGroupMemberUseCase,
+    UpdateComplianceGroupUseCase,
+)
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
@@ -79,6 +84,7 @@ from interface.http.routes import settings as settings_routes
 from interface.http.routes import assistant as assistant_routes
 from interface.http.routes import detection as detection_routes
 from interface.http.routes import tiers as tiers_routes
+from interface.http.routes import compliance_groups as compliance_groups_routes
 from interface.http.routes import webhooks as webhooks_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
@@ -422,6 +428,17 @@ async def lifespan(app: FastAPI):
         assign_uc=AssignNodeTierUseCase(node_repo, tier_repo),
     )
 
+    # -- Compliance node groups (platform-only; never Puppet NC) --
+    compliance_groups_routes.set_use_cases(
+        list_uc=ListComplianceGroupsUseCase(compliance_group_repo),
+        get_uc=GetComplianceGroupUseCase(compliance_group_repo),
+        create_uc=CreateComplianceGroupUseCase(compliance_group_repo, profile_repo, node_repo),
+        update_uc=UpdateComplianceGroupUseCase(compliance_group_repo, profile_repo, node_repo),
+        delete_uc=DeleteComplianceGroupUseCase(compliance_group_repo),
+        add_member_uc=AddGroupMemberUseCase(compliance_group_repo, node_repo),
+        remove_member_uc=RemoveGroupMemberUseCase(compliance_group_repo),
+    )
+
     # -- Offline AI assistant --
     assistant_routes.set_use_cases(ollama_client=ollama_client)
 
@@ -602,6 +619,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(assistant_routes.router)
     app.include_router(detection_routes.router)
     app.include_router(tiers_routes.router)
+    app.include_router(compliance_groups_routes.router)
     app.include_router(webhooks_routes.router)
 
     from fastapi import APIRouter
