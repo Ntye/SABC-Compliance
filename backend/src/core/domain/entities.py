@@ -301,6 +301,31 @@ class RemediationEvent:
 
 
 @dataclass
+class ConfigChangeEvent:
+    """One event reported by a node's detection agent.
+
+    Evidence-only: snapshots are stored (hashes + optional content blob) so
+    the platform can prove what changed and when — never to roll back.
+    ``suppressed`` records the gateway's feedback-storm decision:
+    an event stored with suppressed=True did NOT trigger remediation.
+    """
+    id: str
+    node_id: str
+    path: str
+    event_type: str                       # created|modified|deleted|baseline|heartbeat
+    timestamp: datetime                   # agent-side event time
+    prev_hash: str | None = None
+    new_hash: str | None = None
+    file_meta: dict | None = None         # {mode, uid, gid, size, mtime}
+    puppet_running: bool = False
+    actor: dict | None = None             # {auid, exe, comm} from auditd, or None
+    suppressed: bool = False
+    suppress_reason: str | None = None    # remediation_pending|puppet_run|baseline|heartbeat
+    remediation_event_id: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
 class Rule:
     id: str
     control_id: str

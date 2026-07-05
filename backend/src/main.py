@@ -14,7 +14,7 @@ from core.errors import (
     NotFoundError, SSHConnectError, UnauthorizedError, ValidationError,
 )
 from infrastructure.database.adapter import (
-    ApiKeyRepository, AuditRepository, ComplianceRepository,
+    ApiKeyRepository, AuditRepository, ComplianceRepository, DetectionRepository,
     JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
     ProfileRepository, RuleRepository, UserRepository, UserGroupRepository, create_db,
 )
@@ -57,6 +57,10 @@ from modules.compliance.usecases import (
     GetNodeComplianceUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
+from modules.detection.usecases import (
+    GetNodeDetectionStatusUseCase, ListDetectionEventsUseCase,
+    ReceiveDetectionEventUseCase,
+)
 from modules.profiles.usecases import ProfileUseCases
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
@@ -68,6 +72,7 @@ from interface.http.routes import node_groups as node_groups_routes
 from interface.http.routes import profiles as profiles_routes
 from interface.http.routes import settings as settings_routes
 from interface.http.routes import assistant as assistant_routes
+from interface.http.routes import detection as detection_routes
 from interface.http.routes import webhooks as webhooks_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
@@ -107,6 +112,7 @@ async def lifespan(app: FastAPI):
     platform_config_repo = PlatformConfigRepository(session_factory)
     group_repo = UserGroupRepository(session_factory)
     node_group_repo = NodeGroupRepository(session_factory)
+    detection_repo = DetectionRepository(session_factory)
 
     # -- External service clients --
     puppet_nc_client = PuppetNCClient(
@@ -356,14 +362,26 @@ async def lifespan(app: FastAPI):
 
     # -- Detection webhook receiver: closes the detection → remediation loop --
     # The custom detection agent spots a config change → POST
-    # /api/webhooks/detection → evidence stored → suppression rules applied →
-    # Puppet enforcement over SSH → live WebSocket + event-bus updates.
-    # (The receiver use case is wired in with the gateway module.)
+    # /api/webhooks/detection → evidence stored (events + content-addressed
+    # blobs) → suppression rules applied → Puppet enforcement over SSH →
+    # live WebSocket + event-bus updates.
+    receive_detection_uc = ReceiveDetectionEventUseCase(
+        node_repo=node_repo,
+        detection_repo=detection_repo,
+        compliance_repo=compliance_repo,
+        remediate_uc=remediate_uc,
+        event_bus=event_bus,
+        ws_manager=ws_manager,
+    )
     webhooks_routes.set_use_cases(
-        receive_detection_uc=None,
+        receive_detection_uc=receive_detection_uc,
         config_repo=platform_config_repo,
         webhook_api_key=settings.detection_webhook_api_key,
         allowed_source_ips=settings.detection_webhook_source_ip,
+    )
+    detection_routes.set_use_cases(
+        list_events_uc=ListDetectionEventsUseCase(detection_repo, node_repo),
+        node_status_uc=GetNodeDetectionStatusUseCase(detection_repo, node_repo),
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --
@@ -487,6 +505,7 @@ Two methods accepted on all protected endpoints:
             {"name": "Infrastructure", "description": "Puppet and detection agent infrastructure setup"},
             {"name": "Jobs", "description": "Ansible provisioning jobs and log streaming"},
             {"name": "Compliance", "description": "Compliance reports and remediation"},
+            {"name": "Detection", "description": "Config-change events from the detection agents"},
             {"name": "Rules", "description": "Puppet compliance rules library"},
             {"name": "Audit", "description": "HTTP audit log"},
             {"name": "Webhooks", "description": "Internal webhook endpoints"},
@@ -529,6 +548,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(profiles_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(assistant_routes.router)
+    app.include_router(detection_routes.router)
     app.include_router(webhooks_routes.router)
 
     from fastapi import APIRouter

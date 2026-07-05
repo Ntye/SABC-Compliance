@@ -6,18 +6,21 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import (
-    Column, Integer, MetaData, String, Table, Text, select, delete, update, func, text
+    Column, Integer, LargeBinary, MetaData, String, Table, Text,
+    select, delete, update, func, text
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, Job, Node, NodeGroup, Profile, ProfileControl,
-    RemediationEvent, Rule, User, UserGroup,
+    ApiKey, ComplianceReport, ConfigChangeEvent, Job, Node, NodeGroup,
+    Profile, ProfileControl, RemediationEvent, Rule, User, UserGroup,
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceRepository,
-    IJobRepository, INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
-    IProfileRepository, IRuleRepository, IUserRepository, IUserGroupRepository,
+    IDetectionRepository, IJobRepository, INodeGroupRepository, INodeRepository,
+    IPlatformConfigRepository, IProfileRepository, IRuleRepository,
+    IUserRepository, IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +120,37 @@ remediation_events_table = Table(
     Column("completed_at", Text),
     Column("outcome", Text, default="pending"),
     Column("resources_fixed", Integer, default=0),
+)
+
+# One row per event reported by a node's detection agent (evidence trail).
+# suppressed=1 records the gateway's feedback-storm decision: the event was
+# stored but did NOT trigger remediation (see suppress_reason).
+config_change_events_table = Table(
+    "config_change_events", metadata,
+    Column("id", Text, primary_key=True),
+    Column("node_id", Text, nullable=False, index=True),
+    Column("path", Text, nullable=False),
+    Column("event_type", Text, nullable=False),
+    Column("timestamp", Text),
+    Column("prev_hash", Text),
+    Column("new_hash", Text),
+    Column("file_meta", Text),                 # JSON {mode, uid, gid, size, mtime}
+    Column("puppet_running", Integer, default=0),
+    Column("actor", Text),                     # JSON {auid, exe, comm} or NULL
+    Column("suppressed", Integer, default=0),
+    Column("suppress_reason", Text),
+    Column("remediation_event_id", Text),      # FK → remediation_events.id (nullable)
+    Column("created_at", Text, index=True),
+)
+
+# Content-addressed snapshot storage: one row per distinct file content,
+# deduplicated by SHA-256 (insert-or-ignore on conflict).
+config_blobs_table = Table(
+    "config_blobs", metadata,
+    Column("sha256", Text, primary_key=True),
+    Column("content", LargeBinary),
+    Column("size", Integer, default=0),
+    Column("first_seen_at", Text),
 )
 
 api_keys_table = Table(
@@ -896,6 +930,19 @@ class ComplianceRepository(IComplianceRepository):
             )).first()
             return self._remediation_to_entity(row) if row else None
 
+    async def find_pending_remediation(self, node_id: str) -> RemediationEvent | None:
+        """Most recent remediation for this node still in the active window
+        (outcome=pending). Drives detection-event suppression rule (a)."""
+        async with self._session() as s:
+            row = (await s.execute(
+                select(remediation_events_table)
+                .where(remediation_events_table.c.node_id == node_id)
+                .where(remediation_events_table.c.outcome == "pending")
+                .order_by(remediation_events_table.c.triggered_at.desc())
+                .limit(1)
+            )).first()
+            return self._remediation_to_entity(row) if row else None
+
     async def update_remediation(self, event: RemediationEvent) -> None:
         async with self._session() as s:
             await s.execute(
@@ -908,6 +955,159 @@ class ComplianceRepository(IComplianceRepository):
                 )
             )
             await s.commit()
+
+
+# ── Detection Repository ──────────────────────────────────────────────────────
+
+class DetectionRepository(IDetectionRepository):
+    """Evidence store for the detection plane.
+
+    Events are append-only; blobs are content-addressed (sha256 PK) with
+    insert-or-ignore semantics so identical file contents are stored once no
+    matter how many nodes or events reference them.
+    """
+
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    def _to_entity(self, row) -> ConfigChangeEvent:
+        return ConfigChangeEvent(
+            id=row.id,
+            node_id=row.node_id,
+            path=row.path,
+            event_type=row.event_type,
+            timestamp=_dt(row.timestamp) or datetime.utcnow(),
+            prev_hash=row.prev_hash,
+            new_hash=row.new_hash,
+            file_meta=json.loads(row.file_meta) if row.file_meta else None,
+            puppet_running=bool(row.puppet_running),
+            actor=json.loads(row.actor) if row.actor else None,
+            suppressed=bool(row.suppressed),
+            suppress_reason=row.suppress_reason,
+            remediation_event_id=row.remediation_event_id,
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    def _to_dict(self, e: ConfigChangeEvent) -> dict:
+        return {
+            "id": e.id,
+            "node_id": e.node_id,
+            "path": e.path,
+            "event_type": e.event_type,
+            "timestamp": _ts(e.timestamp),
+            "prev_hash": e.prev_hash,
+            "new_hash": e.new_hash,
+            "file_meta": json.dumps(e.file_meta) if e.file_meta is not None else None,
+            "puppet_running": int(e.puppet_running),
+            "actor": json.dumps(e.actor) if e.actor is not None else None,
+            "suppressed": int(e.suppressed),
+            "suppress_reason": e.suppress_reason,
+            "remediation_event_id": e.remediation_event_id,
+            "created_at": _ts(e.created_at),
+        }
+
+    async def save_event(self, event: ConfigChangeEvent) -> None:
+        async with self._session() as s:
+            await s.execute(config_change_events_table.insert().values(**self._to_dict(event)))
+            await s.commit()
+
+    async def save_heartbeat(self, event: ConfigChangeEvent) -> None:
+        """Keep only the latest heartbeat per node — liveness, not history."""
+        c = config_change_events_table.c
+        async with self._session() as s:
+            await s.execute(
+                delete(config_change_events_table)
+                .where(c.node_id == event.node_id)
+                .where(c.event_type == "heartbeat")
+            )
+            await s.execute(config_change_events_table.insert().values(**self._to_dict(event)))
+            await s.commit()
+
+    async def save_blob(self, sha256: str, content: bytes) -> bool:
+        """Insert-or-ignore by hash. Returns True when a new blob was stored."""
+        async with self._session() as s:
+            existing = (await s.execute(
+                select(config_blobs_table.c.sha256)
+                .where(config_blobs_table.c.sha256 == sha256)
+            )).first()
+            if existing:
+                return False
+            try:
+                await s.execute(config_blobs_table.insert().values(
+                    sha256=sha256,
+                    content=content,
+                    size=len(content),
+                    first_seen_at=datetime.utcnow().isoformat(),
+                ))
+                await s.commit()
+                return True
+            except IntegrityError:
+                # Raced with a concurrent insert of the same content — fine.
+                await s.rollback()
+                return False
+
+    async def find_events(
+        self, node_id: str | None = None, limit: int = 100,
+        include_heartbeats: bool = False,
+    ) -> list[ConfigChangeEvent]:
+        c = config_change_events_table.c
+        async with self._session() as s:
+            q = select(config_change_events_table)
+            if node_id:
+                q = q.where(c.node_id == node_id)
+            if not include_heartbeats:
+                q = q.where(c.event_type != "heartbeat")
+            q = q.order_by(c.created_at.desc()).limit(limit)
+            rows = (await s.execute(q)).all()
+            return [self._to_entity(r) for r in rows]
+
+    async def find_event(self, id: str) -> ConfigChangeEvent | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(config_change_events_table)
+                .where(config_change_events_table.c.id == id)
+            )).first()
+            return self._to_entity(row) if row else None
+
+    async def node_status(self, node_id: str) -> dict:
+        """Agent liveness + per-path watch status for the node detail page.
+
+        last_seen = most recent event of any type (heartbeats included);
+        watched_paths = one entry per distinct path with its latest event.
+        """
+        c = config_change_events_table.c
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(config_change_events_table)
+                .where(c.node_id == node_id)
+                .order_by(c.created_at.desc())
+                .limit(500)
+            )).all()
+
+        events = [self._to_entity(r) for r in rows]
+        last_seen = max((e.created_at for e in events), default=None)
+
+        paths: dict[str, dict] = {}
+        for e in events:  # newest first — first sighting of a path wins
+            if e.event_type == "heartbeat" or not e.path:
+                continue
+            if e.path not in paths:
+                paths[e.path] = {
+                    "path": e.path,
+                    "last_event_type": e.event_type,
+                    "last_event_at": e.created_at.isoformat(),
+                    "last_hash": e.new_hash,
+                    "suppressed": e.suppressed,
+                    "events": 0,
+                }
+            paths[e.path]["events"] += 1
+
+        return {
+            "node_id": node_id,
+            "agent_last_seen": last_seen.isoformat() if last_seen else None,
+            "watched_paths": sorted(paths.values(), key=lambda p: p["path"]),
+            "recent_events": len(events),
+        }
 
 
 # ── ApiKey Repository ─────────────────────────────────────────────────────────

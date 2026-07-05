@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from .entities import (
         Node, Job, ComplianceReport, ApiKey, User,
         RemediationEvent, Rule, UserGroup, NodeGroup,
-        Profile, ProfileControl,
+        Profile, ProfileControl, ConfigChangeEvent,
     )
 
 
@@ -53,6 +53,8 @@ class IComplianceRepository(ABC):
     async def find_all_remediations(self, limit: int) -> list["RemediationEvent"]: ...
     @abstractmethod
     async def find_remediation(self, id: str) -> "RemediationEvent | None": ...
+    @abstractmethod
+    async def find_pending_remediation(self, node_id: str) -> "RemediationEvent | None": ...
     @abstractmethod
     async def update_remediation(self, event: "RemediationEvent") -> None: ...
 
@@ -182,6 +184,26 @@ class IPuppetClient(ABC):
                                 match_type="all", rules=None, pinned_certnames=None) -> None: ...
     @abstractmethod
     async def delete_node_group(self, puppet_group_id: str) -> None: ...
+
+
+class IDetectionRepository(ABC):
+    """Evidence store for the detection plane: config-change events and
+    content-addressed file blobs."""
+    @abstractmethod
+    async def save_event(self, event: "ConfigChangeEvent") -> None: ...
+    @abstractmethod
+    async def save_heartbeat(self, event: "ConfigChangeEvent") -> None: ...
+    @abstractmethod
+    async def save_blob(self, sha256: str, content: bytes) -> bool: ...
+    @abstractmethod
+    async def find_events(
+        self, node_id: str | None = None, limit: int = 100,
+        include_heartbeats: bool = False,
+    ) -> list["ConfigChangeEvent"]: ...
+    @abstractmethod
+    async def find_event(self, id: str) -> "ConfigChangeEvent | None": ...
+    @abstractmethod
+    async def node_status(self, node_id: str) -> dict: ...
 
 
 class IPlatformConfigRepository(ABC):
