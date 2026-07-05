@@ -232,6 +232,7 @@ profiles_table = Table(
     Column("version", Text, default="1.0.0"),
     Column("source", Text, default="custom"),
     Column("framework", Text),            # "cis" | "internal" | NULL (custom)
+    Column("is_system", Integer, default=0),  # undeletable system profile
     Column("created_at", Text),
     Column("updated_at", Text),
 )

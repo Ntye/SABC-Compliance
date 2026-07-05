@@ -64,6 +64,8 @@ services:
       - ./backend/packages:/app/packages
       # Detection agent sources shipped to nodes by install_detection_agent.yml.
       - ./detection-agent:/app/detection-agent:ro
+      # Committed referential seed (SABC Baseline) imported at first boot.
+      - ./platform:/app/platform:ro
       # Frontend TLS cert/key — same volume the frontend serves from.
       - frontend-certs:/app/certs
     depends_on:

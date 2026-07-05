@@ -441,6 +441,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.debug("Profile seeding: %s", exc)
 
+    # -- Bootstrap: seed the built-in unified SABC Baseline (both OS families) --
+    try:
+        from modules.profiles.seed_referentials import SeedSabcBaselineUseCase
+        await SeedSabcBaselineUseCase(profile_repo, platform_config_repo).execute()
+    except Exception as exc:
+        logger.debug("SABC Baseline seeding: %s", exc)
+
     try:
         user_creds = await init_admin_user_uc.execute()
         if user_creds:
