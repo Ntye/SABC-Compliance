@@ -38,11 +38,22 @@ Browser
 
 sabc-backend container (FastAPI + Ansible + OpenSSH client)
   Volumes:
-    sabc_backend-data  →  /app/data      SQLite database (nodes, jobs, rules, audit)
-    sabc_backend-keys  →  /app/keys      Ansible SSH key pair (generated once, persisted)
-    ./backend/packages →  /app/packages  Airgap install files (.deb/.rpm/tarballs)
+    sabc_backend-data  →  /app/data            SQLite database (nodes, jobs, rules, audit)
+    sabc_backend-keys  →  /app/keys            Ansible SSH key pair (generated once, persisted)
+    ./backend/packages →  /app/packages        Airgap install files (.deb/.rpm/wheels)
+    ./detection-agent  →  /app/detection-agent Agent sources shipped to managed nodes
 
 Docker network: sabc-net (bridge, internal — backend is not exposed to LAN)
+
+Managed node (each server in the fleet)
+  ├── puppet-agent                 enforcement plane — applies the referential
+  └── compliance-detection-agent  detection plane — SABC's own lightweight
+        Python daemon (inotify via watchdog). Watches /etc/ssh/, /etc/pam.d/,
+        /etc/sudoers*, /etc/passwd, /etc/group, /etc/shadow, snapshots every
+        change as evidence (SHA-256 + metadata, content where policy allows)
+        and POSTs it to the platform:
+
+          POST /api/webhooks/detection   (X-API-Key + optional CIDR allowlist)
 ```
 
 The browser talks to a **single origin** (port 80). Nginx proxies all `/api/` traffic and
@@ -51,6 +62,27 @@ no hard-coded backend hostname in the browser.
 
 The backend exposes port 3000 separately for direct API access and the Swagger docs
 (`http://localhost:3000/docs`).
+
+### Detection → remediation loop
+
+The **detection plane is the custom SABC detection agent** (there is no
+third-party SIEM). Each event the agent reports is stored as tamper-evident
+evidence — `config_change_events` rows plus content-addressed `config_blobs`
+(deduplicated by SHA-256) — and then run through the gateway's feedback-storm
+guard, in this order:
+
+1. **Active remediation window** — a remediation with `outcome=pending` exists
+   for the node → the event is stored `suppressed` and linked to that
+   remediation (it is our own Puppet run writing files).
+2. **`puppet_running` flag** — the agent saw Puppet's catalog-run lock file →
+   stored `suppressed` (scheduled converge).
+3. **Genuine drift** — stored live, `compliance.violation_detected` is
+   published, and a Puppet enforcement run is triggered with
+   `detection_event_id` linking the remediation back to its cause.
+
+The agent never suppresses locally — every change reaches the platform, so the
+evidence trail on the **Detection Events** page is complete either way.
+Snapshots are evidence only; the platform never rolls files back from blobs.
 
 ---
 

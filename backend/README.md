@@ -168,6 +168,14 @@ curl -H "X-API-Key: bdc_<hex>" http://localhost:3000/auth/keys
 
 ---
 
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest                      # backend: suppression logic + webhook auth
+python -m pytest ../detection-agent/tests   # agent: snapshot policy + debounce
+```
+
 ## Project Structure
 
 ```
