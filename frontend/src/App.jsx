@@ -8,6 +8,7 @@ import NodeDetailPage from './pages/NodeDetailPage.jsx'
 import AddServerPage from './pages/AddServerPage.jsx'
 import JobsPage from './pages/JobsPage.jsx'
 import CompliancePage from './pages/CompliancePage.jsx'
+import DetectionEventsPage from './pages/DetectionEventsPage.jsx'
 import NodeCompliancePage from './pages/NodeCompliancePage.jsx'
 import ProfilesPage from './pages/ProfilesPage.jsx'
 import ProfileDetailPage from './pages/ProfileDetailPage.jsx'
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/add-server" element={<AddServerPage />} />
             <Route path="/infrastructure" element={<InfrastructurePage />} />
             <Route path="/jobs" element={<JobsPage />} />
+            <Route path="/detection" element={<DetectionEventsPage />} />
             <Route path="/compliance" element={<CompliancePage />} />
             <Route path="/compliance/:id" element={<NodeCompliancePage />} />
             <Route path="/profiles" element={<ProfilesPage />} />

@@ -1,12 +1,13 @@
-import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight,
+  Activity, AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight,
   Network, RefreshCw, RotateCw, ShieldCheck, Wifi, Wrench, XCircle,
 } from 'lucide-react'
 import {
   getNode, pingNode, updateNode, changeNodeIdentity,
   getNodeCompliance, collectNodeCompliance, triggerRemediation, runClosedLoop,
+  getNodeDetectionStatus,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -201,6 +202,91 @@ function ResultPanel({ result, t }) {
               <span>{w}</span>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Detection agent panel ─────────────────────────────────────────────────────
+// Watched-paths status + agent liveness, derived from the events (incl. the
+// 10-minute heartbeat) the node's detection agent reports to the gateway.
+function DetectionPanel({ node, t }) {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const s = await getNodeDetectionStatus(node.id)
+        if (!cancelled) setStatus(s)
+      } catch (_) {}
+      finally { if (!cancelled) setLoading(false) }
+    }
+    load()
+    const timer = setInterval(load, 60000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [node.id])
+
+  const lastSeen = status?.agent_last_seen
+  // The agent heartbeats every 10 min — silent for >25 min means it is likely down.
+  const stale = lastSeen ? (Date.now() - new Date(lastSeen).getTime()) > 25 * 60 * 1000 : true
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5 mt-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-[13px] font-semibold text-gray-900 flex items-center gap-2">
+          <Activity size={15} className="text-brand" />{t('nodeDetail.detection.title')}
+        </h3>
+        <div className="flex items-center gap-2">
+          <span className={badge(lastSeen && !stale ? 'success' : 'gray')}>
+            {lastSeen
+              ? `${t('nodeDetail.detection.lastSeen')} ${fmtDate(lastSeen)}`
+              : t('nodeDetail.detection.neverSeen')}
+          </span>
+          <Link to={`/detection?node=${node.id}`} className="text-[11px] text-brand hover:underline">
+            {t('nodeDetail.detection.viewEvents')}
+          </Link>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="h-16 rounded-xl bg-gray-50 animate-pulse" />
+      ) : !status || status.watched_paths.length === 0 ? (
+        <p className="text-[12px] text-gray-400">
+          {node.detection_enrolled
+            ? t('nodeDetail.detection.noEvents')
+            : t('nodeDetail.detection.notEnrolled')}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-gray-100">
+                {[
+                  t('nodeDetail.detection.colPath'), t('nodeDetail.detection.colLastEvent'),
+                  t('nodeDetail.detection.colLastChange'), t('nodeDetail.detection.colEvents'),
+                ].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {status.watched_paths.map((p) => (
+                <tr key={p.path} className="hover:bg-gray-50/60">
+                  <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{p.path}</td>
+                  <td className="px-3 py-2">
+                    <span className={badge(p.last_event_type === 'baseline' ? 'gray' : p.last_event_type === 'deleted' ? 'danger' : 'warning')}>
+                      {p.last_event_type}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDate(p.last_event_at)}</td>
+                  <td className="px-3 py-2 text-gray-500 tabular-nums">{p.events}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -518,6 +604,9 @@ export default function NodeDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Detection agent */}
+      <DetectionPanel node={node} t={t} />
 
       {/* Compliance */}
       <div className="bg-white rounded-2xl border border-gray-100 p-5 mt-4">

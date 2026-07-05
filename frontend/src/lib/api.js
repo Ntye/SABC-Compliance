@@ -507,6 +507,20 @@ export async function importProfileCsv(file, { profileId = null, name = null, de
   return data
 }
 
+// ── Detection (config-change events from the detection agents) ───────────────
+
+export async function listDetectionEvents({ nodeId = null, limit = 100 } = {}) {
+  const params = new URLSearchParams()
+  if (nodeId) params.set('node_id', nodeId)
+  if (limit) params.set('limit', String(limit))
+  const qs = params.toString()
+  return request('GET', `/detection/events${qs ? '?' + qs : ''}`)
+}
+
+export async function getNodeDetectionStatus(id) {
+  return request('GET', `/detection/nodes/${encodeURIComponent(id)}/status`)
+}
+
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 export async function getAuditLog(limit = 100) {

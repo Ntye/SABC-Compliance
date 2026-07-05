@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, LifeBuoy, Lock,
+  Activity, Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, LifeBuoy, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
@@ -90,6 +90,7 @@ export default function Sidebar() {
         {reportingOpen && (
           <>
             <NavItem path="/compliance" label={t('nav.scanReports')}  icon={ShieldCheck} />
+            <NavItem path="/detection"  label={t('nav.detectionEvents')} icon={Activity} />
             <NavItem path="/audit"      label={t('nav.exportedData')} icon={Download}    />
           </>
         )}
