@@ -14,9 +14,10 @@ from core.errors import (
     NotFoundError, SSHConnectError, UnauthorizedError, ValidationError,
 )
 from infrastructure.database.adapter import (
-    ApiKeyRepository, AuditRepository, ComplianceRepository, DetectionRepository,
-    JobRepository, NodeRepository, NodeGroupRepository, PlatformConfigRepository,
-    ProfileRepository, RuleRepository, UserRepository, UserGroupRepository, create_db,
+    ApiKeyRepository, AuditRepository, ComplianceGroupRepository, ComplianceRepository,
+    DetectionRepository, JobRepository, NodeRepository, NodeGroupRepository,
+    PlatformConfigRepository, ProfileRepository, RuleRepository, TierRepository,
+    UserRepository, UserGroupRepository, create_db,
 )
 from infrastructure.http.puppet_nc_client import PuppetNCClient
 from infrastructure.http.puppet_core_client import PuppetCoreClient
@@ -62,6 +63,10 @@ from modules.detection.usecases import (
     ReceiveDetectionEventUseCase,
 )
 from modules.profiles.usecases import ProfileUseCases
+from modules.tiers.usecases import (
+    AssignNodeTierUseCase, CreateTierUseCase, DeleteTierUseCase, GetTierUseCase,
+    ListTiersUseCase, SeedSystemTiersUseCase, UpdateTierUseCase,
+)
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
@@ -73,6 +78,7 @@ from interface.http.routes import profiles as profiles_routes
 from interface.http.routes import settings as settings_routes
 from interface.http.routes import assistant as assistant_routes
 from interface.http.routes import detection as detection_routes
+from interface.http.routes import tiers as tiers_routes
 from interface.http.routes import webhooks as webhooks_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
@@ -113,6 +119,8 @@ async def lifespan(app: FastAPI):
     group_repo = UserGroupRepository(session_factory)
     node_group_repo = NodeGroupRepository(session_factory)
     detection_repo = DetectionRepository(session_factory)
+    tier_repo = TierRepository(session_factory)
+    compliance_group_repo = ComplianceGroupRepository(session_factory)
 
     # -- External service clients --
     puppet_nc_client = PuppetNCClient(
@@ -403,6 +411,17 @@ async def lifespan(app: FastAPI):
     )
     settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
 
+    # -- Tiers (criticality classification; CIS Level → node scope) --
+    seed_tiers_uc = SeedSystemTiersUseCase(tier_repo)
+    tiers_routes.set_use_cases(
+        list_uc=ListTiersUseCase(tier_repo),
+        get_uc=GetTierUseCase(tier_repo),
+        create_uc=CreateTierUseCase(tier_repo, profile_repo),
+        update_uc=UpdateTierUseCase(tier_repo, profile_repo),
+        delete_uc=DeleteTierUseCase(tier_repo, node_repo),
+        assign_uc=AssignNodeTierUseCase(node_repo, tier_repo),
+    )
+
     # -- Offline AI assistant --
     assistant_routes.set_use_cases(ollama_client=ollama_client)
 
@@ -445,6 +464,14 @@ async def lifespan(app: FastAPI):
     #    then (re)generate the sabc_hardening Puppet module + sabc-baseline
     #    InSpec profile from it. Generation runs only when the referential was
     #    actually (re)seeded, so restarts don't rewrite the artifact tree.
+    # -- Bootstrap: seed the two undeletable system tiers --
+    try:
+        n = await seed_tiers_uc.execute()
+        if n:
+            logger.info("Seeded %d system tier(s)", n)
+    except Exception as exc:
+        logger.debug("Tier seeding: %s", exc)
+
     try:
         from core.domain.entities import SABC_BASELINE_PROFILE_ID
         from modules.profiles.artifact_generator import GenerateBuiltinArtifactsUseCase
@@ -574,6 +601,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(settings_routes.router)
     app.include_router(assistant_routes.router)
     app.include_router(detection_routes.router)
+    app.include_router(tiers_routes.router)
     app.include_router(webhooks_routes.router)
 
     from fastapi import APIRouter

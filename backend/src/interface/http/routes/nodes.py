@@ -34,6 +34,7 @@ class NodeResponse(BaseModel):
     puppet_enrolled: bool
     detection_enrolled: bool
     scan_ready: bool
+    tier_id: str | None = None
     last_seen: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -155,6 +156,7 @@ def _to_response(node, detect_job_id: str | None = None) -> NodeResponse:
         puppet_enrolled=node.puppet_enrolled,
         detection_enrolled=node.detection_enrolled,
         scan_ready=node.scan_ready,
+        tier_id=node.tier_id,
         last_seen=node.last_seen,
         created_at=node.created_at,
         updated_at=node.updated_at,

@@ -6,7 +6,7 @@ import socket
 import uuid
 from datetime import datetime
 
-from core.domain.entities import Node
+from core.domain.entities import NON_CRITICAL_TIER_ID, Node
 from core.domain.interfaces import IEventBus, INodeRepository, ISSHClient, IPlatformConfigRepository
 from core.errors import ConflictError, NotFoundError, SSHConnectError, ValidationError
 from core.events import Events
@@ -94,6 +94,8 @@ class RegisterNodeUseCase:
             description=data.get("description"),
             tags=data.get("tags", []),
             status="reachable",
+            # Every node starts Non-critical (Level 1 only); tier is audited on change.
+            tier_id=NON_CRITICAL_TIER_ID,
             last_seen=now,
             created_at=now,
             updated_at=now,
