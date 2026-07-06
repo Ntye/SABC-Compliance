@@ -10,6 +10,7 @@ import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
+import { utcDate } from '../lib/time.js'
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af', high: '#dc2626' }
 
@@ -89,7 +90,7 @@ function exportFleetCsv(nodes) {
       node.hostname, node.ip, node.os_family,
       r ? r.score : '', r ? r.passed_checks : '', r ? r.failed_checks : '',
       r ? (r.skipped_checks || 0) : '', r ? r.source : '',
-      r ? new Date(r.collected_at).toISOString() : '',
+      r ? utcDate(r.collected_at).toISOString() : '',
     ])
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -106,7 +107,7 @@ function exportFleetPdf(nodes, title) {
       <td><span style="color:${color};font-weight:700">${score !== null ? score + '%' : '—'}</span></td>
       <td>${r ? `<span style="color:#16a34a">${r.passed_checks}✓</span> <span style="color:#dc2626">${r.failed_checks}✗</span>` : '—'}</td>
       <td>${r ? r.source : '—'}</td>
-      <td>${r ? new Date(r.collected_at).toLocaleString() : '—'}</td>
+      <td>${r ? utcDate(r.collected_at).toLocaleString() : '—'}</td>
     </tr>`
   }).join('')
 
@@ -169,7 +170,7 @@ function ExportMenu({ nodes, t }) {
 
 function fmtRelative(isoStr) {
   if (!isoStr) return null
-  const diff = new Date(isoStr) - Date.now()
+  const diff = utcDate(isoStr) - Date.now()
   const abs = Math.abs(diff)
   if (abs < 60000) return diff < 0 ? 'just now' : 'in a moment'
   const mins = Math.round(abs / 60000)
@@ -574,7 +575,7 @@ export default function CompliancePage() {
                       {r ? <span className={badge(r.source === 'scan' ? 'info' : 'gray')}>{sourceLabel(t, r.source)}</span> : '—'}
                     </td>
                     <td className="px-5 py-3 text-gray-400">
-                      {r ? new Date(r.collected_at).toLocaleString() : t('compliance.neverScanned')}
+                      {r ? utcDate(r.collected_at).toLocaleString() : t('compliance.neverScanned')}
                     </td>
                     <td className="px-5 py-3 text-right">
                       <Link to={`/compliance/${node.node_id}`} className="inline-flex items-center gap-1 text-[12px] text-brand hover:underline">
