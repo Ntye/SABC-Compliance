@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Activity, ChevronDown, FileWarning, RefreshCw, ShieldOff } from 'lucide-react'
+import { Activity, ChevronDown, FileDiff, FileWarning, RefreshCw, ShieldOff } from 'lucide-react'
 import { jobWsUrl, listDetectionEvents, listNodes } from '../lib/api.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
+import DiffModal from '../components/detection/DiffModal.jsx'
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -47,12 +48,14 @@ function EventTypeBadge({ type }) {
 
 function ActorCell({ actor }) {
   if (!actor) return <span className="text-gray-300">—</span>
-  const label = actor.comm || actor.exe || `auid ${actor.auid}`
+  // Prefer the resolved login name ("who"), falling back to process/uid.
+  const label = actor.username || actor.comm || actor.exe || `auid ${actor.auid}`
+  const uid = actor.auid ?? actor.uid
   return (
     <span className="font-mono text-[11px] text-gray-600" title={JSON.stringify(actor)}>
       {label}
-      {actor.auid !== undefined && actor.auid !== null && (
-        <span className="text-gray-400"> · uid {actor.auid}</span>
+      {uid !== undefined && uid !== null && (
+        <span className="text-gray-400"> · uid {uid}</span>
       )}
     </span>
   )
@@ -67,6 +70,7 @@ export default function DetectionEventsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(false)
+  const [diffEvent, setDiffEvent] = useState(null)
   const wsRef = useRef(null)
 
   async function load(filter = nodeFilter) {
@@ -233,20 +237,16 @@ export default function DetectionEventsPage() {
                     </td>
                     <td className="px-4 py-2.5"><SuppressionBadge event={e} t={t} /></td>
                     <td className="px-4 py-2.5">
-                      {e.remediation_event_id ? (
-                        <Link
-                          to={`/compliance/${e.node_id}`}
-                          className="font-mono text-[10px] text-brand hover:underline"
-                          title={e.remediation_event_id}
-                        >
-                          {e.remediation_event_id.slice(0, 8)}
-                        </Link>
-                      ) : e.suppressed ? (
+                      {e.event_type === 'baseline' || (!e.prev_hash && !e.new_hash) ? (
                         <span className="text-gray-300">—</span>
                       ) : (
-                        <Link to={`/compliance/${e.node_id}`} className="text-[11px] text-brand hover:underline">
-                          {t('detection.viewRemediations')}
-                        </Link>
+                        <button
+                          onClick={() => setDiffEvent(e)}
+                          className="inline-flex items-center gap-1 text-[11px] text-brand hover:underline"
+                        >
+                          <FileDiff size={11} />
+                          {t('detection.viewDiff')}
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -256,6 +256,8 @@ export default function DetectionEventsPage() {
           </div>
         </div>
       )}
+
+      {diffEvent && <DiffModal event={diffEvent} onClose={() => setDiffEvent(null)} />}
     </div>
   )
 }

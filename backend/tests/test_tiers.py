@@ -8,8 +8,9 @@ from core.domain.entities import (
 )
 from core.errors import ForbiddenError, ValidationError
 from modules.tiers.usecases import (
-    CreateTierUseCase, DeleteTierUseCase, SeedSystemTiersUseCase,
-    UpdateTierUseCase, applicable_controls, control_is_applicable,
+    AssignGroupTierUseCase, CreateTierUseCase, DeleteTierUseCase,
+    SeedSystemTiersUseCase, UpdateTierUseCase, applicable_controls,
+    control_is_applicable,
 )
 
 
@@ -136,3 +137,58 @@ class TestCustomTierValidation:
         uc = DeleteTierUseCase(seeded_repo, _Nodes())
         with pytest.raises(ForbiddenError):
             await uc.execute(CRITICAL_TIER_ID)
+
+
+# ── Group tier assignment ─────────────────────────────────────────────────────
+
+class _FakeNode:
+    def __init__(self, nid, tier_id=NON_CRITICAL_TIER_ID):
+        self.id = nid
+        self.hostname = nid
+        self.tier_id = tier_id
+        self.updated_at = None
+
+
+class _FakeNodeRepo:
+    def __init__(self, nodes): self.nodes = {n.id: n for n in nodes}
+    async def find_by_id(self, i): return self.nodes.get(i)
+    async def update(self, n): self.nodes[n.id] = n
+
+
+class _FakeGroup:
+    def __init__(self, gid, node_ids): self.id, self.name, self.node_ids = gid, gid, node_ids
+
+
+class _FakeGroupRepo:
+    def __init__(self, groups): self.groups = {g.id: g for g in groups}
+    async def find_by_id(self, i): return self.groups.get(i)
+
+
+class TestGroupTierAssignment:
+    async def test_assigns_tier_to_all_members(self, seeded_repo) -> None:
+        await SeedSystemTiersUseCase(seeded_repo).execute()
+        nodes = _FakeNodeRepo([_FakeNode("a"), _FakeNode("b"), _FakeNode("c")])
+        groups = _FakeGroupRepo([_FakeGroup("g", ["a", "b"])])
+        uc = AssignGroupTierUseCase(groups, nodes, seeded_repo)
+
+        out = await uc.execute("g", CRITICAL_TIER_ID, actor="alice")
+
+        assert out["assigned"] == 2 and out["members"] == 2
+        assert nodes.nodes["a"].tier_id == CRITICAL_TIER_ID
+        assert nodes.nodes["b"].tier_id == CRITICAL_TIER_ID
+        assert nodes.nodes["c"].tier_id == NON_CRITICAL_TIER_ID  # not a member
+
+    async def test_missing_members_are_skipped(self, seeded_repo) -> None:
+        await SeedSystemTiersUseCase(seeded_repo).execute()
+        nodes = _FakeNodeRepo([_FakeNode("a")])
+        groups = _FakeGroupRepo([_FakeGroup("g", ["a", "ghost"])])
+        uc = AssignGroupTierUseCase(groups, nodes, seeded_repo)
+        out = await uc.execute("g", CRITICAL_TIER_ID)
+        assert out["assigned"] == 1 and out["members"] == 2
+
+    async def test_unknown_group_raises(self, seeded_repo) -> None:
+        from core.errors import NotFoundError
+        await SeedSystemTiersUseCase(seeded_repo).execute()
+        uc = AssignGroupTierUseCase(_FakeGroupRepo([]), _FakeNodeRepo([]), seeded_repo)
+        with pytest.raises(NotFoundError):
+            await uc.execute("ghost", CRITICAL_TIER_ID)

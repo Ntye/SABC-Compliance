@@ -7,11 +7,11 @@ import {
 } from 'recharts'
 import {
   ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
-  Download, ShieldAlert,
+  Download, ShieldAlert, ShieldCheck,
 } from 'lucide-react'
 import {
   getNodeCompliance, collectNodeCompliance, triggerRemediation,
-  getScanEngineStatus, installScanEngineOnController, recordExport,
+  getScanEngineStatus, installScanEngineOnController, recordExport, enforceReferential,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
@@ -501,6 +501,7 @@ export default function NodeCompliancePage() {
   }, [scanning])
   const [installing,     setInstalling]    = useState(false)
   const [remediating,    setRemediating]   = useState(false)
+  const [enforcing,      setEnforcing]     = useState(false)
   const [filter,         setFilter]        = useState('all')
   const [fwFilter,       setFwFilter]      = useState('all')
   const [sortMode,       setSortMode]      = useState('section')  // 'section' | 'risk'
@@ -602,6 +603,18 @@ export default function NodeCompliancePage() {
     }
   }
 
+  async function enforce() {
+    setEnforcing(true)
+    try {
+      const res = await enforceReferential({ nodeId: id })
+      toast(t('tiers.enforceLaunched', { n: res.launched ?? (res.jobs?.length || 0) }), 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setEnforcing(false)
+    }
+  }
+
   return (
     <div className="p-6 space-y-6 max-w-6xl">
       {/* Header */}
@@ -636,6 +649,15 @@ export default function NodeCompliancePage() {
           >
             <Play size={14} className={scanning ? 'animate-pulse' : ''} />
             {scanning ? t('compliance.scanning') : t('compliance.runScan')}
+          </button>
+          <button
+            onClick={enforce}
+            disabled={enforcing || !data?.puppet_enrolled}
+            title={!data?.puppet_enrolled ? t('compliance.puppetFirst') : t('tiers.enforceHint')}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ShieldCheck size={14} />
+            {enforcing ? t('compliance.enforcing') : t('tiers.enforce')}
           </button>
           <button
             onClick={remediate}

@@ -20,6 +20,7 @@ import UserGroupsPage from './pages/UserGroupsPage.jsx'
 import PermissionsPage from './pages/PermissionsPage.jsx'
 import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
 import NodeGroupDetailPage from './pages/NodeGroupDetailPage.jsx'
+import TiersPage from './pages/TiersPage.jsx'
 import TlsCertificatePage from './pages/TlsCertificatePage.jsx'
 import HelpPage from './pages/HelpPage.jsx'
 
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/compliance/:id" element={<NodeCompliancePage />} />
             <Route path="/profiles" element={<ProfilesPage />} />
             <Route path="/profiles/:id" element={<ProfileDetailPage />} />
+            <Route path="/tiers" element={<TiersPage />} />
             <Route path="/rules" element={<Navigate to="/profiles" replace />} />
             <Route path="/keys" element={<ApiKeysPage />} />
             <Route path="/audit" element={<AuditLogPage />} />

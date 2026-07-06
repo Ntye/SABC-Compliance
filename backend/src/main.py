@@ -65,7 +65,8 @@ from modules.detection.usecases import (
 )
 from modules.profiles.usecases import ProfileUseCases
 from modules.tiers.usecases import (
-    AssignNodeTierUseCase, CreateTierUseCase, DeleteTierUseCase, GetTierUseCase,
+    AssignGroupTierUseCase, AssignNodeTierUseCase, CreateTierUseCase,
+    DeleteTierUseCase, GetTierUseCase,
     ListTiersUseCase, SeedSystemTiersUseCase, UpdateTierUseCase,
 )
 from modules.compliance_groups.usecases import (
@@ -479,6 +480,7 @@ async def lifespan(app: FastAPI):
         update_uc=UpdateTierUseCase(tier_repo, profile_repo),
         delete_uc=DeleteTierUseCase(tier_repo, node_repo),
         assign_uc=AssignNodeTierUseCase(node_repo, tier_repo),
+        assign_group_uc=AssignGroupTierUseCase(node_group_repo, node_repo, tier_repo),
     )
 
     # -- Compliance node groups (platform-only; never Puppet NC) --

@@ -242,6 +242,44 @@ class AssignNodeTierUseCase:
                 "old_tier_id": old, "tier_id": tier.id, "tier_name": tier.name}
 
 
+class AssignGroupTierUseCase:
+    """Assign every member of a Puppet node group to a tier in one action.
+
+    Tier is a per-node attribute, so a group assignment simply stamps the tier on
+    each member. Audited per node via the same log line as single-node assigns.
+    """
+
+    def __init__(self, node_group_repo, node_repo: INodeRepository,
+                 tier_repo: ITierRepository) -> None:
+        self._groups = node_group_repo
+        self._nodes = node_repo
+        self._tiers = tier_repo
+
+    async def execute(self, group_id: str, tier_id: str, actor: str | None = None) -> dict:
+        group = await self._groups.find_by_id(group_id)
+        if not group:
+            raise NotFoundError(f"Node group '{group_id}' not found")
+        tier = await self._tiers.find_by_id(tier_id)
+        if not tier:
+            raise NotFoundError(f"Tier '{tier_id}' not found")
+
+        assigned = 0
+        for nid in group.node_ids or []:
+            node = await self._nodes.find_by_id(nid)
+            if node is None:
+                continue
+            old = node.tier_id
+            node.tier_id = tier.id
+            node.updated_at = datetime.utcnow()
+            await self._nodes.update(node)
+            assigned += 1
+            logger.info("AUDIT tier-assign(group=%s): node=%s tier %s -> %s by=%s",
+                        group.name, node.hostname, old, tier.id, actor or "unknown")
+        return {"group_id": group.id, "group_name": group.name,
+                "tier_id": tier.id, "tier_name": tier.name,
+                "members": len(group.node_ids or []), "assigned": assigned}
+
+
 async def resolve_node_tier(node, tier_repo: ITierRepository) -> Tier:
     """The node's tier, defaulting to Non-critical when unset/missing."""
     tid = getattr(node, "tier_id", None) or NON_CRITICAL_TIER_ID

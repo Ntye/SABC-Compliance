@@ -359,12 +359,61 @@ export async function runClosedLoop({ nodeId = null, groupId = null, description
   })
 }
 
+// Enforce the tier-applicable referential (sabc_hardening) so the internal
+// referential fully passes. Pass exactly one of nodeId / groupId. Returns the
+// launched Ansible job(s).
+export async function enforceReferential({ nodeId = null, groupId = null } = {}) {
+  return request('POST', '/compliance/enforce', { node_id: nodeId, group_id: groupId })
+}
+
 export async function getAutoScanSchedule() {
   return request('GET', '/compliance/schedule')
 }
 
 export async function setAutoScanSchedule({ enabled, interval, unit }) {
   return request('PUT', '/compliance/schedule', { enabled, interval, unit })
+}
+
+// Global closed-loop enforcement switch: when on, detected changes auto-remediate
+// after scanning; when off, detection scans only. (A node group's active_response
+// can still enable the loop for its own members regardless of this switch.)
+export async function getClosedLoopSetting() {
+  return request('GET', '/compliance/closed-loop/settings')
+}
+
+export async function setClosedLoopSetting(enabled) {
+  return request('PUT', '/compliance/closed-loop/settings', { enabled })
+}
+
+// ── Tiers (criticality classification) ────────────────────────────────────────
+
+export async function listTiers() {
+  return request('GET', '/tiers')
+}
+
+export async function getTier(id) {
+  return request('GET', `/tiers/${id}`)
+}
+
+export async function createTier(data) {
+  // { name, description?, includes_level_2?, extra_control_ids? }
+  return request('POST', '/tiers', data)
+}
+
+export async function updateTier(id, data) {
+  return request('PATCH', `/tiers/${id}`, data)
+}
+
+export async function deleteTier(id) {
+  return request('DELETE', `/tiers/${id}`)
+}
+
+export async function assignNodeTier(nodeId, tierId) {
+  return request('POST', `/tiers/assign/${encodeURIComponent(nodeId)}`, { tier_id: tierId })
+}
+
+export async function assignGroupTier(groupId, tierId) {
+  return request('POST', `/tiers/assign-group/${encodeURIComponent(groupId)}`, { tier_id: tierId })
 }
 
 // ── Rules ─────────────────────────────────────────────────────────────────────
@@ -519,6 +568,11 @@ export async function listDetectionEvents({ nodeId = null, limit = 100 } = {}) {
 
 export async function getNodeDetectionStatus(id) {
   return request('GET', `/detection/nodes/${encodeURIComponent(id)}/status`)
+}
+
+// Fetch a content-addressed file snapshot by hash for the detection diff modal.
+export async function getConfigBlob(sha256) {
+  return request('GET', `/detection/blobs/${encodeURIComponent(sha256)}`)
 }
 
 // ── Audit ─────────────────────────────────────────────────────────────────────

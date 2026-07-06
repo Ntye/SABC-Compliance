@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Server, Shield, RotateCw, Plus, Trash2, Save, Zap,
+  ArrowLeft, Server, Shield, ShieldCheck, RotateCw, Plus, Trash2, Save, Zap,
   Network, ChevronRight, CheckCircle, XCircle, Package, Play,
 } from 'lucide-react'
 import {
   getNodeGroup, updateNodeGroup, listNodes, listNodeGroupFacts, runClosedLoop,
-  applyGroupPackageRepo,
+  applyGroupPackageRepo, enforceReferential,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -345,6 +345,7 @@ export default function NodeGroupDetailPage() {
   const { data: nodes } = useApi(listNodes)
   const { data: facts } = useApi(listNodeGroupFacts)
   const [looping, setLooping] = useState(false)
+  const [enforcing, setEnforcing] = useState(false)
 
   async function handleClosedLoop() {
     const count = group?.matching_node_ids?.length ?? 0
@@ -360,6 +361,20 @@ export default function NodeGroupDetailPage() {
       toast(err.message, 'error')
     } finally {
       setLooping(false)
+    }
+  }
+
+  async function handleEnforce() {
+    const count = group?.matching_node_ids?.length ?? 0
+    if (count === 0) { toast('No member servers to enforce.', 'info'); return }
+    setEnforcing(true)
+    try {
+      const r = await enforceReferential({ groupId: id })
+      toast(t('tiers.enforceLaunched', { n: r.launched ?? (r.jobs?.length || 0) }), 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setEnforcing(false)
     }
   }
 
@@ -399,11 +414,18 @@ export default function NodeGroupDetailPage() {
             </div>
           </div>
         </div>
-        <button onClick={handleClosedLoop} disabled={looping || count === 0}
-          title={count === 0 ? 'No member servers' : 'Enforce with Puppet, then re-scan every member'}
-          className={`${btn(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
-          {looping ? <Spinner size={14} /> : <RotateCw size={14} />}Run closed loop
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={handleEnforce} disabled={enforcing || count === 0}
+            title={count === 0 ? 'No member servers' : t('tiers.enforceHint')}
+            className={`${btn(false)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+            {enforcing ? <Spinner size={14} /> : <ShieldCheck size={14} />}{t('tiers.enforce')}
+          </button>
+          <button onClick={handleClosedLoop} disabled={looping || count === 0}
+            title={count === 0 ? 'No member servers' : 'Enforce with Puppet, then re-scan every member'}
+            className={`${btn(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+            {looping ? <Spinner size={14} /> : <RotateCw size={14} />}Run closed loop
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4">

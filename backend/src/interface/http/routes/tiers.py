@@ -53,13 +53,16 @@ _create_uc = None
 _update_uc = None
 _delete_uc = None
 _assign_uc = None
+_assign_group_uc = None
 
 
 def set_use_cases(list_uc=None, get_uc=None, create_uc=None, update_uc=None,
-                  delete_uc=None, assign_uc=None) -> None:
+                  delete_uc=None, assign_uc=None, assign_group_uc=None) -> None:
     global _list_uc, _get_uc, _create_uc, _update_uc, _delete_uc, _assign_uc
+    global _assign_group_uc
     _list_uc, _get_uc = list_uc, get_uc
     _create_uc, _update_uc, _delete_uc, _assign_uc = create_uc, update_uc, delete_uc, assign_uc
+    _assign_group_uc = assign_group_uc
 
 
 def _resp(t) -> TierResponse:
@@ -130,5 +133,19 @@ async def assign_node_tier(node_id: str, body: AssignTierRequest,
                            principal: AuthPrincipal = Depends(require_operator)):
     try:
         return await _assign_uc.execute(node_id, body.tier_id, actor=getattr(principal, "name", None))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/assign-group/{group_id}", summary="Assign every member of a node group to a tier (audited)")
+async def assign_group_tier(group_id: str, body: AssignTierRequest,
+                            principal: AuthPrincipal = Depends(require_operator)):
+    """Stamp *tier_id* on every member of the Puppet node group. Tier is a
+    per-node attribute, so this simply applies the same tier across the group —
+    handy for classifying a whole environment at once."""
+    if _assign_group_uc is None:
+        raise HTTPException(status_code=503, detail="Group tier assignment not available")
+    try:
+        return await _assign_group_uc.execute(group_id, body.tier_id, actor=getattr(principal, "name", None))
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

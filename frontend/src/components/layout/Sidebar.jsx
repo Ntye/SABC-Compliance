@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Activity, Cpu, Download, FileCode, FileKey, Key, LayoutDashboard, Layers, LifeBuoy, Lock,
+  Activity, Cpu, Download, FileCode, FileKey, Gauge, Key, LayoutDashboard, Layers, LifeBuoy, Lock,
   LogOut, PlusCircle, Server, ShieldCheck, Terminal,
   User, UsersRound,
 } from 'lucide-react'
@@ -107,6 +107,7 @@ export default function Sidebar() {
             <NavItem path="/infrastructure" label={t('nav.inventory')}       icon={Cpu}      />
             <NavItem path="/jobs"           label={t('nav.activityFeed')}    icon={Terminal} />
             <NavItem path="/profiles"       label={t('nav.customProfiles')}  icon={FileCode} />
+            <NavItem path="/tiers"          label={t('nav.tiers')}           icon={Gauge}    />
           </>
         )}
 
