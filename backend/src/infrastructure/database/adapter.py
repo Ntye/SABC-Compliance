@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import (
     Column, Integer, LargeBinary, MetaData, String, Table, Text,
-    select, delete, update, func, text
+    and_, or_, select, delete, update, func, text
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -198,6 +198,18 @@ audit_log_table = Table(
     Column("user_agent", Text),
     Column("duration_ms", Integer),
     Column("api_key_name", Text),
+    # ── Attribution + structured action metadata (WHO did WHAT) ────────────────
+    # Populated for every request from the resolved principal, and enriched with
+    # action/resource fields for explicit events such as exports.
+    Column("user_id", Text),
+    Column("user_name", Text),
+    Column("user_role", Text),
+    Column("action", Text),           # e.g. "export"
+    Column("resource_type", Text),    # e.g. "profile" | "fleet" | "node"
+    Column("resource_id", Text),
+    Column("resource_name", Text),
+    Column("format", Text),           # csv | json | pdf
+    Column("detail", Text),           # free-form JSON (row counts, filenames, …)
 )
 
 platform_config_table = Table(
@@ -465,6 +477,17 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                     await conn.execute(text(f"ALTER TABLE profile_controls ADD COLUMN {col} {typ}"))
                 except Exception:
                     pass
+            # Audit-log attribution + action metadata (who exported what).
+            for col, typ in [
+                ("user_id", "TEXT"), ("user_name", "TEXT"), ("user_role", "TEXT"),
+                ("action", "TEXT"), ("resource_type", "TEXT"),
+                ("resource_id", "TEXT"), ("resource_name", "TEXT"),
+                ("format", "TEXT"), ("detail", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
             try:
                 await conn.execute(text("ALTER TABLE nodes ADD COLUMN tier_id TEXT"))
             except Exception:
@@ -604,6 +627,15 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("compliance_reports", "keyframe_id",           "TEXT"),
             ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
             ("profiles",           "framework",             "TEXT"),
+            ("audit_log",          "user_id",               "TEXT"),
+            ("audit_log",          "user_name",             "TEXT"),
+            ("audit_log",          "user_role",             "TEXT"),
+            ("audit_log",          "action",                "TEXT"),
+            ("audit_log",          "resource_type",         "TEXT"),
+            ("audit_log",          "resource_id",           "TEXT"),
+            ("audit_log",          "resource_name",         "TEXT"),
+            ("audit_log",          "format",                "TEXT"),
+            ("audit_log",          "detail",                "TEXT"),
         ]
         for table, col, typedef in pg_cols:
             try:
@@ -1376,12 +1408,17 @@ class UserRepository(IUserRepository):
 # ── Audit Repository ──────────────────────────────────────────────────────────
 
 class AuditRepository(IAuditRepository):
+    _COLUMNS = {c.name for c in audit_log_table.columns}
+
     def __init__(self, session: async_sessionmaker) -> None:
         self._session = session
 
     async def save(self, entry: dict) -> None:
+        # Only pass keys that map to real columns so a caller with extra metadata
+        # never breaks the insert.
+        values = {k: v for k, v in entry.items() if k in self._COLUMNS and k != "id"}
         async with self._session() as s:
-            await s.execute(audit_log_table.insert().values(**entry))
+            await s.execute(audit_log_table.insert().values(**values))
             await s.commit()
 
     async def find_recent(self, limit: int) -> list[dict]:
@@ -1390,6 +1427,73 @@ class AuditRepository(IAuditRepository):
                 select(audit_log_table).order_by(audit_log_table.c.id.desc()).limit(limit)
             )).all()
             return [dict(r._mapping) for r in rows]
+
+    async def find(
+        self,
+        *,
+        action: str | None = None,
+        user: str | None = None,
+        resource_type: str | None = None,
+        q: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """Filtered, paginated audit query. Returns (rows, total_matching)."""
+        t = audit_log_table
+        conds = []
+        if action:
+            conds.append(t.c.action == action)
+        if resource_type:
+            conds.append(t.c.resource_type == resource_type)
+        if user:
+            like = f"%{user}%"
+            conds.append(or_(t.c.user_name.ilike(like),
+                             t.c.user_id.ilike(like),
+                             t.c.api_key_name.ilike(like)))
+        if q:
+            like = f"%{q}%"
+            conds.append(or_(t.c.resource_name.ilike(like),
+                             t.c.resource_id.ilike(like),
+                             t.c.path.ilike(like),
+                             t.c.detail.ilike(like)))
+        if date_from:
+            conds.append(t.c.ts >= date_from)
+        if date_to:
+            conds.append(t.c.ts <= date_to)
+        where = and_(*conds) if conds else None
+
+        base = select(t)
+        cnt = select(func.count()).select_from(t)
+        if where is not None:
+            base = base.where(where)
+            cnt = cnt.where(where)
+        async with self._session() as s:
+            total = (await s.execute(cnt)).scalar_one()
+            rows = (await s.execute(
+                base.order_by(t.c.id.desc()).limit(limit).offset(offset)
+            )).all()
+            return [dict(r._mapping) for r in rows], int(total)
+
+    async def facets(self) -> dict:
+        """Distinct values for the filter dropdowns (users / actions / types)."""
+        t = audit_log_table
+        async with self._session() as s:
+            users = (await s.execute(
+                select(t.c.user_name).where(t.c.user_name.isnot(None)).distinct()
+            )).scalars().all()
+            actions = (await s.execute(
+                select(t.c.action).where(t.c.action.isnot(None)).distinct()
+            )).scalars().all()
+            rtypes = (await s.execute(
+                select(t.c.resource_type).where(t.c.resource_type.isnot(None)).distinct()
+            )).scalars().all()
+        return {
+            "users": sorted({u for u in users if u}),
+            "actions": sorted({a for a in actions if a}),
+            "resource_types": sorted({r for r in rtypes if r}),
+        }
 
 
 # ── Rule Repository ───────────────────────────────────────────────────────────

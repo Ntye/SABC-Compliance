@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import {
   getNodeCompliance, collectNodeCompliance, triggerRemediation,
-  getScanEngineStatus, installScanEngineOnController,
+  getScanEngineStatus, installScanEngineOnController, recordExport,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
@@ -41,6 +41,7 @@ function exportNodeJson(data, report) {
   }
   downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
     `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.json`)
+  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'json', count: (report.details || []).length })
 }
 
 function exportNodeCsv(data, report) {
@@ -52,6 +53,7 @@ function exportNodeCsv(data, report) {
   const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
   downloadBlob(csv, 'text/csv',
     `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.csv`)
+  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'csv', count: (report.details || []).length })
 }
 
 function exportNodePdf(data, report) {
@@ -88,6 +90,7 @@ function exportNodePdf(data, report) {
 <tbody>${rows}</tbody></table></body></html>`
   const win = window.open('', '_blank')
   if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
+  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'pdf', count: (report.details || []).length })
 }
 
 function ExportMenu({ nodeData, report, t }) {

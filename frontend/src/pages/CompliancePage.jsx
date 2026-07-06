@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts'
 import { ShieldCheck, RefreshCw, ChevronRight, AlertTriangle, Play, Download, ChevronDown, Clock, Settings } from 'lucide-react'
-import { getComplianceSummary, collectNodeCompliance, getAutoScanSchedule, setAutoScanSchedule, getUserRole } from '../lib/api.js'
+import { getComplianceSummary, collectNodeCompliance, getAutoScanSchedule, setAutoScanSchedule, getUserRole, recordExport } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
@@ -80,6 +80,7 @@ function exportFleetJson(nodes) {
   }
   downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
     `sabc-fleet-${new Date().toISOString().slice(0, 10)}.json`)
+  recordExport({ resource_type: 'fleet', resource_name: 'Fleet compliance', format: 'json', count: nodes.length })
 }
 
 function exportFleetCsv(nodes) {
@@ -95,6 +96,7 @@ function exportFleetCsv(nodes) {
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
   downloadBlob(csv, 'text/csv', `sabc-fleet-${new Date().toISOString().slice(0, 10)}.csv`)
+  recordExport({ resource_type: 'fleet', resource_name: 'Fleet compliance', format: 'csv', count: nodes.length })
 }
 
 function exportFleetPdf(nodes, title) {
@@ -126,6 +128,7 @@ function exportFleetPdf(nodes, title) {
 
   const win = window.open('', '_blank')
   if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
+  recordExport({ resource_type: 'fleet', resource_name: 'Fleet compliance', format: 'pdf', count: nodes.length })
 }
 
 // ── Export dropdown ───────────────────────────────────────────────────────────

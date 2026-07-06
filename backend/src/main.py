@@ -87,6 +87,7 @@ from interface.http.routes import detection as detection_routes
 from interface.http.routes import tiers as tiers_routes
 from interface.http.routes import compliance_groups as compliance_groups_routes
 from interface.http.routes import webhooks as webhooks_routes
+from interface.http.routes import audit as audit_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -478,6 +479,7 @@ async def lifespan(app: FastAPI):
 
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
+    audit_routes.set_repo(audit_repo)
 
     # -- Bootstrap: seed default groups BEFORE init admin user --
     try:
@@ -655,6 +657,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(tiers_routes.router)
     app.include_router(compliance_groups_routes.router)
     app.include_router(webhooks_routes.router)
+    app.include_router(audit_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

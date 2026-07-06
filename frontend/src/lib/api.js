@@ -523,8 +523,32 @@ export async function getNodeDetectionStatus(id) {
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
-export async function getAuditLog(limit = 100) {
-  return request('GET', `/audit?limit=${limit}`)
+export async function getAuditLog(filters = {}) {
+  const params = new URLSearchParams()
+  const { action, user, resource_type, q, date_from, date_to, limit = 100, offset = 0 } = filters
+  if (action)        params.set('action', action)
+  if (user)          params.set('user', user)
+  if (resource_type) params.set('resource_type', resource_type)
+  if (q)             params.set('q', q)
+  if (date_from)     params.set('date_from', date_from)
+  if (date_to)       params.set('date_to', date_to)
+  params.set('limit', limit)
+  params.set('offset', offset)
+  return request('GET', `/audit?${params.toString()}`)
+}
+
+export async function getAuditFacets() {
+  return request('GET', '/audit/facets')
+}
+
+// Record a browser-side export (fleet / node CSV·JSON·PDF) so it is attributed
+// to the signed-in user in the audit log. Best-effort — never block the download.
+export async function recordExport(payload) {
+  try {
+    return await request('POST', '/audit/exports', payload)
+  } catch {
+    return null
+  }
 }
 
 // ── Settings: TLS certificate ───────────────────────────────────────────────

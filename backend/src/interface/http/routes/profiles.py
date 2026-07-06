@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -216,13 +216,27 @@ async def duplicate_profile(
 
 
 @router.get("/{profile_id}/export.csv", summary="Export a profile's controls as CSV")
-async def export_csv(profile_id: str, principal: AuthPrincipal = Depends(get_current_principal)):
+async def export_csv(
+    profile_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
     """Full CSV of the profile's controls — edit offline and re-upload via
     *Import CSV* to apply changes, or use it as the base for a new profile."""
     try:
         filename, content = await _uc.export_profile_csv(profile_id)
     except ValidationError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    # Record who exported which profile (attributable even for direct API/curl).
+    from interface.http.routes.audit import record_export
+    profile = await _uc.get_profile(profile_id)
+    await record_export(
+        request, principal,
+        resource_type="profile", resource_id=profile_id,
+        resource_name=(profile.name if profile else profile_id),
+        fmt="csv", count=(profile.control_count if profile else None),
+        detail={"filename": filename},
+    )
     return PlainTextResponse(
         content=content,
         media_type="text/csv; charset=utf-8",

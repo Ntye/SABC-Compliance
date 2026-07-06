@@ -156,21 +156,30 @@ def set_use_cases(
 # ── Auth dependency ───────────────────────────────────────────────────────────
 
 async def get_current_principal(
+    request: Request,
     x_api_key: str | None = Header(None, alias="X-API-Key"),
     authorization: str | None = Header(None),
 ) -> AuthPrincipal:
-    """Authenticate via X-API-Key header or Authorization: Bearer JWT."""
+    """Authenticate via X-API-Key header or Authorization: Bearer JWT.
+
+    The resolved principal is stashed on ``request.state`` so the audit
+    middleware can attribute every request to a real user.
+    """
     if x_api_key:
         try:
             key = await _authenticate_uc.execute(x_api_key)
-            return AuthPrincipal(id=key.id, name=key.name, role=key.role, source="api_key")
+            principal = AuthPrincipal(id=key.id, name=key.name, role=key.role, source="api_key")
+            request.state.principal = principal
+            return principal
         except UnauthorizedError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
 
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
         try:
-            return await _decode_jwt_uc.execute(token)
+            principal = await _decode_jwt_uc.execute(token)
+            request.state.principal = principal
+            return principal
         except UnauthorizedError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
 

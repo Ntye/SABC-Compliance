@@ -97,6 +97,13 @@ class IAuditRepository(ABC):
     async def save(self, entry: dict) -> None: ...
     @abstractmethod
     async def find_recent(self, limit: int) -> list[dict]: ...
+    @abstractmethod
+    async def find(self, *, action: str | None = None, user: str | None = None,
+                   resource_type: str | None = None, q: str | None = None,
+                   date_from: str | None = None, date_to: str | None = None,
+                   limit: int = 100, offset: int = 0) -> tuple[list[dict], int]: ...
+    @abstractmethod
+    async def facets(self) -> dict: ...
 
 
 class IRuleRepository(ABC):
