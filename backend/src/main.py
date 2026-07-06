@@ -54,9 +54,9 @@ from modules.provisioning.usecases import (
     SetMasterHostUseCase, StartJobUseCase, SwitchPuppetEditionUseCase,
 )
 from modules.compliance.usecases import (
-    CollectNodeComplianceUseCase, GetComplianceSummaryUseCase,
-    GetNodeComplianceUseCase, ScanComplianceGroupUseCase,
-    TriggerRemediationUseCase, RunClosedLoopUseCase,
+    CollectNodeComplianceUseCase, EnforceReferentialUseCase,
+    GetComplianceSummaryUseCase, GetNodeComplianceUseCase,
+    ScanComplianceGroupUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.detection.usecases import (
@@ -396,12 +396,26 @@ async def lifespan(app: FastAPI):
         ws_manager=ws_manager,
         concurrency=settings.closed_loop_concurrency,
     )
+    # Enforce the generated sabc_hardening referential (tier- and family-scoped)
+    # directly on a node or node group via an Ansible `puppet apply` job, so the
+    # internal referential fully passes. Module source mirrors the seed-time
+    # generation path (…/puppet/modules/sabc_hardening next to the ansible dir).
+    _module_base = os.path.dirname(os.path.abspath(settings.ansible_dir or "/app/ansible"))
+    enforce_uc = EnforceReferentialUseCase(
+        node_repo=node_repo,
+        start_job_uc=start_job_uc,
+        scan_resolver=scan_resolver,
+        profile_repo=profile_repo,
+        module_src=os.path.join(_module_base, "puppet", "modules", "sabc_hardening"),
+        get_group_uc=get_node_group_uc,
+    )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
         node_uc=GetNodeComplianceUseCase(node_repo, compliance_repo),
         collect_uc=collect_uc,
         remediate_uc=remediate_uc,
         closed_loop_uc=closed_loop_uc,
+        enforce_uc=enforce_uc,
         config_repo=platform_config_repo,
     )
 

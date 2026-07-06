@@ -47,6 +47,12 @@ def _puppet_key(control: ProfileControl) -> str:
     return seg
 
 
+# Public alias: enforcement resolves which sabc_hardening::<key> classes to
+# apply for a node, and must derive the same keys this generator wrote.
+def puppet_key(control: ProfileControl) -> str:
+    return _puppet_key(control)
+
+
 def extract_shell(guidance: str | None) -> str:
     """Extract a runnable shell body from a Validate/Configure cell.
 

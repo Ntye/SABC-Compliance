@@ -36,6 +36,12 @@ class ScanScheduleRequest(BaseModel):
 class ClosedLoopSettingRequest(BaseModel):
     enabled: bool = False
 
+class EnforceRequest(BaseModel):
+    # Exactly one of node_id / group_id. Apply the tier-applicable referential
+    # (sabc_hardening) so the internal referential fully passes on the target.
+    node_id: str | None = None
+    group_id: str | None = None
+
 
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
@@ -44,18 +50,20 @@ _node_uc = None
 _collect_uc = None
 _remediate_uc = None
 _closed_loop_uc = None
+_enforce_uc = None
 _config_repo = None
 
 
 def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=None,
-                  closed_loop_uc=None) -> None:
+                  closed_loop_uc=None, enforce_uc=None) -> None:
     global _summary_uc, _node_uc, _collect_uc, _remediate_uc, _config_repo
-    global _closed_loop_uc
+    global _closed_loop_uc, _enforce_uc
     _summary_uc = summary_uc
     _node_uc = node_uc
     _collect_uc = collect_uc
     _remediate_uc = remediate_uc
     _closed_loop_uc = closed_loop_uc
+    _enforce_uc = enforce_uc
     _config_repo = config_repo
 
 
@@ -130,6 +138,29 @@ async def run_closed_loop(
             description=body.description,
             rescan=body.rescan,
         )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/enforce", summary="Enforce the full referential on a node or a node group")
+async def enforce_referential(
+    body: EnforceRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Apply the generated ``sabc_hardening`` module — scoped to the target's
+    tier- and family-applicable controls — so the internal referential fully
+    passes. Provide exactly one of ``{"node_id": "..."}`` or
+    ``{"group_id": "..."}`` (a Puppet node group; every member is enforced).
+
+    Returns the launched Ansible job(s); each streams progress on its own job
+    channel. Follow with a compliance scan to confirm the node now passes.
+    """
+    if _enforce_uc is None:
+        raise HTTPException(status_code=503, detail="Referential enforcement not available")
+    try:
+        return await _enforce_uc.execute(node_id=body.node_id, group_id=body.group_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:

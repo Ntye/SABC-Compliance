@@ -841,3 +841,128 @@ class RunClosedLoopUseCase:
             })
         except Exception as exc:
             logger.error("WebSocket broadcast failed [%s/%s]: %s", node_id, phase, exc)
+
+
+class EnforceReferentialUseCase:
+    """Enforce the SABC hardening referential on a node — or every member of a
+    node group — so the internal referential fully passes.
+
+    Where the closed loop runs whatever catalog the master already assigns,
+    THIS makes the generated ``sabc_hardening`` module land and apply directly:
+    an Ansible job pushes the module to the node and runs ``puppet apply``,
+    scoped to exactly the controls the node's TIER and OS family make applicable
+    (the same set the scan checks). Enforce → scan therefore converges on 100%.
+
+    Applying the tier is implicit: the applicable-control set already encodes the
+    tier's level gating, so enforcing it *is* applying the tiering to the target.
+
+    Exactly one of ``node_id`` / ``group_id`` must be supplied. Group membership
+    resolves through the injected ``get_group_uc`` (GetNodeGroupUseCase), which
+    returns ``(group, [member_node_ids])`` — no cross-module import.
+    """
+
+    PLAYBOOK = "enforce_referential.yml"
+
+    def __init__(
+        self,
+        node_repo: INodeRepository,
+        start_job_uc,                 # StartJobUseCase
+        scan_resolver,                # ScanPlanResolver
+        profile_repo,                 # IProfileRepository
+        module_src: str,
+        get_group_uc=None,            # GetNodeGroupUseCase
+    ) -> None:
+        self._nodes = node_repo
+        self._start = start_job_uc
+        self._resolver = scan_resolver
+        self._profiles = profile_repo
+        self._module_src = module_src
+        self._get_group = get_group_uc
+        # control_id → puppet class key, cached per profile across a run.
+        self._key_maps: dict[str, dict[str, str]] = {}
+
+    async def execute(
+        self, node_id: str | None = None, group_id: str | None = None
+    ) -> dict:
+        if bool(node_id) == bool(group_id):
+            raise ValidationError("Provide exactly one of node_id or group_id.")
+
+        if group_id:
+            if self._get_group is None:
+                raise ValidationError("Group enforcement is not available (no group resolver).")
+            group, member_ids = await self._get_group.execute(group_id)
+            target = {"kind": "group", "id": group_id, "name": group.name}
+            node_ids = list(dict.fromkeys(member_ids))
+        else:
+            node = await _resolve_node(self._nodes, node_id)
+            target = {"kind": "node", "id": node.id, "name": node.hostname}
+            node_ids = [node.id]
+
+        self._key_maps.clear()
+        jobs: list[dict] = []
+        launched = skipped = 0
+        for nid in node_ids:
+            node = await self._nodes.find_by_id(nid)
+            if node is None:
+                jobs.append({"node_id": nid, "status": "skipped",
+                             "reason": "node not found"})
+                skipped += 1
+                continue
+
+            keys = await self._resolve_keys(node)
+            if not keys:
+                jobs.append({"node_id": nid, "hostname": node.hostname,
+                             "status": "skipped",
+                             "reason": "no tier-applicable controls resolved"})
+                skipped += 1
+                continue
+
+            job = await self._start.execute({
+                "type": "enforce_referential",
+                "node_id": nid,
+                "playbook": self.PLAYBOOK,
+                "extra_vars": {
+                    "sabc_module_src": self._module_src,
+                    "sabc_controls": keys,
+                },
+            })
+            jobs.append({"node_id": nid, "hostname": node.hostname,
+                         "status": "launched", "job_id": job.id,
+                         "controls": len(keys)})
+            launched += 1
+
+        return {
+            "target": target,
+            "requested": len(node_ids),
+            "launched": launched,
+            "skipped": skipped,
+            "jobs": jobs,
+        }
+
+    async def _resolve_keys(self, node: Node) -> list[str]:
+        """The sabc_hardening class keys applicable to *node* (tier × family)."""
+        plan = await self._resolver.for_node(node)
+        keys: list[str] = []
+        seen: set[str] = set()
+        for spec in plan.specs:
+            key_map = await self._key_map(spec.profile_id)
+            for cid in spec.applicable_control_ids:
+                key = key_map.get(cid)
+                if key and key not in seen:
+                    seen.add(key)
+                    keys.append(key)
+        return sorted(keys)
+
+    async def _key_map(self, profile_id: str) -> dict[str, str]:
+        cached = self._key_maps.get(profile_id)
+        if cached is not None:
+            return cached
+        from modules.profiles.artifact_generator import puppet_key
+        profile = await self._profiles.find_by_id(profile_id)
+        mapping: dict[str, str] = {}
+        if profile is not None:
+            for c in profile.controls:
+                if c.control_id:
+                    mapping[c.control_id] = puppet_key(c)
+        self._key_maps[profile_id] = mapping
+        return mapping

@@ -1,0 +1,131 @@
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Enforce the SABC hardening referential on ONE node.
+#
+# This is what makes "enforce the referential so everything passes" real for a
+# node without depending on a Puppet master classifying it: the generated
+# sabc_hardening module (one class per control, each branching on os.family) is
+# pushed to the node and applied locally with `puppet apply`, scoped to the
+# controls the node's TIER + OS family make applicable. Re-running is safe —
+# every control's enforcement is guarded by its own Validate check, so a
+# converged node changes nothing.
+#
+# Required extra-vars (injected by the platform):
+#   sabc_module_src   absolute path to the generated module on the controller
+#                     (…/puppet/modules/sabc_hardening in-container)
+#   sabc_controls     Puppet array of tier-applicable control keys to enforce.
+#                     Omitted / empty is DELIBERATELY NOT "all" here — the
+#                     platform always passes the resolved subset, so an empty
+#                     list means "nothing applicable" and we skip the apply.
+# ─────────────────────────────────────────────────────────────────────────────
+- name: Enforce the SABC referential on the node
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    sabc_module_src: /app/puppet/modules/sabc_hardening
+    sabc_controls: []
+    module_root: /opt/sabc/puppet/modules
+    apply_manifest: /opt/sabc/puppet/apply_referential.pp
+    puppet_bin: /opt/puppetlabs/bin/puppet
+
+  tasks:
+    - name: Verify the generated module is present on the controller
+      stat:
+        path: "{{ sabc_module_src }}/manifests/init.pp"
+      register: mod_src
+      delegate_to: localhost
+      become: no
+
+    - name: Fail with a clear message when the module source is missing
+      fail:
+        msg: >-
+          sabc_hardening module not found at {{ sabc_module_src }} on the
+          controller. It is generated from the referential at boot — reseed the
+          SABC Baseline or pass sabc_module_src=<path>.
+      when: not mod_src.stat.exists
+
+    - name: Verify Puppet is installed on the node
+      stat:
+        path: "{{ puppet_bin }}"
+      register: puppet_bin_stat
+
+    - name: Fail when Puppet is missing (enroll the Puppet agent first)
+      fail:
+        msg: >-
+          Puppet is not installed at {{ puppet_bin }} on this node. Enroll the
+          Puppet agent before enforcing the referential.
+      when: not puppet_bin_stat.stat.exists
+
+    - name: Ensure the local module root exists
+      file:
+        path: "{{ module_root }}/sabc_hardening"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Trailing slash on src copies the CONTENTS into the module directory.
+    - name: Push the generated sabc_hardening module to the node
+      copy:
+        src: "{{ sabc_module_src }}/"
+        dest: "{{ module_root }}/sabc_hardening/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Skip enforcement when no controls are applicable
+      debug:
+        msg: >-
+          No tier-applicable controls resolved for this node — nothing to
+          enforce.
+      when: sabc_controls | length == 0
+
+    # Materialise the class declaration as a manifest rather than a `-e`
+    # one-liner: the control keys go into a real Puppet array of single-quoted
+    # strings, sidestepping the shell-quoting hazard of embedding JSON in a
+    # command argument. Keys are already sanitised to [a-z0-9_], so no escaping.
+    - name: Ensure the manifest directory exists
+      file:
+        path: "{{ apply_manifest | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: sabc_controls | length > 0
+
+    - name: Write the tier-scoped apply manifest
+      copy:
+        dest: "{{ apply_manifest }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by SABC Compliance. Enforce the tier-applicable subset of the
+          # generated sabc_hardening referential on this node.
+          class { 'sabc_hardening':
+            controls => [{% for c in sabc_controls %}'{{ c }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+          }
+      when: sabc_controls | length > 0
+
+    # detailed-exitcodes: 0 = no changes, 2 = changes applied, 4/6 = failures.
+    - name: Apply the referential (puppet apply, tier-scoped)
+      command: >-
+        {{ puppet_bin }} apply
+        --modulepath {{ module_root }}
+        --detailed-exitcodes
+        {{ apply_manifest }}
+      register: apply
+      changed_when: apply.rc == 2
+      failed_when: apply.rc not in [0, 2]
+      when: sabc_controls | length > 0
+
+    - name: Report enforcement result
+      debug:
+        msg: >-
+          sabc_hardening enforced on {{ inventory_hostname }} —
+          {{ sabc_controls | length }} control(s),
+          {{ 'changes applied' if (apply.rc | default(0)) == 2 else 'already compliant' }}.
+      when: sabc_controls | length > 0
