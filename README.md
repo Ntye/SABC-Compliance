@@ -63,7 +63,7 @@ no hard-coded backend hostname in the browser.
 The backend exposes port 3000 separately for direct API access and the Swagger docs
 (`http://localhost:3000/docs`).
 
-### Detection → remediation loop
+### Detection → scan (→ optional remediation) loop
 
 The **detection plane is the custom SABC detection agent** (there is no
 third-party SIEM). Each event the agent reports is stored as tamper-evident
@@ -77,12 +77,21 @@ guard, in this order:
 2. **`puppet_running` flag** — the agent saw Puppet's catalog-run lock file →
    stored `suppressed` (scheduled converge).
 3. **Genuine drift** — stored live, `compliance.violation_detected` is
-   published, and a Puppet enforcement run is triggered with
-   `detection_event_id` linking the remediation back to its cause.
+   published, and a **compliance scan always runs** so the dashboard reflects
+   the node's true posture. **Remediation is decoupled**: Puppet enforcement
+   runs only when the **closed loop** is enabled — globally
+   (`detection_closed_loop_enabled`, toggled on the Tiers page) or for a Puppet
+   node group the node belongs to (`active_response_enabled`). With the loop
+   off, the platform observes and scans but never auto-enforces.
+
+Every event records **who** made the change: the agent enriches it from auditd
+(`auid`/`uid`/`exe`/`comm`) and resolves the login uid to a username. The
+**Detection Events** page shows the actor, and **view diff** opens a modal that
+diffs the previous snapshot against the new one (by content hash).
 
 The agent never suppresses locally — every change reaches the platform, so the
-evidence trail on the **Detection Events** page is complete either way.
-Snapshots are evidence only; the platform never rolls files back from blobs.
+evidence trail is complete either way. Snapshots are evidence only; the platform
+never rolls files back from blobs.
 
 ---
 
@@ -356,9 +365,12 @@ to it:
   set of real Level-2 controls.
 
 Every node has exactly one tier (Non-critical on enrolment; reassignment is
-audited). The generated Puppet classes and InSpec controls exist for **all**
-levels/families — the tier simply gates which ones a given node enforces and is
-scanned against.
+audited). A tier can be assigned to a **single node** or, in one action, to
+**every member of a Puppet node group** (Tiers page → *Apply a tier*). The
+generated Puppet classes and InSpec controls exist for **all** levels/families —
+the tier simply gates which ones a given node enforces and is scanned against.
+Assigning a tier and then **enforcing** it fully solves the internal referential
+on that target.
 
 ### Compliance node groups (distinct from Puppet node groups)
 
@@ -383,24 +395,42 @@ node's group memberships (falling back to the built-in SABC Baseline when the
 node is in no group); the auto-scan scheduler iterates compliance groups + their
 members.
 
-### Remediation
+### Enforce the referential (make everything pass)
 
-On the Compliance page, click **Remediate** on a failing node. This runs the
-generated `sabc_hardening` classes for the node's tier-applicable controls
-(`puppet agent -t` over SSH). Job output streams live in the **Jobs** page.
+To bring a node — or a whole node group — into full compliance, click
+**Enforce referential** (on the node's compliance page, the node group page, or
+the Tiers page). This pushes the generated `sabc_hardening` module to the target
+and runs `puppet apply`, scoped to exactly the controls the target's **tier** and
+**OS family** make applicable — the same set the scan checks — so *enforce → scan*
+converges on 100%. It works whether or not the node is classified on a Puppet
+master, and is idempotent (each control is guarded by its own Validate check).
+
+Enforcement is exposed as `POST /compliance/enforce` (`{node_id | group_id}`) and
+runs as an Ansible job whose output streams in the **Jobs** page. The lighter
+**Remediate** button still runs `puppet agent -t` against whatever catalog the
+master assigns.
+
+### Tiers page
+
+The **Tiers** page (under *Manage*) lists every tier, lets admins create/edit/
+delete custom tiers, assigns a tier to a **node or an entire node group**, and
+enforces the referential on that target in one place. It also hosts the global
+**closed-loop** switch.
 
 ### Closed feedback loop
 
 ```
 Detection agent spots a config change (inotify)
         ↓
-Event posted to the platform (evidence stored: hashes, metadata, content)
+Event posted to the platform (evidence stored: hashes, metadata, content, actor)
         ↓
 Suppression rules applied (active remediation window? scheduled Puppet run?)
         ↓
-Genuine drift → Puppet remediation job triggered automatically
+Genuine drift → compliance SCAN always runs (dashboard reflects true posture)
         ↓
-Compliance status updated; event visible on the Detection Events page
+Closed loop enabled? → Puppet enforcement job; otherwise scan only
+        ↓
+Compliance status updated; event + diff visible on the Detection Events page
 ```
 
 ---
