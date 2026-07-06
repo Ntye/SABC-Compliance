@@ -66,6 +66,21 @@ class TestExtractShell:
         assert extract_shell("```\n# crontab -u root -e\n```") == ""
         assert extract_shell("```\n# grub-mkpasswd-pbkdf2\n```") == ""
 
+    def test_config_line_with_keyword_substring_not_treated_as_script(self) -> None:
+        # "Defaults logfile=..." must NOT be mistaken for a script because
+        # "logfile" contains "fi" — that bug bypassed the config filter and ran
+        # sudoers content as a command.
+        assert extract_shell('```\nDefaults logfile="/var/log/sudo.log"\n```') == ""
+
+    def test_limits_conf_and_key_value_config_are_pending(self) -> None:
+        assert extract_shell("```\n* hard core 0\n```") == ""
+        assert extract_shell("```\n[Time]\nNTP=time.nist.gov\nFallbackNTP=a.b.c\n```") == ""
+
+    def test_real_bash_script_still_detected(self) -> None:
+        # The word-bounded detector must still recognise genuine scripts.
+        s = extract_shell("```\nmodule_fix()\n{\n modprobe -r x\n}\nfor m in a b; do module_fix; done\n```")
+        assert "module_fix()" in s and "for m in a b" in s
+
     def test_multiline_quoted_prompt_command_kept_whole(self) -> None:
         # A prompted printf whose quoted argument spans lines must not be cut
         # at the first line ('printf "' alone is a syntax error).

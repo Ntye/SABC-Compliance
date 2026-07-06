@@ -109,9 +109,21 @@ def _noninteractive_apt(cmd: str) -> str:
     return "\n".join(lines)
 
 
+# A /etc/security/limits.conf line: "<domain> <type> <item> <value>", where
+# domain is *, a user, @group, or %group and type is hard/soft/-.
+_LIMITS_LINE = re.compile(r"^(?:\*|-|@?[\w.-]+|%[\w.-]+)\s+(?:hard|soft|-)\s+\w+\s+\S+$")
+
+# key=value config assignment for a settings file (chrony/timesyncd/sysconfig)
+# where the key is an identifier — never a shell command invocation.
+_CONFIG_ASSIGN = re.compile(r"^[A-Za-z_][\w-]*=\S")
+
+# Lines that are prose/annotation, not commands (CIS mixes them into cells).
+_PROSE_LINE = re.compile(r"^-?AND/OR-?$|^-AND-$|^-OR-$", re.I)
+
+
 def _looks_like_config(cmds: str) -> bool:
-    """True when extracted 'commands' are actually config-file content or an
-    un-fillable template — running them as shell can only fail."""
+    """True when extracted 'commands' are actually config-file content, prose,
+    or an un-fillable template — running them as shell can only fail."""
     if _PLACEHOLDER.search(cmds):
         return True
     for ln in cmds.splitlines():
@@ -120,7 +132,9 @@ def _looks_like_config(cmds: str) -> bool:
             continue
         if ln.startswith("["):                      # ini/systemd section header
             return True
-        if _FSTAB_LINE.match(ln):
+        if _FSTAB_LINE.match(ln) or _LIMITS_LINE.match(ln):
+            return True
+        if _CONFIG_ASSIGN.match(ln) or _PROSE_LINE.match(ln):
             return True
         first = ln.split()[0].rstrip(":").lower()
         if first in _CONFIG_TOKENS:
@@ -128,6 +142,18 @@ def _looks_like_config(cmds: str) -> bool:
         if _INTERACTIVE.match(ln):
             return True
     return False
+
+
+# Real shell control structure — word-bounded so "logfile" does NOT match "fi"
+# and "restrict" does NOT match a keyword. Substring matching (the old approach)
+# misclassified config lines like `Defaults logfile=...` as scripts, bypassing
+# the config filter.
+_SCRIPT_SIGNALS = re.compile(
+    r"(?m)^\s*(?:for|while|until|if|case)\b"       # control opener at line start
+    r"|^\s*[A-Za-z_]\w*\s*\(\)\s*\{?"              # function definition
+    r"|\b(?:then|do|done|fi|esac)\b"              # block keyword (word-bounded)
+    r"|\|\s*\S"                                    # pipe into another command
+)
 
 
 def _quote_balanced(text: str) -> bool:
@@ -161,8 +187,7 @@ def extract_shell(guidance: str | None) -> str:
     lines = body.splitlines()
     has_prompt = any(re.match(r"^\s*[#$]\s\S", ln) for ln in lines)
     is_script = body.lstrip().startswith("#!") or (
-        not has_prompt
-        and any(tok in body for tok in ("for ", "while ", "if ", "{", "done", "fi", "esac", "|"))
+        not has_prompt and bool(_SCRIPT_SIGNALS.search(body))
     )
     if is_script:
         # A full audit/remediation script — keep verbatim (it self-contains its
