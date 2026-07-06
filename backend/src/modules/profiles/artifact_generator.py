@@ -223,11 +223,16 @@ def generate_puppet_module(profile: Profile, target_dir: str) -> GenerationResul
     result.files_written += 1
 
     # Minimal module metadata so `puppet apply`/agent can resolve it.
+    # When metadata.json EXISTS, Puppet's module loader validates it and raises
+    # MissingMetadata ("No source module metadata provided for sabc_hardening")
+    # if any of source/author/version is absent — which excludes the module and
+    # makes `class sabc_hardening` unresolvable. So "source" is mandatory here.
     with open(os.path.join(target_dir, "metadata.json"), "w", encoding="utf-8") as fh:
         fh.write(
             '{\n  "name": "sabc-sabc_hardening",\n'
             '  "version": "1.0.0",\n'
             '  "author": "SABC Compliance Platform (generated)",\n'
+            '  "source": "generated://sabc-compliance-platform/referential",\n'
             '  "summary": "Generated hardening module from the SABC referential",\n'
             '  "license": "proprietary",\n'
             '  "dependencies": [],\n'

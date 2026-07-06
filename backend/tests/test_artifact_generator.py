@@ -105,6 +105,17 @@ class TestPuppet:
         assert (tmp_path / "manifests" / "l1.pp").exists()
         assert (tmp_path / "manifests" / "l2.pp").exists()
 
+    def test_metadata_has_keys_puppet_requires(self, tmp_path) -> None:
+        # When metadata.json exists, Puppet's module loader raises MissingMetadata
+        # ("No source module metadata provided for sabc_hardening") unless
+        # source/author/version are ALL present — which excludes the module and
+        # makes `class sabc_hardening` unresolvable at apply time.
+        import json
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        meta = json.loads((tmp_path / "metadata.json").read_text())
+        for key in ("source", "author", "version", "name"):
+            assert meta.get(key), f"metadata.json missing required key: {key}"
+
 
 # ── InSpec generation ─────────────────────────────────────────────────────────
 

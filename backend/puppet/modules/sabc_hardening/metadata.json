@@ -2,6 +2,7 @@
   "name": "sabc-sabc_hardening",
   "version": "1.0.0",
   "author": "SABC Compliance Platform (generated)",
+  "source": "generated://sabc-compliance-platform/referential",
   "summary": "Generated hardening module from the SABC referential",
   "license": "proprietary",
   "dependencies": [],

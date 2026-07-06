@@ -105,6 +105,30 @@
           controller.
       when: not node_init.stat.exists
 
+    # When metadata.json EXISTS, Puppet validates it and raises MissingMetadata
+    # ("No source module metadata provided for sabc_hardening") if source/
+    # author/version is absent — which silently excludes the module and makes
+    # the class unresolvable. Catch that here with a message that names the fix.
+    - name: Read the module metadata pushed to the node
+      slurp:
+        src: "{{ module_root }}/sabc_hardening/metadata.json"
+      register: pushed_meta
+      failed_when: false
+
+    - name: Fail when metadata.json would make Puppet reject the module
+      vars:
+        meta: "{{ pushed_meta.content | b64decode | from_json }}"
+        missing: "{{ ['source', 'author', 'version'] | difference(meta.keys() | list) }}"
+      fail:
+        msg: >-
+          metadata.json is missing required key(s) {{ missing | join(', ') }} —
+          Puppet raises "No <key> module metadata provided for sabc_hardening"
+          and refuses to load the module. Regenerate the module (or fix
+          {{ sabc_module_src }}/metadata.json on the controller).
+      when:
+        - pushed_meta.content is defined
+        - (['source', 'author', 'version'] | difference((pushed_meta.content | b64decode | from_json).keys() | list)) | length > 0
+
     - name: Skip enforcement when no controls are applicable
       debug:
         msg: >-
