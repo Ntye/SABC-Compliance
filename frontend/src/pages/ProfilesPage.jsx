@@ -72,14 +72,29 @@ export default function ProfilesPage() {
     }
   }
 
-  async function handleDuplicate(p, e) {
+  // ── Duplicate (with an optional new name) ──────────────────────────────────
+  const [dupTarget, setDupTarget] = useState(null)   // the profile being copied
+  const [dupName, setDupName]     = useState('')
+  const [duplicating, setDuplicating] = useState(false)
+
+  function openDuplicate(p, e) {
     e.stopPropagation()
+    setDupTarget(p)
+    setDupName('')  // blank → backend defaults to "<name> (copy)"
+  }
+
+  async function handleDuplicate() {
+    if (!dupTarget) return
+    setDuplicating(true)
     try {
-      const copy = await duplicateProfile(p.id)
+      const copy = await duplicateProfile(dupTarget.id, dupName.trim() || null)
       toast(t('profiles.duplicated'), 'success')
+      setDupTarget(null)
       navigate(`/profiles/${copy.id}`)
     } catch (err) {
       toast(err.message || t('profiles.duplicateFailed'), 'error')
+    } finally {
+      setDuplicating(false)
     }
   }
 
@@ -244,7 +259,7 @@ export default function ProfilesPage() {
                         </button>
                         {isAdmin && (
                           <button
-                            onClick={(e) => handleDuplicate(p, e)}
+                            onClick={(e) => openDuplicate(p, e)}
                             className="p-1.5 text-gray-300 hover:text-brand rounded transition-colors"
                             title={t('profiles.duplicate')}
                           >
@@ -275,6 +290,38 @@ export default function ProfilesPage() {
             </table>
           )}
         </div>
+      )}
+
+      {/* Duplicate modal — name the copy before cloning */}
+      {dupTarget && (
+        <Modal title={t('profiles.duplicateTitle')} onClose={() => setDupTarget(null)}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-[12px] font-medium text-gray-700 mb-1">
+                {t('profiles.importCsvNewName')}
+              </label>
+              <input
+                autoFocus
+                value={dupName}
+                onChange={(e) => setDupName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleDuplicate() }}
+                placeholder={dupTarget.name ? `${dupTarget.name} (copy)` : t('profiles.namePlaceholder')}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-brand"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">
+                {t('profiles.duplicateNameHint', { name: dupTarget.name })}
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setDupTarget(null)} className="px-3.5 py-2 text-[12px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg">
+                {t('common.cancel')}
+              </button>
+              <button onClick={handleDuplicate} disabled={duplicating} className="px-3.5 py-2 text-[12px] font-medium bg-brand text-white rounded-lg hover:bg-brand/90 disabled:opacity-50">
+                {duplicating ? t('common.saving') : t('profiles.duplicate')}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Import CSV modal (create a new profile) */}

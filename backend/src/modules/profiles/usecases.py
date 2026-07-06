@@ -387,7 +387,16 @@ class ProfileUseCases:
                 id=str(uuid.uuid4()),
                 profile_id=copy.id,
                 section_id=c.section_id, section=c.section, title=c.title,
-                position=c.position, kind=c.kind, cis_id=c.cis_id,
+                position=c.position, kind=c.kind, status=c.status,
+                # Unified multi-OS fields (the core of the referential — must be
+                # carried over or the copy loses all its content).
+                control_id=c.control_id, control_key=c.control_key,
+                applies_to=c.applies_to, cis_level=c.cis_level,
+                framework_reference=c.framework_reference,
+                validate_debian=c.validate_debian, configure_debian=c.configure_debian,
+                validate_redhat=c.validate_redhat, configure_redhat=c.configure_redhat,
+                # Legacy display mirrors.
+                cis_id=c.cis_id,
                 description=c.description, recommended_value=c.recommended_value,
                 agreed_value=c.agreed_value, risk_profile=c.risk_profile,
                 rationale=c.rationale, validate_guideline=c.validate_guideline,
@@ -403,156 +412,95 @@ class ProfileUseCases:
         return await self._repo.find_by_id(copy.id)
 
     # ── CSV export / template / import ────────────────────────────────────────
-    # Column order for exports, templates and imports. `position` is optional on
-    # import (row order is used when absent); `enabled` accepts true/false,
-    # 1/0, yes/no, oui/non.
-    CSV_COLUMNS = [
-        "position", "kind", "section_id", "section", "title", "cis_id",
-        "description", "recommended_value", "agreed_value", "risk_profile",
-        "rationale", "validate_guideline", "configure_guideline", "regulatory",
-        "notes", "check_command", "enabled",
+    # The platform speaks ONE CSV dialect: the unified multi-OS referential sheet
+    # (the same one the built-in SABC Baseline ships in). Templates, exports and
+    # imports all use these columns and the shared referential parser/importer, so
+    # a file exported here re-imports cleanly and matches the uploaded template.
+    REFERENTIAL_COLUMNS = [
+        "Control ID", "Control Key", "Type", "Section", "Title", "Applies To",
+        "CIS Level", "Framework Reference", "Agreed Value", "Description",
+        "Security Rationale", "Validate — Debian family",
+        "Configure — Debian family", "Validate — Red Hat family",
+        "Configure — Red Hat family",
     ]
-    _CSV_REQUIRED = {"title"}
-    _CSV_MAX_ROWS = 5000
 
     async def export_profile_csv(self, profile_id: str) -> tuple[str, str]:
-        """Render a profile's controls as CSV. Returns (filename, csv_text)."""
+        """Render a profile's controls as a unified referential CSV that can be
+        edited offline and re-imported. Returns (filename, csv_text)."""
         import csv as _csv
         import io
         import re as _re
+
+        from .referential_importer import slugify_control_id
 
         profile = await self._repo.find_by_id(profile_id)
         if not profile:
             raise ValidationError("Profile not found.")
         buf = io.StringIO()
         w = _csv.writer(buf, lineterminator="\r\n")
-        w.writerow(self.CSV_COLUMNS)
+        w.writerow(self.REFERENTIAL_COLUMNS)
         for c in sorted(profile.controls, key=lambda c: c.position):
+            # Control ID is the import key — always emit a stable, non-empty value
+            # so legacy controls (which may predate control_id) round-trip.
+            cid = (c.control_id or c.section_id or c.cis_id
+                   or slugify_control_id(c.title) or "")
             w.writerow([
-                c.position, c.kind, c.section_id, c.section, c.title,
-                c.cis_id or "", c.description or "", c.recommended_value or "",
-                c.agreed_value or "", c.risk_profile or "", c.rationale or "",
-                c.validate_guideline or "", c.configure_guideline or "",
-                c.regulatory or "", c.notes or "", c.check_command or "",
-                "true" if c.enabled else "false",
+                cid,
+                c.control_key or "",
+                c.kind or "control",
+                c.section or "",
+                c.title or "",
+                c.applies_to or "debian;redhat",
+                c.cis_level or 1,
+                c.framework_reference or c.cis_id or "",
+                c.agreed_value or c.recommended_value or "",
+                c.description or "",
+                c.rationale or "",
+                c.validate_debian or c.validate_guideline or "",
+                c.configure_debian or c.configure_guideline or "",
+                c.validate_redhat or "",
+                c.configure_redhat or "",
             ])
         slug = _re.sub(r"[^A-Za-z0-9._-]+", "-", profile.name).strip("-").lower() or "profile"
         return f"{slug}.csv", buf.getvalue()
 
     def csv_template(self) -> str:
-        """A ready-to-edit CSV: header + one section row + two sample controls."""
+        """A ready-to-edit unified referential CSV: header + one section row and
+        two sample controls with per-family validate/configure guidance."""
         import csv as _csv
         import io
 
         buf = io.StringIO()
         w = _csv.writer(buf, lineterminator="\r\n")
-        w.writerow(self.CSV_COLUMNS)
-        w.writerow([1, "section", "5", "Access, Authentication & Authorization",
-                    "5 — Access, Authentication & Authorization", "", "", "", "", "",
-                    "", "", "", "", "", "", "true"])
-        w.writerow([2, "control", "5.2.8", "Access, Authentication & Authorization",
-                    "Ensure SSH root login is disabled", "5.2.8",
-                    "Disallow direct root SSH logins.", "PermitRootLogin no",
-                    "PermitRootLogin no", "High",
-                    "Direct root logins remove accountability.",
-                    "sshd -T | grep permitrootlogin",
-                    "Set 'PermitRootLogin no' in /etc/ssh/sshd_config then restart sshd.",
-                    "", "", "", "true"])
-        w.writerow([3, "control", "5.2.9", "Access, Authentication & Authorization",
-                    "Ensure SSH PermitEmptyPasswords is disabled", "5.2.9",
-                    "Reject SSH logins with empty passwords.", "PermitEmptyPasswords no",
-                    "", "High", "", "sshd -T | grep permitemptypasswords",
-                    "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.",
-                    "", "", "", "true"])
+        w.writerow(self.REFERENTIAL_COLUMNS)
+        # Section row — grouping metadata (Control ID is the section id).
+        w.writerow(["5", "", "section", "Access, Authentication & Authorization",
+                    "Access, Authentication & Authorization", "", "", "", "", "",
+                    "", "", "", "", ""])
+        # Sample control 1 — applies to both families, with per-family guidance.
+        w.writerow([
+            "5.2.8", "", "control", "Access, Authentication & Authorization",
+            "Ensure SSH root login is disabled", "debian;redhat", "1", "CIS 5.2.8",
+            "PermitRootLogin no", "Disallow direct root SSH logins.",
+            "Direct root logins remove individual accountability.",
+            "sshd -T | grep -i permitrootlogin",
+            "Set 'PermitRootLogin no' in /etc/ssh/sshd_config, then restart sshd.",
+            "sshd -T | grep -i permitrootlogin",
+            "Set 'PermitRootLogin no' in /etc/ssh/sshd_config, then restart sshd.",
+        ])
+        # Sample control 2 — a second control in the same section.
+        w.writerow([
+            "5.2.9", "", "control", "Access, Authentication & Authorization",
+            "Ensure SSH PermitEmptyPasswords is disabled", "debian;redhat", "1",
+            "CIS 5.2.9", "PermitEmptyPasswords no",
+            "Reject SSH logins that use empty passwords.",
+            "Empty passwords allow trivial unauthenticated access.",
+            "sshd -T | grep -i permitemptypasswords",
+            "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.",
+            "sshd -T | grep -i permitemptypasswords",
+            "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.",
+        ])
         return buf.getvalue()
-
-    @staticmethod
-    def _control_key(kind: str, section_id: str, title: str) -> tuple:
-        """Identity used for duplicate detection and update matching: a control is
-        'the same' when kind + normalised section_id (fallback title) match."""
-        sid = (section_id or "").strip().lower()
-        return (kind or "control", sid if sid else (title or "").strip().lower())
-
-    @staticmethod
-    def _parse_bool(value: str, row_num: int, errors: list[str]) -> bool:
-        v = (value or "").strip().lower()
-        if v in ("", "true", "1", "yes", "oui", "y", "x"):
-            return True
-        if v in ("false", "0", "no", "non", "n"):
-            return False
-        errors.append(f"row {row_num}: enabled must be true/false (got '{value}')")
-        return True
-
-    def _parse_csv_rows(self, text: str) -> tuple[list[dict], list[str]]:
-        """Parse + validate CSV content. Returns (rows, errors); rows carry
-        normalised values keyed by CSV_COLUMNS plus '_row' (line number)."""
-        import csv as _csv
-        import io
-
-        errors: list[str] = []
-        reader = _csv.DictReader(io.StringIO(text))
-        if not reader.fieldnames:
-            return [], ["The file is empty — download the template to get started."]
-        headers = [h.strip() for h in reader.fieldnames]
-        unknown = [h for h in headers if h and h not in self.CSV_COLUMNS]
-        missing = self._CSV_REQUIRED - set(headers)
-        if missing:
-            errors.append(f"Missing required column(s): {', '.join(sorted(missing))}")
-        if unknown:
-            errors.append(
-                f"Unknown column(s): {', '.join(unknown)} — expected columns are: "
-                + ", ".join(self.CSV_COLUMNS)
-            )
-        if errors:
-            return [], errors
-
-        rows: list[dict] = []
-        seen: dict[tuple, int] = {}
-        for i, raw in enumerate(reader, start=2):  # header is line 1
-            if i - 1 > self._CSV_MAX_ROWS:
-                errors.append(f"Too many rows (max {self._CSV_MAX_ROWS}).")
-                break
-            vals = {k: (raw.get(k) or "").strip() for k in self.CSV_COLUMNS}
-            if not any(vals.values()):
-                continue  # skip blank lines
-            kind = vals["kind"].lower() or "control"
-            if kind not in ("control", "section"):
-                errors.append(f"row {i}: kind must be 'control' or 'section' (got '{vals['kind']}')")
-                continue
-            if not vals["title"] and not vals["section_id"]:
-                errors.append(f"row {i}: title (or section_id) is required")
-                continue
-            position: int | None = None
-            if vals["position"]:
-                try:
-                    position = int(float(vals["position"]))
-                except ValueError:
-                    errors.append(f"row {i}: position must be a number (got '{vals['position']}')")
-                    continue
-            enabled = self._parse_bool(vals["enabled"], i, errors)
-
-            # Duplicate detection WITHIN the file — the "repetitive controls" gate.
-            key = self._control_key(kind, vals["section_id"], vals["title"])
-            if key in seen:
-                errors.append(
-                    f"row {i}: duplicate of row {seen[key]} "
-                    f"(same {kind} '{vals['section_id'] or vals['title']}') — "
-                    "remove or merge repeated controls before importing"
-                )
-                continue
-            seen[key] = i
-
-            rows.append({
-                **vals,
-                "kind": kind,
-                "title": vals["title"] or vals["section_id"],
-                "position": position,
-                "enabled": enabled,
-                "_row": i,
-            })
-        if not rows and not errors:
-            errors.append("The file contains no control rows.")
-        return rows, errors
 
     async def import_profile_csv(
         self,
@@ -563,92 +511,48 @@ class ProfileUseCases:
         os_family: str | None = None,
         version: str | None = None,
     ) -> dict:
-        """Apply a CSV to a profile — update an existing one or create a new one.
+        """Import a unified referential CSV — create a new profile or update an
+        existing one — through the shared referential parser/importer.
 
-        Validation-first: the whole file is parsed and checked (unknown columns,
-        missing titles, bad kinds/positions, duplicate controls within the file)
-        and NOTHING is written unless the file is fully valid.
+        Validation-first: the whole file is parsed and checked (columns, kinds,
+        required Control IDs, duplicate controls within the file) and NOTHING is
+        written unless it is fully valid.
 
-        Update mode (``profile_id`` given): rows are matched to existing controls
-        by kind + section_id (fallback title). Matched rows update the control's
-        fields — empty CSV cells leave the current value unchanged; changed
-        fields are snapshotted to control history. Unmatched rows create new
-        controls. Existing controls absent from the CSV are left untouched.
-
+        Update mode (``profile_id`` given): rows UPSERT onto existing controls
+        keyed on Control ID — changed fields are snapshotted to control history,
+        new rows are added, and controls absent from the sheet are retired.
         Create mode (no ``profile_id``): a new custom profile named ``name`` is
-        created with every row as a fresh control.
+        created from every row.
         """
-        rows, errors = self._parse_csv_rows(text)
+        from .referential_importer import (
+            ReferentialImportUseCase,
+            parse_referential_csv,
+        )
+
+        errors: list[str] = []
+        rows = parse_referential_csv(text, errors)
         if errors:
             raise ValidationError("CSV validation failed:\n" + "\n".join(errors[:25]))
-
-        now = datetime.utcnow()
+        if not any(r.kind == "control" for r in rows):
+            raise ValidationError("The file contains no control rows.")
 
         if profile_id:
             profile = await self._repo.find_by_id(profile_id)
             if not profile:
                 raise ValidationError("Profile not found.")
             self._ensure_editable(profile)
-            existing = {
-                self._control_key(c.kind, c.section_id, c.title): c
-                for c in profile.controls
-            }
-            created = updated = unchanged = 0
-            max_pos = max((c.position for c in profile.controls), default=0)
-            for r in rows:
-                key = self._control_key(r["kind"], r["section_id"], r["title"])
-                current = existing.get(key)
-                if current is None:
-                    max_pos += 1
-                    data = {k: (r[k] or None) for k in self.CSV_COLUMNS
-                            if k not in ("position", "enabled")}
-                    data["position"] = r["position"] if r["position"] is not None else max_pos
-                    data["enabled"] = r["enabled"]
-                    await self.add_control(profile_id, data)
-                    created += 1
-                else:
-                    changes: dict = {}
-                    for fld in self.CSV_COLUMNS:
-                        if fld in ("position", "enabled"):
-                            continue
-                        val = r[fld]
-                        if val and val != (getattr(current, fld) or ""):
-                            changes[fld] = val
-                    if r["position"] is not None and r["position"] != current.position:
-                        changes["position"] = r["position"]
-                    if r["enabled"] != current.enabled:
-                        changes["enabled"] = r["enabled"]
-                    if changes:
-                        await self.update_control(current.id, changes)
-                        updated += 1
-                    else:
-                        unchanged += 1
-            profile.updated_at = now
-            await self._repo.update(profile)
-            fresh = await self._repo.find_by_id(profile_id)
-            return {
-                "mode": "update", "profile_id": profile_id, "profile_name": fresh.name,
-                "created": created, "updated": updated, "unchanged": unchanged,
-                "total_rows": len(rows), "control_count": fresh.control_count,
-            }
-
-        # Create mode
-        pname = (name or "").strip()
-        if not pname:
+        elif not (name or "").strip():
             raise ValidationError("A profile name is required to create a profile from CSV.")
-        profile = await self.create_profile({
-            "name": pname, "description": description,
-            "os_family": os_family, "version": version,
-        })
-        for order, r in enumerate(rows, start=1):
-            data = {k: (r[k] or None) for k in self.CSV_COLUMNS
-                    if k not in ("position", "enabled")}
-            data["position"] = r["position"] if r["position"] is not None else order
-            data["enabled"] = r["enabled"]
-            await self.add_control(profile.id, data)
-        fresh = await self._repo.find_by_id(profile.id)
-        return {
-            "mode": "create", "profile_id": profile.id, "profile_name": fresh.name,
-            "created": len(rows), "updated": 0, "unchanged": 0,
-            "total_rows": len(rows), "control_count": fresh.control_count,
-        }
+
+        summary = await ReferentialImportUseCase(self._repo).import_referential(
+            rows,
+            profile_id=profile_id or None,
+            name=name,
+            description=description,
+            version=version,
+            source="custom",
+        )
+        summary.setdefault("unchanged", 0)
+        summary["mode"] = "update" if profile_id else "create"
+        summary["total_rows"] = len(rows)
+        return summary
