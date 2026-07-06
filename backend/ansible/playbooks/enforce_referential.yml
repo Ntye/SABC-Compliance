@@ -66,7 +66,18 @@
         group: root
         mode: "0755"
 
-    # Trailing slash on src copies the CONTENTS into the module directory.
+    # Clear any stale copy first so a re-push can never leave the module in a
+    # half-populated state (e.g. control manifests from a previous run without a
+    # fresh init.pp/metadata.json) — the exact shape that made `puppet apply`
+    # fail with "Could not find declared class sabc_hardening".
+    - name: Remove any previous copy of the module on the node
+      file:
+        path: "{{ module_root }}/sabc_hardening"
+        state: absent
+
+    # Trailing slash on src copies the CONTENTS into the module directory, so
+    # manifests/init.pp AND metadata.json AND every control manifest land under
+    # {{ module_root }}/sabc_hardening/ — not just the per-control *.pp files.
     - name: Push the generated sabc_hardening module to the node
       copy:
         src: "{{ sabc_module_src }}/"
@@ -75,6 +86,24 @@
         group: root
         mode: "0644"
         directory_mode: "0755"
+
+    # Fail loudly and specifically if the module arrived without its scaffolding
+    # rather than letting `puppet apply` fail later with an opaque
+    # "No source module metadata provided / Could not find declared class".
+    - name: Assert the module arrived complete on the node
+      stat:
+        path: "{{ module_root }}/sabc_hardening/manifests/init.pp"
+      register: node_init
+
+    - name: Fail when the module push was incomplete
+      fail:
+        msg: >-
+          sabc_hardening/manifests/init.pp is missing after the push, so
+          `class sabc_hardening` cannot be resolved. The module was copied
+          without its scaffolding — check that {{ sabc_module_src }} is a
+          complete module directory (manifests/init.pp + metadata.json) on the
+          controller.
+      when: not node_init.stat.exists
 
     - name: Skip enforcement when no controls are applicable
       debug:
