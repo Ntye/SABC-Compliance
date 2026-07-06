@@ -8,6 +8,7 @@ from core.domain.entities import AuthPrincipal
 from core.errors import NotFoundError, ValidationError
 from interface.http.routes.auth import get_current_principal, require_operator, require_admin
 from modules.compliance.scheduler import UNITS_TO_SECONDS
+from modules.detection.usecases import DETECTION_CLOSED_LOOP_CONFIG_KEY
 
 router = APIRouter(prefix="/compliance", tags=["Compliance"])
 
@@ -31,6 +32,9 @@ class ScanScheduleRequest(BaseModel):
     enabled: bool = True
     interval: int = Field(default=30, ge=1)
     unit: str = "minutes"  # "seconds" | "minutes" | "days"
+
+class ClosedLoopSettingRequest(BaseModel):
+    enabled: bool = False
 
 
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
@@ -173,3 +177,30 @@ async def update_scan_schedule(
     await _config_repo.set("auto_scan_interval", str(body.interval))
     await _config_repo.set("auto_scan_unit", body.unit)
     return {"ok": True, "enabled": body.enabled, "interval": body.interval, "unit": body.unit}
+
+
+@router.get("/closed-loop/settings", summary="Get the global closed-loop enforcement setting")
+async def get_closed_loop_setting(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Whether detection events auto-trigger Puppet remediation platform-wide.
+
+    When off (the default), a detected change always launches a compliance
+    scan but never enforces on its own; a node group's ``active_response`` can
+    still enable the loop for its own members regardless of this switch."""
+    if not _config_repo:
+        return {"enabled": False}
+    raw = await _config_repo.get(DETECTION_CLOSED_LOOP_CONFIG_KEY)
+    return {"enabled": (raw or "").strip().lower() in {"true", "1", "yes", "on"}}
+
+
+@router.put("/closed-loop/settings", summary="Enable/disable global closed-loop enforcement (admin only)")
+async def update_closed_loop_setting(
+    body: ClosedLoopSettingRequest,
+    principal: AuthPrincipal = Depends(require_admin),
+):
+    """Flip the platform-wide closed loop. With it on, every genuine detected
+    change enforces with Puppet after scanning; with it off, detection observes
+    and scans only. Requires admin role."""
+    if not _config_repo:
+        raise HTTPException(status_code=500, detail="Config repository not available")
+    await _config_repo.set(DETECTION_CLOSED_LOOP_CONFIG_KEY, "true" if body.enabled else "false")
+    return {"ok": True, "enabled": body.enabled}

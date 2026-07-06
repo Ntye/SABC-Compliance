@@ -60,8 +60,8 @@ from modules.compliance.usecases import (
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.detection.usecases import (
-    GetNodeDetectionStatusUseCase, ListDetectionEventsUseCase,
-    ReceiveDetectionEventUseCase,
+    GetConfigBlobUseCase, GetNodeDetectionStatusUseCase,
+    ListDetectionEventsUseCase, ReceiveDetectionEventUseCase,
 )
 from modules.profiles.usecases import ProfileUseCases
 from modules.tiers.usecases import (
@@ -405,16 +405,20 @@ async def lifespan(app: FastAPI):
         config_repo=platform_config_repo,
     )
 
-    # -- Detection webhook receiver: closes the detection → remediation loop --
+    # -- Detection webhook receiver: detection → scan (→ optional remediation) --
     # The custom detection agent spots a config change → POST
     # /api/webhooks/detection → evidence stored (events + content-addressed
-    # blobs) → suppression rules applied → Puppet enforcement over SSH →
-    # live WebSocket + event-bus updates.
+    # blobs) → suppression rules applied → a compliance scan always runs, and
+    # Puppet enforcement runs only when the closed loop is enabled (global
+    # config or a node group's active_response) → live WebSocket + event-bus.
     receive_detection_uc = ReceiveDetectionEventUseCase(
         node_repo=node_repo,
         detection_repo=detection_repo,
         compliance_repo=compliance_repo,
         remediate_uc=remediate_uc,
+        collect_uc=collect_uc,
+        config_repo=platform_config_repo,
+        node_group_repo=node_group_repo,
         event_bus=event_bus,
         ws_manager=ws_manager,
     )
@@ -427,6 +431,7 @@ async def lifespan(app: FastAPI):
     detection_routes.set_use_cases(
         list_events_uc=ListDetectionEventsUseCase(detection_repo, node_repo),
         node_status_uc=GetNodeDetectionStatusUseCase(detection_repo, node_repo),
+        blob_uc=GetConfigBlobUseCase(detection_repo),
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --

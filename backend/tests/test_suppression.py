@@ -1,11 +1,12 @@
-"""Suppression decision logic of the detection gateway.
+"""Suppression + scan/remediation decision logic of the detection gateway.
 
 Contract (in priority order):
   a. active remediation window (RemediationEvent outcome=pending for the node)
-     -> store suppressed, link remediation_event_id, do NOT trigger
-  b. puppet_running flag on the event -> store suppressed, do NOT trigger
-  c. otherwise -> store live, publish compliance.violation_detected and
-     trigger Puppet remediation with detection_event_id=event.id
+     -> store suppressed, link remediation_event_id, do NOT scan or trigger
+  b. puppet_running flag on the event -> store suppressed, do NOT scan or trigger
+  c. otherwise -> store live, publish compliance.violation_detected and ALWAYS
+     launch a compliance scan; trigger Puppet remediation ONLY when the closed
+     loop is enabled (global config or a node group's active_response).
 Baselines are always stored suppressed; heartbeats only refresh liveness.
 """
 from __future__ import annotations
@@ -19,7 +20,9 @@ import pytest
 
 from core.domain.entities import ConfigChangeEvent, Node, RemediationEvent
 from core.errors import NotFoundError, ValidationError
-from modules.detection.usecases import ReceiveDetectionEventUseCase
+from modules.detection.usecases import (
+    GetConfigBlobUseCase, ReceiveDetectionEventUseCase,
+)
 
 
 # ── Test doubles ──────────────────────────────────────────────────────────────
@@ -62,6 +65,13 @@ class FakeDetectionRepo:
     async def find_event(self, id: str):
         return next((e for e in self.events if e.id == id), None)
 
+    async def find_blob(self, sha256: str):
+        content = self.blobs.get(sha256)
+        if content is None:
+            return None
+        return {"sha256": sha256, "content": content, "size": len(content),
+                "first_seen_at": "2026-01-01T00:00:00"}
+
     async def node_status(self, node_id: str) -> dict:
         return {"node_id": node_id, "agent_last_seen": None,
                 "watched_paths": [], "recent_events": 0}
@@ -91,6 +101,40 @@ class FakeRemediateUC:
         return {"outcome": "success", "resources_fixed": 1}
 
 
+class FakeCollectUC:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def execute(self, id_or_hostname: str) -> dict:
+        self.calls.append(id_or_hostname)
+        return {"collected": [{"profile_id": "sabc-baseline"}]}
+
+
+class FakeConfigRepo:
+    def __init__(self, values: Optional[dict[str, str]] = None) -> None:
+        self.values = dict(values or {})
+
+    async def get(self, key: str) -> Optional[str]:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str) -> None:
+        self.values[key] = value
+
+
+class FakeNodeGroup:
+    def __init__(self, node_ids: list[str], active_response_enabled: bool = False) -> None:
+        self.node_ids = node_ids
+        self.active_response_enabled = active_response_enabled
+
+
+class FakeNodeGroupRepo:
+    def __init__(self, groups: Optional[list[FakeNodeGroup]] = None) -> None:
+        self.groups = list(groups or [])
+
+    async def find_all(self) -> list[FakeNodeGroup]:
+        return self.groups
+
+
 class FakeBus:
     def __init__(self) -> None:
         self.published: list[tuple[str, dict]] = []
@@ -116,7 +160,10 @@ class FakeWs:
 NODE = Node(id="node-1", hostname="web-01", ip="10.0.0.5", puppet_enrolled=True)
 
 
-def make_uc(pending: Optional[RemediationEvent] = None):
+def make_uc(pending: Optional[RemediationEvent] = None, *,
+            collect: Optional["FakeCollectUC"] = None,
+            config: Optional["FakeConfigRepo"] = None,
+            groups: Optional[list["FakeNodeGroup"]] = None):
     node_repo = FakeNodeRepo([NODE])
     detection_repo = FakeDetectionRepo()
     compliance_repo = FakeComplianceRepo(pending)
@@ -128,6 +175,9 @@ def make_uc(pending: Optional[RemediationEvent] = None):
         detection_repo=detection_repo,
         compliance_repo=compliance_repo,
         remediate_uc=remediate,
+        collect_uc=collect,
+        config_repo=config,
+        node_group_repo=FakeNodeGroupRepo(groups) if groups is not None else None,
         event_bus=bus,
         ws_manager=ws,
     )
@@ -181,6 +231,23 @@ async def test_pending_remediation_suppresses_and_links() -> None:
     assert all(name != "compliance.violation_detected" for name, _ in bus.published)
 
 
+@pytest.mark.asyncio
+async def test_suppressed_event_does_not_scan() -> None:
+    # A suppressed event is evidence only — it must not launch a scan either.
+    pending = RemediationEvent(
+        id="rem-99", node_id="node-1", puppet_job_id="ssh-puppet-run",
+        triggered_at=datetime.utcnow(), outcome="pending",
+    )
+    collect = FakeCollectUC()
+    uc, _, remediate, _, _ = make_uc(pending=pending, collect=collect)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["status"] == "suppressed"
+    assert collect.calls == []
+    assert remediate.calls == []
+
+
 # ── Rule (b): puppet_running ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -213,31 +280,76 @@ async def test_pending_window_wins_over_puppet_flag() -> None:
     assert result["remediation_event_id"] == "rem-7"
 
 
-# ── Rule (c): genuine drift triggers the loop ─────────────────────────────────
+# ── Rule (c): genuine drift always scans, remediates only if closed-loop ──────
 
 @pytest.mark.asyncio
-async def test_genuine_drift_triggers_remediation_and_publishes() -> None:
-    uc, repo, remediate, bus, ws = make_uc()
+async def test_genuine_drift_scans_but_does_not_remediate_by_default() -> None:
+    # Closed loop off (no config, no active-response group) → scan, never enforce.
+    collect = FakeCollectUC()
+    uc, repo, remediate, bus, ws = make_uc(collect=collect)
 
     result = await run_and_settle(uc, payload())
 
     assert result["status"] == "accepted"
-    assert result["action"] == "puppet remediation scheduled"
+    assert result["closed_loop"] is False
+    assert result["action"] == "compliance scan scheduled"
     stored = repo.events[0]
     assert stored.suppressed is False and stored.suppress_reason is None
 
-    # remediation triggered with the detection event linked
-    assert len(remediate.calls) == 1
-    assert remediate.calls[0]["node_id"] == "node-1"
-    assert remediate.calls[0]["detection_event_id"] == stored.id
+    # scan ran against the node; remediation did NOT
+    assert collect.calls == ["node-1"]
+    assert remediate.calls == []
 
     # event bus saw the violation
     names = [name for name, _ in bus.published]
     assert "compliance.violation_detected" in names
+    assert "compliance.scan_started" in names
 
     # live dashboard broadcast on both channels
     assert any(nid == "node-1" for nid, _ in ws.node_messages)
     assert any(ch == "detection-events" for ch, _ in ws.channel_messages)
+
+
+@pytest.mark.asyncio
+async def test_global_closed_loop_enables_remediation() -> None:
+    collect = FakeCollectUC()
+    config = FakeConfigRepo({"detection_closed_loop_enabled": "true"})
+    uc, repo, remediate, bus, _ = make_uc(collect=collect, config=config)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["closed_loop"] is True
+    assert result["action"] == "compliance scan scheduled + puppet remediation scheduled"
+    assert collect.calls == ["node-1"]
+    assert len(remediate.calls) == 1
+    assert remediate.calls[0]["detection_event_id"] == repo.events[0].id
+
+
+@pytest.mark.asyncio
+async def test_group_active_response_enables_remediation() -> None:
+    # Global switch off, but the node is in a group with active_response on.
+    collect = FakeCollectUC()
+    config = FakeConfigRepo({"detection_closed_loop_enabled": "false"})
+    groups = [FakeNodeGroup(node_ids=["node-1"], active_response_enabled=True)]
+    uc, repo, remediate, _, _ = make_uc(collect=collect, config=config, groups=groups)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["closed_loop"] is True
+    assert len(remediate.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_other_groups_active_response_does_not_leak() -> None:
+    # Active response is on for a group the node is NOT a member of → loop stays off.
+    collect = FakeCollectUC()
+    groups = [FakeNodeGroup(node_ids=["someone-else"], active_response_enabled=True)]
+    uc, _, remediate, _, _ = make_uc(collect=collect, groups=groups)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["closed_loop"] is False
+    assert remediate.calls == []
 
 
 # ── Passive event types ───────────────────────────────────────────────────────
@@ -311,3 +423,48 @@ async def test_invalid_payloads_rejected(bad: dict) -> None:
     with pytest.raises(ValidationError):
         await uc.execute(payload(**bad))
     assert repo.events == []
+
+
+# ── Blob fetch (diff modal) ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_blob_returns_decoded_text() -> None:
+    repo = FakeDetectionRepo()
+    content = b"PermitRootLogin no\n"
+    import hashlib
+    sha = hashlib.sha256(content).hexdigest()
+    repo.blobs[sha] = content
+
+    out = await GetConfigBlobUseCase(repo).execute(sha)
+
+    assert out["sha256"] == sha
+    assert out["text"] == "PermitRootLogin no\n"
+    assert out["is_binary"] is False
+    assert out["truncated"] is False
+    assert out["size"] == len(content)
+
+
+@pytest.mark.asyncio
+async def test_get_blob_flags_binary_content() -> None:
+    repo = FakeDetectionRepo()
+    content = b"\x00\x01\x02\xff\xfe"
+    import hashlib
+    sha = hashlib.sha256(content).hexdigest()
+    repo.blobs[sha] = content
+
+    out = await GetConfigBlobUseCase(repo).execute(sha)
+
+    assert out["is_binary"] is True
+    assert out["text"] == ""
+
+
+@pytest.mark.asyncio
+async def test_get_blob_missing_raises_not_found() -> None:
+    with pytest.raises(NotFoundError):
+        await GetConfigBlobUseCase(FakeDetectionRepo()).execute("deadbeef")
+
+
+@pytest.mark.asyncio
+async def test_get_blob_empty_hash_rejected() -> None:
+    with pytest.raises(ValidationError):
+        await GetConfigBlobUseCase(FakeDetectionRepo()).execute("   ")

@@ -457,17 +457,36 @@ def puppet_running(lock_file: str = PUPPET_LOCK_FILE) -> bool:
 
 _AUSEARCH_FIELDS = {
     "auid": re.compile(r"\bauid=(\d+)"),
+    "uid": re.compile(r"\buid=(\d+)"),
     "exe": re.compile(r'\bexe="([^"]*)"'),
     "comm": re.compile(r'\bcomm="([^"]*)"'),
 }
+# auid is the login uid; unset (daemons, no login session) is -1 as a u32.
+_AUID_UNSET = 4294967295
+
+
+def _resolve_username(uid: Any) -> Optional[str]:
+    """Map a numeric uid to a login name, or None. Isolated so the actor
+    lookup degrades cleanly on non-Unix hosts (no ``pwd``) or unknown uids."""
+    if not isinstance(uid, int) or uid < 0 or uid == _AUID_UNSET:
+        return None
+    try:
+        import pwd  # Unix-only; imported lazily so the module loads anywhere.
+
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, ImportError, OverflowError, OSError):
+        return None
 
 
 def lookup_actor(path: str, timeout: float = 3.0) -> Optional[dict[str, Any]]:
     """Ask auditd (ausearch) who last wrote to *path*.
 
-    Returns {auid, exe, comm} from the most recent matching event, or None
-    when auditd/ausearch is unavailable or has nothing. auditd is explicitly
-    NOT a dependency — every failure path degrades to None.
+    Returns the most recent matching write's actor — ``{auid, uid, exe, comm,
+    username}`` — where ``username`` resolves the login uid (falling back to
+    the effective uid) to a human name so the evidence trail records *who*, not
+    just a number. Returns None when auditd/ausearch is unavailable or has
+    nothing. auditd is explicitly NOT a dependency — every failure path
+    degrades to None.
     """
     try:
         proc = subprocess.run(
@@ -486,10 +505,20 @@ def lookup_actor(path: str, timeout: float = 3.0) -> Optional[dict[str, Any]]:
             if key not in actor:
                 m = rx.search(line)
                 if m:
-                    actor[key] = int(m.group(1)) if key == "auid" else m.group(1)
+                    actor[key] = int(m.group(1)) if key in ("auid", "uid") else m.group(1)
         if len(actor) == len(_AUSEARCH_FIELDS):
             break
-    return actor or None
+    if not actor:
+        return None
+
+    # Prefer the login uid (who logged in) over the effective uid (who the
+    # process ran as, e.g. after sudo) when naming the human responsible.
+    username = _resolve_username(actor.get("auid"))
+    if username is None:
+        username = _resolve_username(actor.get("uid"))
+    if username is not None:
+        actor["username"] = username
+    return actor
 
 
 # ── Gateway sender with retry + spool ─────────────────────────────────────────

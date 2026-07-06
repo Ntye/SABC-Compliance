@@ -146,7 +146,7 @@ config_change_events_table = Table(
     Column("new_hash", Text),
     Column("file_meta", Text),                 # JSON {mode, uid, gid, size, mtime}
     Column("puppet_running", Integer, default=0),
-    Column("actor", Text),                     # JSON {auid, exe, comm} or NULL
+    Column("actor", Text),                     # JSON {auid, uid, exe, comm, username} or NULL
     Column("suppressed", Integer, default=0),
     Column("suppress_reason", Text),
     Column("remediation_event_id", Text),      # FK → remediation_events.id (nullable)
@@ -1235,6 +1235,27 @@ class DetectionRepository(IDetectionRepository):
                 .where(config_change_events_table.c.id == id)
             )).first()
             return self._to_entity(row) if row else None
+
+    async def find_blob(self, sha256: str) -> dict | None:
+        """Fetch a content-addressed snapshot by hash for the diff view.
+
+        Returns ``{sha256, content (bytes), size, first_seen_at}`` or None.
+        The raw bytes are decoded to text at the API boundary — this stays
+        content-type-agnostic so binary snapshots don't blow up here.
+        """
+        async with self._session() as s:
+            row = (await s.execute(
+                select(config_blobs_table)
+                .where(config_blobs_table.c.sha256 == sha256)
+            )).first()
+            if not row:
+                return None
+            return {
+                "sha256": row.sha256,
+                "content": bytes(row.content) if row.content is not None else b"",
+                "size": row.size,
+                "first_seen_at": row.first_seen_at,
+            }
 
     async def node_status(self, node_id: str) -> dict:
         """Agent liveness + per-path watch status for the node detail page.

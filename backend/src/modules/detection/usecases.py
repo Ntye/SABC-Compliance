@@ -1,6 +1,6 @@
 """
 Detection gateway — receives config-change events from the node-side
-detection agents and drives the closed remediation loop.
+detection agents, records them as evidence, and re-assesses compliance.
 
     ① agent spots a change on a watched path (inotify) and snapshots it
     ② agent POSTs the event to POST /api/webhooks/detection
@@ -11,8 +11,15 @@ detection agents and drives the closed remediation loop.
             exists for the node)      → store suppressed, link, do nothing
          b. puppet_running flag set   → store suppressed (scheduled converge)
          c. otherwise                 → store live, publish
-            compliance.violation_detected, trigger Puppet remediation
-    ⑤ every stored event is broadcast over WebSocket so the dashboard
+            compliance.violation_detected, and ALWAYS launch a compliance
+            SCAN so the dashboard reflects the node's true posture
+    ⑤ remediation is decoupled from detection: a genuine change re-scans, but
+       Puppet enforcement runs ONLY when the closed loop is explicitly enabled
+       — globally (platform config ``detection_closed_loop_enabled``) or for a
+       Puppet node group the node belongs to (``active_response_enabled``).
+       With the loop off the platform observes and reports; it never
+       auto-enforces behind the operator's back.
+    ⑥ every stored event is broadcast over WebSocket so the dashboard
        updates live (node-<id> channel + the global detection-events feed)
 
 The agent NEVER suppresses locally — every event reaches this gateway and the
@@ -40,9 +47,18 @@ from core.events import Events
 logger = logging.getLogger(__name__)
 
 # Event types that are evidence-only by nature: they are stored but can never
-# trigger remediation, regardless of the suppression rules below.
+# trigger a scan or remediation, regardless of the suppression rules below.
 _PASSIVE_EVENT_TYPES = {"baseline"}
 _VALID_EVENT_TYPES = {"created", "modified", "deleted", "moved", "baseline", "heartbeat"}
+
+# Global kill-switch / enable for closed-loop enforcement. Stored in
+# platform_config as the string "true"/"false"; absent (or anything else)
+# means disabled — detection observes and scans but never auto-remediates.
+DETECTION_CLOSED_LOOP_CONFIG_KEY = "detection_closed_loop_enabled"
+
+
+def _as_bool(raw: Any) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
 def _parse_timestamp(raw: Any) -> datetime:
@@ -55,8 +71,10 @@ def _parse_timestamp(raw: Any) -> datetime:
 
 
 class ReceiveDetectionEventUseCase:
-    """Validate, store, decide (suppression), and — for genuine drift —
-    trigger the Puppet remediation loop in the background."""
+    """Validate, store, decide (suppression), and — for genuine drift — always
+    launch a compliance scan, plus a Puppet remediation run when the closed
+    loop is enabled. Both run in the background so the webhook answers the agent
+    in milliseconds instead of holding it open for the length of a scan/run."""
 
     def __init__(
         self,
@@ -64,6 +82,9 @@ class ReceiveDetectionEventUseCase:
         detection_repo: IDetectionRepository,
         compliance_repo: IComplianceRepository,
         remediate_uc: Any,               # TriggerRemediationUseCase
+        collect_uc: Any = None,          # CollectNodeComplianceUseCase
+        config_repo: Any = None,         # IPlatformConfigRepository
+        node_group_repo: Any = None,     # INodeGroupRepository
         event_bus: Any = None,
         ws_manager: Any = None,
     ) -> None:
@@ -71,6 +92,9 @@ class ReceiveDetectionEventUseCase:
         self._repo = detection_repo
         self._compliance = compliance_repo
         self._remediate = remediate_uc
+        self._collect = collect_uc
+        self._config = config_repo
+        self._node_groups = node_group_repo
         self._bus = event_bus
         self._ws = ws_manager
         # Closes the race between two events arriving before the first one's
@@ -125,12 +149,27 @@ class ReceiveDetectionEventUseCase:
                 "prev_hash": event.prev_hash,
                 "new_hash": event.new_hash,
             })
-            # Fire the enforcement loop in the background: the webhook answers
-            # the agent in milliseconds instead of holding it open for the
-            # length of a Puppet run.
-            self._inflight.add(node.id)
-            asyncio.create_task(self._run_remediation(node, event))
-            result["action"] = "puppet remediation scheduled"
+
+            # Every genuine change re-assesses compliance: launch a scan so the
+            # dashboard reflects the node's true posture after the drift. This
+            # happens regardless of whether remediation is enabled.
+            actions: list[str] = []
+            if self._collect is not None:
+                asyncio.create_task(self._run_scan(node, event))
+                actions.append("compliance scan scheduled")
+
+            # Remediation is decoupled: only enforce when the closed loop is
+            # explicitly enabled (globally or for one of the node's groups).
+            closed_loop = await self._closed_loop_enabled(node)
+            result["closed_loop"] = closed_loop
+            if closed_loop:
+                # inflight guard closes the race with the pending-RemediationEvent
+                # row so the Puppet run's own writes don't re-trigger.
+                self._inflight.add(node.id)
+                asyncio.create_task(self._run_remediation(node, event))
+                actions.append("puppet remediation scheduled")
+
+            result["action"] = " + ".join(actions) if actions else "recorded"
 
         return result
 
@@ -234,7 +273,60 @@ class ReceiveDetectionEventUseCase:
         # (c) genuine drift.
         return {"suppressed": False, "reason": None}
 
-    # ── Background remediation ────────────────────────────────────────────────
+    # ── Closed-loop gate ──────────────────────────────────────────────────────
+
+    async def _closed_loop_enabled(self, node: Node) -> bool:
+        """True when Puppet enforcement may run automatically for this node.
+
+        Two independent levers, either of which turns the loop on:
+          1. the global platform switch ``detection_closed_loop_enabled``;
+          2. ``active_response_enabled`` on any Puppet node group the node
+             belongs to — per-group active response.
+        With neither set the platform observes and scans but never enforces.
+        """
+        # (1) global switch
+        if self._config is not None:
+            try:
+                if _as_bool(await self._config.get(DETECTION_CLOSED_LOOP_CONFIG_KEY)):
+                    return True
+            except Exception as exc:
+                logger.error("closed-loop config read failed for %s: %s", node.id, exc)
+
+        # (2) per-group active response
+        if self._node_groups is not None:
+            try:
+                groups = await self._node_groups.find_all()
+            except Exception as exc:
+                logger.error("closed-loop group lookup failed for %s: %s", node.id, exc)
+                groups = []
+            for g in groups:
+                if getattr(g, "active_response_enabled", False) and node.id in (getattr(g, "node_ids", None) or []):
+                    return True
+
+        return False
+
+    # ── Background scan (always, on genuine drift) ────────────────────────────
+
+    async def _run_scan(self, node: Node, event: ConfigChangeEvent) -> None:
+        try:
+            self._publish(Events.SCAN_STARTED, {
+                "node_id": node.id,
+                "detection_event_id": event.id,
+                "trigger": "detection",
+            })
+            result = await self._collect.execute(node.id)
+            self._publish(Events.SCAN_COMPLETED, {
+                "node_id": node.id,
+                "detection_event_id": event.id,
+                "collected": result.get("collected"),
+            })
+            await self._broadcast(node, event, phase="scan_completed", extra=result)
+        except Exception as exc:
+            logger.error("Detection-triggered scan failed for %s: %s", node.id, exc)
+            await self._broadcast(node, event, phase="scan_failed",
+                                  extra={"error": str(exc)})
+
+    # ── Background remediation (only when closed loop is enabled) ──────────────
 
     async def _run_remediation(self, node: Node, event: ConfigChangeEvent) -> None:
         try:
@@ -335,6 +427,51 @@ class ListDetectionEventsUseCase:
             }
             for e in events
         ]
+
+
+class GetConfigBlobUseCase:
+    """Fetch a content-addressed file snapshot by hash for the diff modal.
+
+    The remediation view is a diff of the previous snapshot against the new one;
+    the frontend fetches both blobs by their ``prev_hash`` / ``new_hash``. Text
+    is decoded best-effort and capped so a large or binary blob can't wedge the
+    UI — ``is_binary`` / ``truncated`` tell the client what it's looking at.
+    """
+
+    # Hard cap on the text returned to the browser (bytes). A config file well
+    # over this is pathological; the diff stays useful without shipping MBs.
+    MAX_TEXT_BYTES = 512 * 1024
+
+    def __init__(self, detection_repo: IDetectionRepository) -> None:
+        self._repo = detection_repo
+
+    async def execute(self, sha256: str) -> dict:
+        sha = (sha256 or "").strip().lower()
+        if not sha:
+            raise ValidationError("A blob hash is required")
+
+        blob = await self._repo.find_blob(sha)
+        if blob is None:
+            raise NotFoundError(f"No stored snapshot for hash '{sha}'")
+
+        content: bytes = blob["content"] or b""
+        truncated = len(content) > self.MAX_TEXT_BYTES
+        head = content[: self.MAX_TEXT_BYTES]
+        try:
+            text = head.decode("utf-8")
+            is_binary = "\x00" in text
+        except UnicodeDecodeError:
+            text = ""
+            is_binary = True
+
+        return {
+            "sha256": blob["sha256"],
+            "size": blob["size"],
+            "first_seen_at": blob["first_seen_at"],
+            "text": "" if is_binary else text,
+            "is_binary": is_binary,
+            "truncated": truncated,
+        }
 
 
 class GetNodeDetectionStatusUseCase:

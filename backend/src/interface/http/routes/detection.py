@@ -57,16 +57,27 @@ class NodeDetectionStatusResponse(BaseModel):
     recent_events: int = 0
 
 
+class ConfigBlobResponse(BaseModel):
+    sha256: str
+    size: int
+    first_seen_at: str | None = None
+    text: str = ""
+    is_binary: bool = False
+    truncated: bool = False
+
+
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
 _list_events_uc = None
 _node_status_uc = None
+_blob_uc = None
 
 
-def set_use_cases(list_events_uc=None, node_status_uc=None) -> None:
-    global _list_events_uc, _node_status_uc
+def set_use_cases(list_events_uc=None, node_status_uc=None, blob_uc=None) -> None:
+    global _list_events_uc, _node_status_uc, _blob_uc
     _list_events_uc = list_events_uc
     _node_status_uc = node_status_uc
+    _blob_uc = blob_uc
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -98,5 +109,23 @@ async def get_node_detection_status(
         raise HTTPException(status_code=503, detail="Detection module not initialised")
     try:
         return await _node_status_uc.execute(id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/blobs/{sha256}", response_model=ConfigBlobResponse,
+            summary="Fetch a content-addressed file snapshot (for the diff view)")
+async def get_config_blob(
+    sha256: str,
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """Return the stored snapshot for a hash. The detection remediation view is
+    a diff of the previous snapshot (`prev_hash`) against the new one
+    (`new_hash`); the modal fetches both blobs here. Text is decoded best-effort
+    and capped — `is_binary` / `truncated` flag anything the diff can't show."""
+    if _blob_uc is None:
+        raise HTTPException(status_code=503, detail="Detection module not initialised")
+    try:
+        return await _blob_uc.execute(sha256)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
