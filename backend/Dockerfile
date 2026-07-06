@@ -38,6 +38,8 @@ COPY scan-profiles/    scan-profiles/
 COPY puppet/           puppet/
 # Detection agent shipped to nodes by install_detection_agent.yml (lands at /app/detection-agent)
 COPY detection-agent/  detection-agent/
+# Committed referential seed (SABC Baseline) imported at first boot (lands at /app/platform)
+COPY platform/         platform/
 
 # One-shot SQLite → PostgreSQL migration helper (invoked by deploy/ship.sh).
 COPY migrate_to_postgres.py .

@@ -34,6 +34,9 @@ def _candidate_dirs() -> list[str]:
     repo_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
     return [
         os.environ.get("REFERENTIAL_SEED_DIR", "").strip(),
+        # The seed now lives under backend/platform (shipped in the image at
+        # /app/platform); keep the old top-level path as a fallback.
+        os.path.join(repo_root, "backend", "platform", "seed", "referentials", "sabc_baseline"),
         os.path.join(repo_root, "platform", "seed", "referentials", "sabc_baseline"),
         "/app/platform/seed/referentials/sabc_baseline",
     ]
