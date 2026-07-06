@@ -341,16 +341,17 @@ class InstallServiceUseCase:
         # Persist so the webhook receiver and every future agent install agree.
         await self._config.set("detection_webhook_api_key", api_key)
 
-        # Canonical agent sources live in the top-level detection-agent/ dir;
-        # inside the Docker image they are copied to /app/detection-agent.
+        # Agent sources live in backend/detection-agent (a sibling of the ansible
+        # dir); the Docker image copies them to /app/detection-agent and the dev
+        # compose bind-mounts them to the same path.
         candidates = [
             os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(settings.ansible_dir or "/app/ansible"))),
+                os.path.dirname(os.path.abspath(settings.ansible_dir or "/app/ansible")),
                 "detection-agent",
             ),
             "/app/detection-agent",
         ]
-        src = next((c for c in candidates if os.path.isdir(c)), candidates[0])
+        src = next((c for c in candidates if os.path.isdir(c)), candidates[-1])
 
         return {
             "detection_gateway_url": f"https://{public_host}:{https_port}/api/webhooks/detection",

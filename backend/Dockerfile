@@ -36,6 +36,8 @@ COPY ansible/          ansible/
 COPY scan-profiles/    scan-profiles/
 # Puppet module (sabc_compliance) shipped to the master by deploy_compliance_module.yml
 COPY puppet/           puppet/
+# Detection agent shipped to nodes by install_detection_agent.yml (lands at /app/detection-agent)
+COPY detection-agent/  detection-agent/
 
 # One-shot SQLite → PostgreSQL migration helper (invoked by deploy/ship.sh).
 COPY migrate_to_postgres.py .
