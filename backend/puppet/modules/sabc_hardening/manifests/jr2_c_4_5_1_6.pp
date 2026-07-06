@@ -2,30 +2,5 @@
 # Generated from the SABC referential. Enforcement is the family's own
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_4_5_1_6 {
-  if $facts['os']['family'] == 'Debian' {
-    exec { 'sabc_jr2_c_4_5_1_6_debian':
-      command  => @(SABC_CMD/L),
-        difok = 2
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        grep -P '^\h*difok\h*=\h*([2-9]|[1-9][0-9]+)\b' /etc/security/pwquality.conf
-    | SABC_CHK
-      logoutput => 'on_failure',
-    }
-  }
-  if $facts['os']['family'] == 'RedHat' {
-    exec { 'sabc_jr2_c_4_5_1_6_redhat':
-      command  => @(SABC_CMD/L),
-        difok = 2
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        grep -P '^\h*difok\h*=\h*([2-9]|[1-9][0-9]+)\b' /etc/security/pwquality.conf
-    | SABC_CHK
-      logoutput => 'on_failure',
-    }
-  }
+  # No runnable enforcement authored for any applicable family.
 }

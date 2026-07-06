@@ -3,28 +3,24 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_4_2_12 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_4_2_12_debian_cfg.sh')
+    $chk_debian = find_file('sabc_hardening/jr2_c_4_2_12_debian_chk.sh')
     exec { 'sabc_jr2_c_4_2_12_debian':
-      command  => @(SABC_CMD/L),
-        Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/hosts | awk '{print $1}')" | grep ciphers
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_debian}' </dev/null",
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_4_2_12_redhat_cfg.sh')
+    $chk_redhat = find_file('sabc_hardening/jr2_c_4_2_12_redhat_chk.sh')
     exec { 'sabc_jr2_c_4_2_12_redhat':
-      command  => @(SABC_CMD/L),
-        Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/hosts | awk '{print $1}')" | grep ciphers
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_redhat}' </dev/null",
       logoutput => 'on_failure',
     }
   }

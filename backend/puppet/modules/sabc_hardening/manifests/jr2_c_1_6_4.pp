@@ -3,30 +3,20 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_1_6_4 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_1_6_4_debian_cfg.sh')
     exec { 'sabc_jr2_c_1_6_4_debian':
-      command  => @(SABC_CMD/L),
-        chown root:root $(readlink -e /etc/motd)
-        chmod u-x,go-wx $(readlink -e /etc/motd)
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        [ -e /etc/motd ] && stat -Lc 'Access: (%#a/%A) Uid: ( %u/ %U) Gid: { %g/ %G)' /etc/motd
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_1_6_4_redhat_cfg.sh')
     exec { 'sabc_jr2_c_1_6_4_redhat':
-      command  => @(SABC_CMD/L),
-        chown root:root $(readlink -e /etc/motd)
-        chmod u-x,go-wx $(readlink -e /etc/motd)
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        [ -e /etc/motd ] && stat -Lc 'Access: (%#a/%A) Uid: ( %u/ %U) Gid: { %g/ %G)' /etc/motd
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
       logoutput => 'on_failure',
     }
   }

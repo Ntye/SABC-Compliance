@@ -3,28 +3,24 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_2_2_8 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_2_2_8_debian_cfg.sh')
+    $chk_debian = find_file('sabc_hardening/jr2_c_2_2_8_debian_chk.sh')
     exec { 'sabc_jr2_c_2_2_8_debian':
-      command  => @(SABC_CMD/L),
-        apt purge apache2
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' apache2
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_debian}' </dev/null",
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_2_2_8_redhat_cfg.sh')
+    $chk_redhat = find_file('sabc_hardening/jr2_c_2_2_8_redhat_chk.sh')
     exec { 'sabc_jr2_c_2_2_8_redhat':
-      command  => @(SABC_CMD/L),
-        dnf remove -y apache2
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        rpm -q apache2
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_redhat}' </dev/null",
       logoutput => 'on_failure',
     }
   }

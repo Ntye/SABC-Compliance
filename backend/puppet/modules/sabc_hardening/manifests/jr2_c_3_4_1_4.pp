@@ -3,33 +3,24 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_3_4_1_4 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_3_4_1_4_debian_cfg.sh')
+    $chk_debian = find_file('sabc_hardening/jr2_c_3_4_1_4_debian_chk.sh')
     exec { 'sabc_jr2_c_3_4_1_4_debian':
-      command  => @(SABC_CMD/L),
-        ufw allow in on lo
-        ufw allow out on lo
-        ufw deny in from 127.0.0.0/8
-        ufw deny in from ::1
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        ufw status verbose
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_debian}' </dev/null",
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_3_4_1_4_redhat_cfg.sh')
+    $chk_redhat = find_file('sabc_hardening/jr2_c_3_4_1_4_redhat_chk.sh')
     exec { 'sabc_jr2_c_3_4_1_4_redhat':
-      command  => @(SABC_CMD/L),
-        firewall-cmd --permanent --zone=trusted --add-interface=lo
-        firewall-cmd --reload
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        firewall-cmd --get-zone-of-interface=lo
-        firewall-cmd --list-all --zone=trusted
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_redhat}' </dev/null",
       logoutput => 'on_failure',
     }
   }

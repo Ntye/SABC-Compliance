@@ -53,6 +53,89 @@ def puppet_key(control: ProfileControl) -> str:
     return _puppet_key(control)
 
 
+# ── Guidance → runnable shell ─────────────────────────────────────────────────
+
+# Copy/OCR artifact in several referential cells: "2>&1; then" arrives as
+# "2> then", which redirects stderr to a file literally named "then" and breaks
+# the surrounding if-statement. Never intentional — repair it.
+_BROKEN_REDIRECT = re.compile(r"2>\s+then\b")
+
+# Guidance placeholders that mark a block as a TEMPLATE, not a command:
+# "<device>", "<userlist>", "<port>/<tcp or udp protocol>", "{NAME_OF_X}".
+# "<" followed by a letter never occurs in real shell here (herestrings are
+# "<<<", process substitution is "< <(", fd redirects are digits).
+_PLACEHOLDER = re.compile(r"<[A-Za-z][^<>\n]*>|\{[A-Z][A-Z0-9_]{3,}\}")
+
+# Commands that require a terminal/interactive input — running them from an
+# exec can only hang or abort, so they are implementation-pending.
+_INTERACTIVE = re.compile(
+    r"^\s*(?:sudo\s+)?("
+    r"crontab\b.*\s-e\b|visudo\b|sensible-editor\b|nano\b|vi\b|vim\b|"
+    r"grub-mkpasswd-pbkdf2\b|passwd\s*$"
+    r")"
+)
+
+# First tokens that identify CONFIG-FILE CONTENT the guidance shows for manual
+# editing (sudoers, sshd_config, ntp/chrony, pwquality, PAM, postfix) — not
+# executable commands.
+_CONFIG_TOKENS = {
+    "defaults", "restrict", "server", "pool", "inet_interfaces",
+    "difok", "dictcheck", "maxrepeat", "minlen", "minclass", "enforcing",
+    "auth", "account", "password", "session", "audit",
+    "allowusers", "allowgroups", "denyusers", "denygroups",
+    "banner", "protocol", "maxstartups",
+}
+
+# fstab-style template line: "<dev> /mount fstype defaults,opts 0 0".
+_FSTAB_LINE = re.compile(r"^\S+\s+/\S*\s+\S+\s+\S*defaults\b")
+
+_APT_CMD = re.compile(r"^(\s*)(?:sudo\s+)?apt(?:-get)?\s+(install|purge|remove|autoremove)\b(.*)$")
+
+
+def _sanitize(body: str) -> str:
+    return _BROKEN_REDIRECT.sub("2>&1; then", body)
+
+
+def _noninteractive_apt(cmd: str) -> str:
+    """Rewrite apt/apt-get mutations to be non-interactive (they otherwise stop
+    at 'Do you want to continue? [Y/n]' and abort with no tty)."""
+    lines = []
+    for ln in cmd.splitlines():
+        m = _APT_CMD.match(ln)
+        if m:
+            ln = (f"{m.group(1)}DEBIAN_FRONTEND=noninteractive "
+                  f"apt-get -y {m.group(2)}{m.group(3)}")
+        lines.append(ln)
+    return "\n".join(lines)
+
+
+def _looks_like_config(cmds: str) -> bool:
+    """True when extracted 'commands' are actually config-file content or an
+    un-fillable template — running them as shell can only fail."""
+    if _PLACEHOLDER.search(cmds):
+        return True
+    for ln in cmds.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if ln.startswith("["):                      # ini/systemd section header
+            return True
+        if _FSTAB_LINE.match(ln):
+            return True
+        first = ln.split()[0].rstrip(":").lower()
+        if first in _CONFIG_TOKENS:
+            return True
+        if _INTERACTIVE.match(ln):
+            return True
+    return False
+
+
+def _quote_balanced(text: str) -> bool:
+    """Crude single/double-quote balance check (ignores escaping — good enough
+    for deciding whether a prompted command continues on the next line)."""
+    return text.count("'") % 2 == 0 and text.count('"') % 2 == 0
+
+
 def extract_shell(guidance: str | None) -> str:
     """Extract a runnable shell body from a Validate/Configure cell.
 
@@ -71,7 +154,7 @@ def extract_shell(guidance: str | None) -> str:
     blocks = re.findall(r"```[a-zA-Z0-9_+-]*\n(.*?)```", text, re.S)
     if not blocks:
         return ""
-    body = blocks[0].strip("\n")
+    body = _sanitize(blocks[0].strip("\n"))
     if not body.strip():
         return ""
 
@@ -89,19 +172,27 @@ def extract_shell(guidance: str | None) -> str:
     if has_prompt:
         # CIS convention: command lines carry a root/user prompt ('# '/'$ ') and
         # any other lines are EXPECTED OUTPUT. Keep only the prompted commands
-        # (prompt stripped) so we never run the sample output as a command.
+        # (prompt stripped). A command continues onto unprompted lines while it
+        # ends with '\' OR its quotes are unbalanced (multi-line printf "...").
         cmds: list[str] = []
         for ln in lines:
             m = re.match(r"^\s*[#$]\s(?=\S)(.*)$", ln.rstrip())
             if m:
                 cmds.append(m.group(1))
-            elif cmds and cmds[-1].rstrip().endswith("\\"):
-                cmds.append(ln.strip())  # continuation of a wrapped command
-        return "\n".join(cmds).strip()
+            elif cmds and (cmds[-1].rstrip().endswith("\\")
+                           or not _quote_balanced("\n".join(cmds))):
+                cmds.append(ln.rstrip())
+        out = "\n".join(cmds).strip()
+    else:
+        # No prompt and not a script → a block of bare command(s). Keep every
+        # non-empty line as a command.
+        out = "\n".join(l for l in (ln.rstrip() for ln in lines) if l.strip()).strip()
 
-    # No prompt and not a script → a block of bare command(s). Keep every
-    # non-empty line as a command.
-    return "\n".join(l for l in (ln.rstrip() for ln in lines) if l.strip()).strip()
+    if not out or _looks_like_config(out):
+        # Template/config content or interactive-only guidance — implementation
+        # pending rather than shell noise (or worse) at enforce time.
+        return ""
+    return _noninteractive_apt(out)
 
 
 def _puppet_escape(cmd: str) -> str:
@@ -123,11 +214,37 @@ class GenerationResult:
 
 # ── Puppet module ─────────────────────────────────────────────────────────────
 
-def _puppet_class(control: ProfileControl) -> tuple[str, list[str]]:
-    """Render one Puppet class. Returns (manifest_text, pending[])."""
+# Every script runs under real bash (the CIS remediation scripts use bash-only
+# syntax — herestrings, process substitution, [[ ]] — which Puppet's shell
+# provider would otherwise hand to /bin/sh). globstar makes the CIS
+# "/lib/modules/**/kernel/…" module-path globs expand as the scripts assume.
+_SCRIPT_PRELUDE = (
+    "#!/usr/bin/env bash\n"
+    "# Generated by the SABC Compliance Platform — do not edit by hand.\n"
+    "shopt -s globstar 2>/dev/null || true\n"
+)
+
+
+def _script_body(text: str) -> str:
+    if text.lstrip().startswith("#!"):
+        # Keep the script's own shebang line but still enable globstar.
+        first, _, rest = text.partition("\n")
+        return f"{first}\nshopt -s globstar 2>/dev/null || true\n{rest.rstrip()}\n"
+    return _SCRIPT_PRELUDE + text.rstrip() + "\n"
+
+
+def _puppet_class(control: ProfileControl) -> tuple[str, dict[str, str], list[str]]:
+    """Render one Puppet class. Returns (manifest_text, script_files, pending[]).
+
+    The Configure/Validate bodies are shipped as real files under the module's
+    files/ directory and executed with bash — embedding them in the manifest as
+    /bin/sh one-liners broke every bash-only CIS script. `</dev/null` guarantees
+    nothing can sit waiting for terminal input.
+    """
     key = _puppet_key(control)
     pending: list[str] = []
     branches: list[str] = []
+    scripts: dict[str, str] = {}
 
     for fam in control.families():
         facter = _FACTER_FAMILY.get(fam)
@@ -138,17 +255,26 @@ def _puppet_class(control: ProfileControl) -> tuple[str, list[str]]:
             pending.append(f"{control.control_id}/{fam}: no runnable Configure guidance")
             continue
         validate = extract_shell(control.validate_for(fam))
+
+        cfg_name = f"{key}_{fam}_cfg.sh"
+        scripts[cfg_name] = _script_body(configure)
         guard = ""
         if validate:
-            guard = f"    unless   => @(SABC_CHK/L),\n{_heredoc(validate, 'SABC_CHK')}    | SABC_CHK\n"
+            chk_name = f"{key}_{fam}_chk.sh"
+            scripts[chk_name] = _script_body(validate)
+            guard = (
+                f"    $chk_{fam} = find_file('sabc_hardening/{chk_name}')\n"
+            )
         branches.append(
             f"  if $facts['os']['family'] == '{facter}' {{\n"
-            f"    exec {{ 'sabc_{key}_{fam}':\n"
-            f"      command  => @(SABC_CMD/L),\n{_heredoc(configure, 'SABC_CMD')}      | SABC_CMD\n"
-            f"      provider => 'shell',\n"
-            f"      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],\n"
+            f"    $cfg_{fam} = find_file('sabc_hardening/{cfg_name}')\n"
             f"{guard}"
-            f"      logoutput => 'on_failure',\n"
+            f"    exec {{ 'sabc_{key}_{fam}':\n"
+            f"      command   => \"/bin/bash '${{cfg_{fam}}}' </dev/null\",\n"
+            f"      provider  => 'shell',\n"
+            f"      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],\n"
+            + (f"      unless    => \"/bin/bash '${{chk_{fam}}}' </dev/null\",\n" if validate else "")
+            + f"      logoutput => 'on_failure',\n"
             f"    }}\n"
             f"  }}"
         )
@@ -165,32 +291,35 @@ def _puppet_class(control: ProfileControl) -> tuple[str, list[str]]:
         body = "  # No runnable enforcement authored for any applicable family.\n"
     else:
         body = "\n".join(branches) + "\n"
-    return header + body + "}\n", pending
-
-
-def _heredoc(script: str, tag: str) -> str:
-    indent = "        "
-    lines = script.splitlines() or [""]
-    return "".join(f"{indent}{ln}\n" for ln in lines)
+    return header + body + "}\n", scripts, pending
 
 
 def generate_puppet_module(profile: Profile, target_dir: str) -> GenerationResult:
     """Write the sabc_hardening Puppet module for every control of *profile*."""
     manifests = os.path.join(target_dir, "manifests")
+    files_dir = os.path.join(target_dir, "files")
     os.makedirs(manifests, exist_ok=True)
-    # Clean previously generated per-control manifests (idempotent regeneration).
+    os.makedirs(files_dir, exist_ok=True)
+    # Clean previously generated artifacts (idempotent regeneration).
     for f in os.listdir(manifests):
         if f.endswith(".pp") and f != "init.pp":
             os.remove(os.path.join(manifests, f))
+    for f in os.listdir(files_dir):
+        if f.endswith(".sh"):
+            os.remove(os.path.join(files_dir, f))
 
     result = GenerationResult()
     class_names: list[str] = []
     for c in profile.active_controls():
-        text, pending = _puppet_class(c)
+        text, scripts, pending = _puppet_class(c)
         key = _puppet_key(c)
         with open(os.path.join(manifests, f"{key}.pp"), "w", encoding="utf-8") as fh:
             fh.write(text)
         result.files_written += 1
+        for name, content in scripts.items():
+            with open(os.path.join(files_dir, name), "w", encoding="utf-8") as fh:
+                fh.write(content)
+            result.files_written += 1
         class_names.append(key)
         result.pending.extend(pending)
         for fam in c.families():

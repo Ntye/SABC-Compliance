@@ -3,28 +3,24 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_3_4_2_7 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_3_4_2_7_debian_cfg.sh')
+    $chk_debian = find_file('sabc_hardening/jr2_c_3_4_2_7_debian_chk.sh')
     exec { 'sabc_jr2_c_3_4_2_7_debian':
-      command  => @(SABC_CMD/L),
-        systemctl enable nftables
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        systemctl is-enabled nftables
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_debian}' </dev/null",
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_3_4_2_7_redhat_cfg.sh')
+    $chk_redhat = find_file('sabc_hardening/jr2_c_3_4_2_7_redhat_chk.sh')
     exec { 'sabc_jr2_c_3_4_2_7_redhat':
-      command  => @(SABC_CMD/L),
-        systemctl enable nftables
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        systemctl is-enabled nftables
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_redhat}' </dev/null",
       logoutput => 'on_failure',
     }
   }

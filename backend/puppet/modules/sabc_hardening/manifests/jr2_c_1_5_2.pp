@@ -3,32 +3,24 @@
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_1_5_2 {
   if $facts['os']['family'] == 'Debian' {
+    $cfg_debian = find_file('sabc_hardening/jr2_c_1_5_2_debian_cfg.sh')
+    $chk_debian = find_file('sabc_hardening/jr2_c_1_5_2_debian_chk.sh')
     exec { 'sabc_jr2_c_1_5_2_debian':
-      command  => @(SABC_CMD/L),
-        GRUB_CMDLINE_LINUX="apparmor=1 security=apparmor"
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        grep "^\s*linux" /boot/grub/grub.cfg | grep -v "apparmor=1"
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_debian}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_debian}' </dev/null",
       logoutput => 'on_failure',
     }
   }
   if $facts['os']['family'] == 'RedHat' {
+    $cfg_redhat = find_file('sabc_hardening/jr2_c_1_5_2_redhat_cfg.sh')
+    $chk_redhat = find_file('sabc_hardening/jr2_c_1_5_2_redhat_chk.sh')
     exec { 'sabc_jr2_c_1_5_2_redhat':
-      command  => @(SABC_CMD/L),
-        sed -ri 's/(selinux|enforcing)=0\s*//g' /etc/default/grub
-        grub2-mkconfig -o /boot/grub2/grub.cfg
-        sed -ri 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
-        setenforce 1
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        grep -P '^\h*(GRUB_CMDLINE_LINUX(_DEFAULT)?=.*)(selinux=0|enforcing=0)' /etc/default/grub
-        grep -P '^\h*SELINUX=' /etc/selinux/config
-    | SABC_CHK
+      command   => "/bin/bash '${cfg_redhat}' </dev/null",
+      provider  => 'shell',
+      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+      unless    => "/bin/bash '${chk_redhat}' </dev/null",
       logoutput => 'on_failure',
     }
   }

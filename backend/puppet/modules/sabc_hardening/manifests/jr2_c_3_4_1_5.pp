@@ -2,50 +2,5 @@
 # Generated from the SABC referential. Enforcement is the family's own
 # Configure procedure, run only when the Validate procedure fails.
 class sabc_hardening::jr2_c_3_4_1_5 {
-  if $facts['os']['family'] == 'Debian' {
-    exec { 'sabc_jr2_c_3_4_1_5_debian':
-      command  => @(SABC_CMD/L),
-        ufw allow in <port>/<tcp or udp protocol>
-        ufw deny in <port>/<tcp or udp protocol>
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        #!/usr/bin/env bash
-        
-        {
-         unset a_ufwout;unset a_openports
-         while read -r l_ufwport; do
-         [ -n "$l_ufwport" ] && a_ufwout+=("$l_ufwport")
-         done < <(ufw status verbose | grep -Po '^\h*\d+\b' | sort -u)
-         while read -r l_openport; do
-         [ -n "$l_openport" ] && a_openports+=("$l_openport")
-         done < <(ss -tuln | awk '($5!~/%lo:/ && $5!~/127.0.0.1:/ && $5!~/\[?::1\]?:/) {split($5, a, ":"); print a[2]}' | sort -u)
-         a_diff=("$(printf '%s\n' "${a_openports[@]}" "${a_ufwout[@]}" "${a_ufwout[@]}" | sort | uniq -u)")
-         if [[ -n "${a_diff[*]}" ]]; then
-         echo -e "\n- Audit Result:\n ** FAIL **\n- The following port(s) don't have a rule in UFW: $(printf '%s\n' \\n"${a_diff[*]}")\n- End List"
-         else
-         echo -e "\n - Audit Passed -\n- All open ports have a rule in UFW\n"
-         fi
-        }
-    | SABC_CHK
-      logoutput => 'on_failure',
-    }
-  }
-  if $facts['os']['family'] == 'RedHat' {
-    exec { 'sabc_jr2_c_3_4_1_5_redhat':
-      command  => @(SABC_CMD/L),
-        firewall-cmd --permanent --remove-service=<service>
-        firewall-cmd --permanent --remove-port=<port>/<proto>
-        firewall-cmd --reload
-      | SABC_CMD
-      provider => 'shell',
-      path     => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-    unless   => @(SABC_CHK/L),
-        firewall-cmd --get-default-zone
-        firewall-cmd --list-all
-    | SABC_CHK
-      logoutput => 'on_failure',
-    }
-  }
+  # No runnable enforcement authored for any applicable family.
 }
