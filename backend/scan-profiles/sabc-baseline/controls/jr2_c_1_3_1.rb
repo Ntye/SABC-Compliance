@@ -4,18 +4,32 @@ control 'JR2.C.1.3.1' do
   tag cis_level: 1
   tag control_key: 'jr2_c_1_3_1'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
+    v_debian = command(<<-'SABC_V'.chomp)
       grep "^set superusers" /boot/grub/grub.cfg
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
+    v_redhat = command(<<-'SABC_V'.chomp)
       grep -P '^\h*set\h+superusers' /boot/grub2/grub.cfg /boot/grub2/user.cfg 2>/dev/null
       grep -P '^\h*password' /boot/grub2/grub.cfg /boot/grub2/user.cfg 2>/dev/null
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

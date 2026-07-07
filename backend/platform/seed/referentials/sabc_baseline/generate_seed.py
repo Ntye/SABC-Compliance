@@ -23,7 +23,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from redhat_translation import derive_redhat  # noqa: E402
+from authored_remediations import REMEDIATIONS  # noqa: E402
+from redhat_translation import PROV_AUTHORED, derive_redhat  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 XLSX = os.path.join(HERE, "Referentiel_Template_multiOS.xlsx")
@@ -93,10 +94,22 @@ def build(report: bool = False) -> list[list[str]]:
         applies = (r["applies_to"] or "debian;redhat").lower()
         redhat_in_scope = "redhat" in applies
 
+        # Authored remediations replace the spreadsheet's Debian cells BEFORE
+        # the Red Hat derivation, so the derived guidance ports the corrected
+        # procedure; explicitly-authored Red Hat cells bypass derivation.
+        authored = REMEDIATIONS.get(cid) if is_control else None
+        if authored:
+            r["validate_debian"] = authored.get("validate_debian", r["validate_debian"])
+            r["configure_debian"] = authored.get("configure_debian", r["configure_debian"])
+
         v_rh = c_rh = ""
         if is_control and redhat_in_scope:
             v_rh, pv = derive_redhat(cid, "validate", r["validate_debian"])
             c_rh, pc = derive_redhat(cid, "configure", r["configure_debian"])
+            if authored and "validate_redhat" in authored:
+                v_rh, pv = PROV_AUTHORED + authored["validate_redhat"], "authored"
+            if authored and "configure_redhat" in authored:
+                c_rh, pc = PROV_AUTHORED + authored["configure_redhat"], "authored"
             for p, fld in ((pv, "validate"), (pc, "configure")):
                 stats[p] = stats.get(p, 0) + 1
                 if p == "empty":

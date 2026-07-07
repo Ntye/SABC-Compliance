@@ -9,10 +9,17 @@ control 'JR2.C.3.4.2.2' do
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
+    v_redhat = command(<<-'SABC_V'.chomp)
       grep -P '^\h*FirewallBackend=nftables' /etc/firewalld/firewalld.conf
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

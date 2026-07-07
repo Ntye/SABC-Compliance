@@ -4,11 +4,20 @@ control 'JR2.C.1.5.1' do
   tag cis_level: 1
   tag control_key: 'jr2_c_1_5_1'
   if os[:family] == 'debian'
-    describe package('apparmor') do
-      it { should be_installed }
-    end
-    describe package('apparmor-utils') do
-      it { should be_installed }
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      dpkg-query -W apparmor >/dev/null 2>&1 || exit 1
+      dpkg-query -W apparmor-utils >/dev/null 2>&1 || exit 1
+      exit 0
+    SABC_V
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'

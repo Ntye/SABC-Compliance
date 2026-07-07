@@ -5,12 +5,12 @@ control 'JR2.C.1.1.1' do
   tag control_key: 'jr2_c_1_1_1'
   if os[:family] == 'debian'
     describe package('autofs') do
-      it { should be_installed }
+      it { should_not be_installed }
     end
   end
   if os[:family] == 'redhat'
     describe package('autofs') do
-      it { should be_installed }
+      it { should_not be_installed }
     end
   end
 end

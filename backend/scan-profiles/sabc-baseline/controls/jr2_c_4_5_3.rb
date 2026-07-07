@@ -4,107 +4,37 @@ control 'JR2.C.4.5.3' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_5_3'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      #!/usr/bin/env bash
-      
-      {
-       l_output="" l_output2=""
-       l_tmv_max="900"
-       l_searchloc="/etc/bashrc /etc/bash.bashrc /etc/profile /etc/profile.d/*.sh"
-       a_tmofile=()
-       while read -r l_file; do
-       [ -e "$l_file" ] && a_tmofile+=("$(readlink -f $l_file)")
-       done < <(grep -PRils '^\h*([^#\n\r]+\h+)?TMOUT=\d+\b' $l_searchloc)
-       if ! (( ${#a_tmofile[@]} > 0 )); then
-       l_output2="$l_output2\n - TMOUT is not set"
-       elif (( ${#a_tmofile[@]} > 1 )); then
-       l_output2="$l_output2\n - TMOUT is set in multiple locations.\n - List of files where TMOUT is set:\n$(printf '%s\n' "${a_tmofile[@]}")\n - end of list\n"
-       else
-       for l_file in ${a_tmofile[@]}; do
-       if (( "$(grep -Pci '^\h*([^#\n\r]+\h+)?TMOUT=\d+' "$l_file")" > 1 )); then
-       l_output2="$l_output2\n - TMOUT is set multiple times in \"$l_file\""
-       else
-       l_tmv="$(grep -Pi '^\h*([^#\n\r]+\h+)?TMOUT=\d+' "$l_file" | grep -Po '\d+')"
-       if (( "$l_tmv" > "$l_tmv_max" )); then
-       l_output2="$l_output\n - TMOUT is \"$l_tmv\" in \"$l_file\"\n - Should be \"$l_tmv_max\" or less and not \"0\""
-       else
-       l_output="$l_output\n- TMOUT is correctly set to \"$l_tmv\" in \"$l_file\""
-       if grep -Piq '^\h*([^#\n\r]+\h+)?readonly\h+TMOUT\b' "$l_file"; then
-       l_output="$l_output\n- TMOUT is correctly set to \"readonly\" in \"$l_file\""
-       else
-       l_output2="$l_output2\n- TMOUT is not set to \"readonly\""
-       fi
-       if grep -Piq '^(\h*|\h*[^#\n\r]+\h*;\h*)export\h+TMOUT\b' "$l_file"; then
-       l_output="$l_output\n- TMOUT is correctly set to \"export\" in \"$l_file\""
-       else
-       l_output2="$l_output2\n- TMOUT is not set to \"export\""
-       fi
-       fi
-       fi
-       done
-       fi
-       unset a_tmofile # Remove array
-       if [ -z "$l_output2" ]; then
-       echo -e "\n- Audit Result:\n ** PASS **\n - * Correctly configured * :\n$l_output\n"
-       else
-       echo -e "\n- Audit Result:\n ** FAIL **\n - * Reasons for audit failure * :\n$l_output2"
-       [ -n "$l_output" ] && echo -e "- * Correctly configured * :\n$l_output\n"
-       fi
-      }
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      v=$(grep -Ehs 'TMOUT=' /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc 2>/dev/null | grep -oE 'TMOUT=[0-9]+' | tail -1 | cut -d= -f2)
+      [ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 900 ] && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      #!/usr/bin/env bash
-      
-      {
-       l_output="" l_output2=""
-       l_tmv_max="900"
-       l_searchloc="/etc/bashrc /etc/bash.bashrc /etc/profile /etc/profile.d/*.sh"
-       a_tmofile=()
-       while read -r l_file; do
-       [ -e "$l_file" ] && a_tmofile+=("$(readlink -f $l_file)")
-       done < <(grep -PRils '^\h*([^#\n\r]+\h+)?TMOUT=\d+\b' $l_searchloc)
-       if ! (( ${#a_tmofile[@]} > 0 )); then
-       l_output2="$l_output2\n - TMOUT is not set"
-       elif (( ${#a_tmofile[@]} > 1 )); then
-       l_output2="$l_output2\n - TMOUT is set in multiple locations.\n - List of files where TMOUT is set:\n$(printf '%s\n' "${a_tmofile[@]}")\n - end of list\n"
-       else
-       for l_file in ${a_tmofile[@]}; do
-       if (( "$(grep -Pci '^\h*([^#\n\r]+\h+)?TMOUT=\d+' "$l_file")" > 1 )); then
-       l_output2="$l_output2\n - TMOUT is set multiple times in \"$l_file\""
-       else
-       l_tmv="$(grep -Pi '^\h*([^#\n\r]+\h+)?TMOUT=\d+' "$l_file" | grep -Po '\d+')"
-       if (( "$l_tmv" > "$l_tmv_max" )); then
-       l_output2="$l_output\n - TMOUT is \"$l_tmv\" in \"$l_file\"\n - Should be \"$l_tmv_max\" or less and not \"0\""
-       else
-       l_output="$l_output\n- TMOUT is correctly set to \"$l_tmv\" in \"$l_file\""
-       if grep -Piq '^\h*([^#\n\r]+\h+)?readonly\h+TMOUT\b' "$l_file"; then
-       l_output="$l_output\n- TMOUT is correctly set to \"readonly\" in \"$l_file\""
-       else
-       l_output2="$l_output2\n- TMOUT is not set to \"readonly\""
-       fi
-       if grep -Piq '^(\h*|\h*[^#\n\r]+\h*;\h*)export\h+TMOUT\b' "$l_file"; then
-       l_output="$l_output\n- TMOUT is correctly set to \"export\" in \"$l_file\""
-       else
-       l_output2="$l_output2\n- TMOUT is not set to \"export\""
-       fi
-       fi
-       fi
-       done
-       fi
-       unset a_tmofile # Remove array
-       if [ -z "$l_output2" ]; then
-       echo -e "\n- Audit Result:\n ** PASS **\n - * Correctly configured * :\n$l_output\n"
-       else
-       echo -e "\n- Audit Result:\n ** FAIL **\n - * Reasons for audit failure * :\n$l_output2"
-       [ -n "$l_output" ] && echo -e "- * Correctly configured * :\n$l_output\n"
-       fi
-      }
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      v=$(grep -Ehs 'TMOUT=' /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc 2>/dev/null | grep -oE 'TMOUT=[0-9]+' | tail -1 | cut -d= -f2)
+      [ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 900 ] && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

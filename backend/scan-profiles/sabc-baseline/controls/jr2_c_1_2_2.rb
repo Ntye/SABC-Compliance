@@ -4,17 +4,41 @@ control 'JR2.C.1.2.2' do
   tag cis_level: 1
   tag control_key: 'jr2_c_1_2_2'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Prs '^([^#\n\r]+\h+)?(\/usr\/s?bin\/|^\h*)aide(\.wrapper)?\h+(--check|([^#\n\r]+\h+)?\$AIDEARGS)\b' /etc/cron.* /etc/crontab /var/spool/cron/
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      crontab -u root -l 2>/dev/null | grep -Eq '(^|/)(aide|aide\.wrapper)\b' && exit 0
+      grep -Ersq '(^|/)(aide|aide\.wrapper)\b' /etc/cron.d /etc/cron.daily 2>/dev/null && exit 0
+      systemctl is-enabled dailyaidecheck.timer >/dev/null 2>&1 && exit 0
+      systemctl is-enabled aidecheck.timer >/dev/null 2>&1 && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Prs '^([^#\n\r]+\h+)?(\/usr\/s?bin\/|^\h*)aide(\.wrapper)?\h+(--check|([^#\n\r]+\h+)?\$AIDEARGS)\b' /etc/cron.* /etc/crontab /var/spool/cron/
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      crontab -u root -l 2>/dev/null | grep -Eq '(^|/)(aide|aide\.wrapper)\b' && exit 0
+      grep -Ersq '(^|/)(aide|aide\.wrapper)\b' /etc/cron.d /etc/cron.daily 2>/dev/null && exit 0
+      systemctl is-enabled dailyaidecheck.timer >/dev/null 2>&1 && exit 0
+      systemctl is-enabled aidecheck.timer >/dev/null 2>&1 && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

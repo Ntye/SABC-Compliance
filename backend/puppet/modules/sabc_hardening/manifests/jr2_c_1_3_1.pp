@@ -9,7 +9,7 @@ class sabc_hardening::jr2_c_1_3_1 {
       command   => "/bin/bash '${cfg_redhat}' </dev/null",
       provider  => 'shell',
       path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-      unless    => "/bin/bash '${chk_redhat}' </dev/null",
+      unless    => "/bin/bash '${chk_redhat}' </dev/null || [ \$? -eq 101 ]",
       logoutput => 'on_failure',
     }
   }

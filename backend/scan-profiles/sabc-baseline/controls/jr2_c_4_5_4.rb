@@ -4,17 +4,37 @@ control 'JR2.C.4.5.4' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_5_4'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Pi '^\h*maxrepeat\h*=\h*[1-3]\b' /etc/security/pwquality.conf
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      v=$(grep -Ehs '^[[:space:]]*maxrepeat[[:space:]]*=' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+')
+      [ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 3 ] && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Pi '^\h*maxrepeat\h*=\h*[1-3]\b' /etc/security/pwquality.conf
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      v=$(grep -Ehs '^[[:space:]]*maxrepeat[[:space:]]*=' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+')
+      [ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 3 ] && exit 0
+      exit 1
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

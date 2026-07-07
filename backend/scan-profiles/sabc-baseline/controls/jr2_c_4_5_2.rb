@@ -4,23 +4,35 @@ control 'JR2.C.4.5.2' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_5_2'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
+    v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
-      
-      passing=""
-      grep -Eiq '^\s*UMASK\s+(0[0-7][2-7]7|[0-7][2-7]7)\b' /etc/login.defs && grep -Eqi '^\s*USERGROUPS_ENAB\s*"?no"?\b' /etc/login.defs && grep -Eq '^\s*session\s+(optional|requisite|required)\s+pam_umask\.so\b' /etc/pam.d/common-session && passing=true
-      grep -REiq '^\s*UMASK\s+\s*(0[0-7][2-7]7|[0-7][2-7]7|u=(r?|w?|x?)(r?|w?|x?)(r?|w?|x?),g=(r?x?|x?r?),o=)\b' /etc/profile* /etc/bash.bashrc* && passing=true
-      [ "$passing" = true ] && echo "Default user umask is set"
+      grep -Eqs '^[[:space:]]*UMASK[[:space:]]+027' /etc/login.defs || exit 1
+      grep -Eqs '^[[:space:]]*umask[[:space:]]+027' /etc/profile.d/*.sh /etc/profile 2>/dev/null || exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
+    v_redhat = command(<<-'SABC_V'.chomp)
       grep -P '^\h*ENCRYPT_METHOD' /etc/login.defs
       grep -P 'pam_unix\.so.*(sha512|yescrypt)' /etc/pam.d/system-auth /etc/pam.d/password-auth
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

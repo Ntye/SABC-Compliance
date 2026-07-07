@@ -4,17 +4,43 @@ control 'JR2.C.4.3.6' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_3_6'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Pi '^\h*auth\h+(?:required|requisite)\h+pam_wheel\.so\h+(?:[^#\n\r]+\h+)?((?!\2)(use_uid\b|group=\H+\b))\h+(?:[^#\n\r]+\h+)?((?!\1)(use_uid\b|group=\H+\b))(\h+.*)?$' /etc/pam.d/su
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      grep -Eqs '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so[[:space:]].*use_uid.*group=' /etc/pam.d/su || exit 1
+      g=$(grep -Eos 'group=[^[:space:]]+' /etc/pam.d/su | head -1 | cut -d= -f2)
+      [ -n "$g" ] || exit 1
+      getent group "$g" >/dev/null 2>&1 || exit 1
+      [ -z "$(getent group "$g" | cut -d: -f4)" ] || exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Pi '^\h*auth\h+(?:required|requisite)\h+pam_wheel\.so\h+(?:[^#\n\r]+\h+)?((?!\2)(use_uid\b|group=\H+\b))\h+(?:[^#\n\r]+\h+)?((?!\1)(use_uid\b|group=\H+\b))(\h+.*)?$' /etc/pam.d/su
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      grep -Eqs '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so[[:space:]].*use_uid.*group=' /etc/pam.d/su || exit 1
+      g=$(grep -Eos 'group=[^[:space:]]+' /etc/pam.d/su | head -1 | cut -d= -f2)
+      [ -n "$g" ] || exit 1
+      getent group "$g" >/dev/null 2>&1 || exit 1
+      [ -z "$(getent group "$g" | cut -d: -f4)" ] || exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

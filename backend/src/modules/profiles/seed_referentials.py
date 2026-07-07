@@ -21,7 +21,10 @@ from .referential_importer import ReferentialImportUseCase, parse_referential_cs
 logger = logging.getLogger(__name__)
 
 # Bump when the committed seed CSV changes to trigger a re-import on next boot.
-SEED_VERSION = "1.0.0"
+# 1.1.0: authored remediations for ~28 config-edit controls (pwquality, sudoers,
+#        journald, umask, TMOUT, firewall-alternative N/A guards, …) and the
+#        exit-101 "not applicable" convention.
+SEED_VERSION = "1.1.0"
 _SEED_MARKER_KEY = "sabc_baseline_seed_version"
 
 _SEED_FILENAME = "sabc_baseline.csv"

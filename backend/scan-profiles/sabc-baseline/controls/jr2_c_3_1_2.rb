@@ -4,17 +4,39 @@ control 'JR2.C.3.1.2' do
   tag cis_level: 2
   tag control_key: 'jr2_c_3_1_2'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      systemctl is-enabled bluetooth.service | grep '^enabled'
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      dpkg-query -W bluez >/dev/null 2>&1 || exit 0
+      systemctl is-active bluetooth 2>/dev/null | grep -qx active && exit 1
+      systemctl is-enabled bluetooth 2>/dev/null | grep -q '^enabled' && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      systemctl is-enabled bluetooth.service | grep '^enabled'
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      rpm -q bluez >/dev/null 2>&1 || exit 0
+      systemctl is-active bluetooth 2>/dev/null | grep -qx active && exit 1
+      systemctl is-enabled bluetooth 2>/dev/null | grep -q '^enabled' && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

@@ -4,19 +4,35 @@ control 'JR2.C.5.1.2.4' do
   tag cis_level: 1
   tag control_key: 'jr2_c_5_1_2_4'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep '$ModLoad imtcp' /etc/rsyslog.conf /etc/rsyslog.d/*.conf
-      grep '$InputTCPServerRun' /etc/rsyslog.conf /etc/rsyslog.d/*.conf
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep '$ModLoad imtcp' /etc/rsyslog.conf /etc/rsyslog.d/*.conf
-      grep '$InputTCPServerRun' /etc/rsyslog.conf /etc/rsyslog.d/*.conf
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

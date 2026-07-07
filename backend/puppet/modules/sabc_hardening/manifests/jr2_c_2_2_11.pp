@@ -9,7 +9,7 @@ class sabc_hardening::jr2_c_2_2_11 {
       command   => "/bin/bash '${cfg_debian}' </dev/null",
       provider  => 'shell',
       path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-      unless    => "/bin/bash '${chk_debian}' </dev/null",
+      unless    => "/bin/bash '${chk_debian}' </dev/null || [ \$? -eq 101 ]",
       logoutput => 'on_failure',
     }
   }
@@ -20,7 +20,7 @@ class sabc_hardening::jr2_c_2_2_11 {
       command   => "/bin/bash '${cfg_redhat}' </dev/null",
       provider  => 'shell',
       path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],
-      unless    => "/bin/bash '${chk_redhat}' </dev/null",
+      unless    => "/bin/bash '${chk_redhat}' </dev/null || [ \$? -eq 101 ]",
       logoutput => 'on_failure',
     }
   }

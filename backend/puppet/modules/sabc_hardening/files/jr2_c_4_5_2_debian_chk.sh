@@ -1,7 +1,5 @@
 #!/bin/bash
 shopt -s globstar 2>/dev/null || true
-
-passing=""
-grep -Eiq '^\s*UMASK\s+(0[0-7][2-7]7|[0-7][2-7]7)\b' /etc/login.defs && grep -Eqi '^\s*USERGROUPS_ENAB\s*"?no"?\b' /etc/login.defs && grep -Eq '^\s*session\s+(optional|requisite|required)\s+pam_umask\.so\b' /etc/pam.d/common-session && passing=true
-grep -REiq '^\s*UMASK\s+\s*(0[0-7][2-7]7|[0-7][2-7]7|u=(r?|w?|x?)(r?|w?|x?)(r?|w?|x?),g=(r?x?|x?r?),o=)\b' /etc/profile* /etc/bash.bashrc* && passing=true
-[ "$passing" = true ] && echo "Default user umask is set"
+grep -Eqs '^[[:space:]]*UMASK[[:space:]]+027' /etc/login.defs || exit 1
+grep -Eqs '^[[:space:]]*umask[[:space:]]+027' /etc/profile.d/*.sh /etc/profile 2>/dev/null || exit 1
+exit 0

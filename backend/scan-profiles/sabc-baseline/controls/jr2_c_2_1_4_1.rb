@@ -4,17 +4,53 @@ control 'JR2.C.2.1.4.1' do
   tag cis_level: 1
   tag control_key: 'jr2_c_2_1_4_1'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -P -- '^\h*restrict\h+((-4\h+)?|-6\h+)default\h+(?:[^#\n\r]+\h+)*(?!(?:\2|\3|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\3|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\3|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\3|\4))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h*(?:\h+\H+\h*)*(?:\h+#.*)?$' /etc/ntp.conf
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      dpkg-query -W ntp >/dev/null 2>&1 || dpkg-query -W ntpsec >/dev/null 2>&1 || exit 101
+      f=/etc/ntpsec/ntp.conf; [ -e "$f" ] || f=/etc/ntp.conf
+      [ -e "$f" ] || exit 1
+      for v in 4 6; do
+        line=$(grep -Es "^[[:space:]]*restrict[[:space:]]+(-$v[[:space:]]+)?default\b" "$f" | head -1)
+        [ -n "$line" ] || exit 1
+        for opt in kod nomodify notrap nopeer noquery; do
+          printf '%s' "$line" | grep -qw "$opt" || exit 1
+        done
+      done
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -P -- '^\h*restrict\h+((-4\h+)?|-6\h+)default\h+(?:[^#\n\r]+\h+)*(?!(?:\2|\3|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\3|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\4|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\3|\5))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h+(?:[^#\n\r]+\h+)*(?!(?:\1|\2|\3|\4))(\h*\bkod\b\h*|\h*\bnomodify\b\h*|\h*\bnotrap\b\h*|\h*\bnopeer\b\h*|\h*\bnoquery\b\h*)\h*(?:\h+\H+\h*)*(?:\h+#.*)?$' /etc/ntp.conf
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      rpm -q ntp >/dev/null 2>&1 || rpm -q ntpsec >/dev/null 2>&1 || exit 101
+      f=/etc/ntpsec/ntp.conf; [ -e "$f" ] || f=/etc/ntp.conf
+      [ -e "$f" ] || exit 1
+      for v in 4 6; do
+        line=$(grep -Es "^[[:space:]]*restrict[[:space:]]+(-$v[[:space:]]+)?default\b" "$f" | head -1)
+        [ -n "$line" ] || exit 1
+        for opt in kod nomodify notrap nopeer noquery; do
+          printf '%s' "$line" | grep -qw "$opt" || exit 1
+        done
+      done
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

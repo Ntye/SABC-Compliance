@@ -4,97 +4,51 @@ control 'JR2.C.4.2.2' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_2_2'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      #!/usr/bin/env bash
-      
-      {
-       l_output="" l_output2=""
-       l_skgn="ssh_keys" # Group designated to own openSSH keys
-       l_skgid="$(awk -F: '($1 == "'"$l_skgn"'"){print $3}' /etc/group)" # Get gid of group
-       [ -n "$l_skgid" ] && l_agroup="(root|$l_skgn)" || l_agroup="root"
-       unset a_skarr && a_skarr=() # Clear and initialize array
-       while IFS= read -r -d $'\0' l_file; do # Loop to populate array
-       if grep -Pq ':\h+OpenSSH\h+private\h+key\b' <<< "$(file "$l_file")"; then
-       a_skarr+=("$(stat -Lc '%n^%#a^%U^%G^%g' "$l_file")")
-       fi
-       done < <(find -L /etc/ssh -xdev -type f -print0)
-       while IFS="^" read -r l_file l_mode l_owner l_group l_gid; do
-       echo "File: \"$l_file\" Mode: \"$l_mode\" Owner: \"$l_owner\" Group: \"$l_group\" GID: \"$l_gid\""
-       l_out2=""
-       [ "$l_gid" = "$l_skgid" ] && l_pmask="0137" || l_pmask="0177"
-       l_maxperm="$( printf '%o' $(( 0777 & ~$l_pmask )) )"
-       if [ $(( $l_mode & $l_pmask )) -gt 0 ]; then
-       l_out2="$l_out2\n - Mode: \"$l_mode\" should be mode: \"$l_maxperm\" or more restrictive"
-       fi
-       if [ "$l_owner" != "root" ]; then
-       l_out2="$l_out2\n - Owned by: \"$l_owner\" should be owned by \"root\""
-       fi
-       if [[ ! "$l_group" =~ $l_agroup ]]; then
-       l_out2="$l_out2\n - Owned by group \"$l_group\" should be group owned by: \"${l_agroup//|/ or }\""
-       fi
-       if [ -n "$l_out2" ]; then
-       l_output2="$l_output2\n - File: \"$l_file\"$l_out2"
-       else
-       l_output="$l_output\n - File: \"$l_file\"\n - Correct: mode ($l_mode), owner ($l_owner), and group owner ($l_group) configured"
-       fi
-       done <<< "$(printf '%s\n' "${a_skarr[@]}")"
-       unset a_skarr
-       if [ -z "$l_output2" ]; then
-       echo -e "\n- Audit Result:\n *** PASS ***\n- * Correctly set * :\n$l_output\n"
-       else
-       echo -e "\n- Audit Result:\n ** FAIL **\n - * Reasons for audit failure * :\n$l_output2\n"
-       [ -n "$l_output" ] && echo -e " - * Correctly set * :\n$l_output\n"
-       fi
-      }
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      bad=0
+      for f in /etc/ssh/ssh_host_*_key; do
+        [ -e "$f" ] || continue
+        [ "$(stat -c '%U:%G' "$f")" = "root:root" ] || bad=1
+        case "$(stat -c '%a' "$f")" in
+          600|400|0) : ;;
+          *) bad=1 ;;
+        esac
+      done
+      exit $bad
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      #!/usr/bin/env bash
-      
-      {
-       l_output="" l_output2=""
-       l_skgn="ssh_keys" # Group designated to own openSSH keys
-       l_skgid="$(awk -F: '($1 == "'"$l_skgn"'"){print $3}' /etc/group)" # Get gid of group
-       [ -n "$l_skgid" ] && l_agroup="(root|$l_skgn)" || l_agroup="root"
-       unset a_skarr && a_skarr=() # Clear and initialize array
-       while IFS= read -r -d $'\0' l_file; do # Loop to populate array
-       if grep -Pq ':\h+OpenSSH\h+private\h+key\b' <<< "$(file "$l_file")"; then
-       a_skarr+=("$(stat -Lc '%n^%#a^%U^%G^%g' "$l_file")")
-       fi
-       done < <(find -L /etc/ssh -xdev -type f -print0)
-       while IFS="^" read -r l_file l_mode l_owner l_group l_gid; do
-       echo "File: \"$l_file\" Mode: \"$l_mode\" Owner: \"$l_owner\" Group: \"$l_group\" GID: \"$l_gid\""
-       l_out2=""
-       [ "$l_gid" = "$l_skgid" ] && l_pmask="0137" || l_pmask="0177"
-       l_maxperm="$( printf '%o' $(( 0777 & ~$l_pmask )) )"
-       if [ $(( $l_mode & $l_pmask )) -gt 0 ]; then
-       l_out2="$l_out2\n - Mode: \"$l_mode\" should be mode: \"$l_maxperm\" or more restrictive"
-       fi
-       if [ "$l_owner" != "root" ]; then
-       l_out2="$l_out2\n - Owned by: \"$l_owner\" should be owned by \"root\""
-       fi
-       if [[ ! "$l_group" =~ $l_agroup ]]; then
-       l_out2="$l_out2\n - Owned by group \"$l_group\" should be group owned by: \"${l_agroup//|/ or }\""
-       fi
-       if [ -n "$l_out2" ]; then
-       l_output2="$l_output2\n - File: \"$l_file\"$l_out2"
-       else
-       l_output="$l_output\n - File: \"$l_file\"\n - Correct: mode ($l_mode), owner ($l_owner), and group owner ($l_group) configured"
-       fi
-       done <<< "$(printf '%s\n' "${a_skarr[@]}")"
-       unset a_skarr
-       if [ -z "$l_output2" ]; then
-       echo -e "\n- Audit Result:\n *** PASS ***\n- * Correctly set * :\n$l_output\n"
-       else
-       echo -e "\n- Audit Result:\n ** FAIL **\n - * Reasons for audit failure * :\n$l_output2\n"
-       [ -n "$l_output" ] && echo -e " - * Correctly set * :\n$l_output\n"
-       fi
-      }
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      bad=0
+      for f in /etc/ssh/ssh_host_*_key; do
+        [ -e "$f" ] || continue
+        [ "$(stat -c '%U:%G' "$f")" = "root:root" ] || bad=1
+        case "$(stat -c '%a' "$f")" in
+          600|400|0) : ;;
+          *) bad=1 ;;
+        esac
+      done
+      exit $bad
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

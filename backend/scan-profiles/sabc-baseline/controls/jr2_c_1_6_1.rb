@@ -4,17 +4,39 @@ control 'JR2.C.1.6.1' do
   tag cis_level: 2
   tag control_key: 'jr2_c_1_6_1'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Eis "(\\\v|\\\r|\\\m|\\\s|$(grep '^ID=' /etc/os-release | cut -d= -f2 | sed -e 's/"//g'))" /etc/motd
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      [ -e /etc/motd ] || exit 0
+      os_id=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+      grep -Eqis "(\\\\v|\\\\r|\\\\m|\\\\s|$os_id)" /etc/motd && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      grep -Eis "(\\\v|\\\r|\\\m|\\\s|$(grep '^ID=' /etc/os-release | cut -d= -f2 | sed -e 's/"//g'))" /etc/motd
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      [ -e /etc/motd ] || exit 0
+      os_id=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+      grep -Eqis "(\\\\v|\\\\r|\\\\m|\\\\s|$os_id)" /etc/motd && exit 1
+      exit 0
     SABC_V
-      its('exit_status') { should cmp 0 }
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

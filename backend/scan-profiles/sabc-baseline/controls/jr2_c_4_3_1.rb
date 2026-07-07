@@ -4,151 +4,37 @@ control 'JR2.C.4.3.1' do
   tag cis_level: 1
   tag control_key: 'jr2_c_4_3_1'
   if os[:family] == 'debian'
-    describe package('sudo') do
-      it { should be_installed }
-    end
-    describe package('sudo-ldap') do
-      it { should be_installed }
-    end
-    describe package('>') do
-      it { should be_installed }
-    end
-    describe package('/dev/null') do
-      it { should be_installed }
-    end
-    describe package('2>&1') do
-      it { should be_installed }
-    end
-    describe package('&&') do
-      it { should be_installed }
-    end
-    describe package('dpkg-query') do
-      it { should be_installed }
-    end
-    describe package('sudo') do
-      it { should be_installed }
-    end
-    describe package('sudo-ldap') do
-      it { should be_installed }
-    end
-    describe package('|') do
-      it { should be_installed }
-    end
-    describe package('awk') do
-      it { should be_installed }
-    end
-    describe package('&&') do
-      it { should be_installed }
-    end
-    describe package('{print') do
-      it { should be_installed }
-    end
-    describe package('"\n""PASS:""\n""Package') do
-      it { should be_installed }
-    end
-    describe package('is') do
-      it { should be_installed }
-    end
-    describe package('||') do
-      it { should be_installed }
-    end
-    describe package('echo') do
-      it { should be_installed }
-    end
-    describe package('"\nFAIL:\nneither') do
-      it { should be_installed }
-    end
-    describe package('\"sudo\"') do
-      it { should be_installed }
-    end
-    describe package('or') do
-      it { should be_installed }
-    end
-    describe package('\"sudo-ldap\"') do
-      it { should be_installed }
-    end
-    describe package('package') do
-      it { should be_installed }
-    end
-    describe package('is') do
-      it { should be_installed }
-    end
-    describe package('installed\n"') do
-      it { should be_installed }
+    v_debian = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      dpkg-query -W sudo >/dev/null 2>&1 && exit 0
+      dpkg-query -W sudo-ldap >/dev/null 2>&1 && exit 0
+      exit 1
+    SABC_V
+    if v_debian.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_debian do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
   if os[:family] == 'redhat'
-    describe package('sudo') do
-      it { should be_installed }
-    end
-    describe package('sudo-ldap') do
-      it { should be_installed }
-    end
-    describe package('>') do
-      it { should be_installed }
-    end
-    describe package('/dev/null') do
-      it { should be_installed }
-    end
-    describe package('2>&1') do
-      it { should be_installed }
-    end
-    describe package('&&') do
-      it { should be_installed }
-    end
-    describe package('rpm') do
-      it { should be_installed }
-    end
-    describe package('sudo') do
-      it { should be_installed }
-    end
-    describe package('sudo-ldap') do
-      it { should be_installed }
-    end
-    describe package('|') do
-      it { should be_installed }
-    end
-    describe package('awk') do
-      it { should be_installed }
-    end
-    describe package('&&') do
-      it { should be_installed }
-    end
-    describe package('{print') do
-      it { should be_installed }
-    end
-    describe package('"\n""PASS:""\n""Package') do
-      it { should be_installed }
-    end
-    describe package('is') do
-      it { should be_installed }
-    end
-    describe package('||') do
-      it { should be_installed }
-    end
-    describe package('echo') do
-      it { should be_installed }
-    end
-    describe package('"\nFAIL:\nneither') do
-      it { should be_installed }
-    end
-    describe package('\"sudo\"') do
-      it { should be_installed }
-    end
-    describe package('or') do
-      it { should be_installed }
-    end
-    describe package('\"sudo-ldap\"') do
-      it { should be_installed }
-    end
-    describe package('package') do
-      it { should be_installed }
-    end
-    describe package('is') do
-      it { should be_installed }
-    end
-    describe package('installed\n"') do
-      it { should be_installed }
+    v_redhat = command(<<-'SABC_V'.chomp)
+      #!/bin/bash
+      rpm -q sudo >/dev/null 2>&1 && exit 0
+      rpm -q sudo-ldap >/dev/null 2>&1 && exit 0
+      exit 1
+    SABC_V
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end
