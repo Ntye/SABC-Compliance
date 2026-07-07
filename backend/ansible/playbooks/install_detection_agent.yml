@@ -51,12 +51,29 @@
       setup:
 
   tasks:
-    # ── watchdog library ──────────────────────────────────────────────────────
-    - name: Install watchdog from the distro repository
-      package:
+    # ── watchdog library (OPTIONAL) ───────────────────────────────────────────
+    # watchdog gives inotify-speed detection, but the agent ships a stdlib
+    # polling fallback and runs fine without it. So EVERY install step here is
+    # best-effort: nothing in this block may fail the play. This is what makes
+    # enrolment work uniformly across distros (Debian/Ubuntu apt, RHEL/Alma/
+    # Rocky/Amazon dnf/yum) and on minimal or airgapped images where pip is
+    # absent — the exact failure that used to abort on Ubuntu 24.04
+    # ("No module named pip").
+    - name: Install watchdog from the distro repository (Debian family)
+      apt:
         name: python3-watchdog
         state: present
-      register: watchdog_pkg
+        update_cache: yes
+      when: ansible_facts['os_family'] == 'Debian'
+      register: watchdog_apt
+      failed_when: false
+
+    - name: Install watchdog from the distro repository (RedHat family)
+      dnf:
+        name: python3-watchdog
+        state: present
+      when: ansible_facts['os_family'] == 'RedHat'
+      register: watchdog_dnf
       failed_when: false
 
     - name: Check whether watchdog imports
@@ -97,6 +114,7 @@
           shell: python3 -m pip install --no-index --find-links /tmp/sabc-wheels watchdog
           register: wheel_install
           changed_when: "'Successfully installed' in (wheel_install.stdout | default(''))"
+          failed_when: false
 
     - name: Re-check whether watchdog imports
       command: python3 -c "import watchdog"
@@ -104,17 +122,41 @@
       changed_when: false
       failed_when: false
 
-    - name: Install watchdog with pip (online fallback)
+    # Online pip is a LAST resort and stays best-effort: ensure pip exists first
+    # (modern Ubuntu/RHEL ship none by default), then try a PEP-668-safe install.
+    - name: Ensure pip is available for the online fallback (best-effort)
+      when: watchdog_import2.rc != 0
+      block:
+        - name: Install python3-pip (Debian family)
+          apt: { name: python3-pip, state: present, update_cache: yes }
+          when: ansible_facts['os_family'] == 'Debian'
+          failed_when: false
+        - name: Install python3-pip (RedHat family)
+          dnf: { name: python3-pip, state: present }
+          when: ansible_facts['os_family'] == 'RedHat'
+          failed_when: false
+
+    - name: Install watchdog with pip (online fallback, best-effort)
       shell: |
         python3 -m pip install watchdog 2>/dev/null \
           || python3 -m pip install --break-system-packages watchdog
       when: watchdog_import2.rc != 0
       register: pip_install
       changed_when: "'Successfully installed' in (pip_install.stdout | default(''))"
+      failed_when: false
 
-    - name: Verify watchdog is importable
-      command: python3 -c "import watchdog; print(watchdog.__name__)"
+    - name: Report the file-change backend the agent will use
+      command: python3 -c "import watchdog"
+      register: watchdog_final
       changed_when: false
+      failed_when: false
+
+    - name: Note detection backend
+      debug:
+        msg: >-
+          Detection backend: {{ 'watchdog (inotify)' if watchdog_final.rc == 0
+          else 'stdlib polling (watchdog unavailable — install python3-watchdog
+          for inotify-speed detection)' }}.
 
     # ── Agent files ───────────────────────────────────────────────────────────
     - name: Create agent directories

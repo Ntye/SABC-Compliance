@@ -77,6 +77,10 @@ HEARTBEAT_INTERVAL_SECONDS = 600
 MAX_SEND_ATTEMPTS = 5
 BACKOFF_BASE_SECONDS = 1.0
 MAX_CONTENT_BYTES = 256 * 1024  # full-snapshot files larger than this fall back to hash-only
+# Stdlib polling fallback cadence when the inotify backend (watchdog) is absent.
+# The watched set is small config dirs (/etc/ssh, /etc/pam.d, …), so a stat
+# sweep every few seconds is negligible and keeps the agent dependency-free.
+POLL_INTERVAL_SECONDS = 15.0
 
 
 # ── Minimal YAML subset parser (stdlib-only constraint) ───────────────────────
@@ -208,6 +212,7 @@ class AgentConfig:
     verify_tls: bool = False
     debounce_seconds: float = DEBOUNCE_SECONDS
     heartbeat_interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS
+    poll_interval_seconds: float = POLL_INTERVAL_SECONDS
     spool_dir: str = "/var/spool/compliance-agent"
     state_dir: str = "/var/lib/compliance-agent"
     max_content_bytes: int = MAX_CONTENT_BYTES
@@ -248,6 +253,9 @@ class AgentConfig:
             debounce_seconds=float(raw.get("debounce_seconds") or DEBOUNCE_SECONDS),
             heartbeat_interval_seconds=float(
                 raw.get("heartbeat_interval_seconds") or HEARTBEAT_INTERVAL_SECONDS
+            ),
+            poll_interval_seconds=float(
+                raw.get("poll_interval_seconds") or POLL_INTERVAL_SECONDS
             ),
             spool_dir=str(raw.get("spool_dir") or "/var/spool/compliance-agent"),
             state_dir=str(raw.get("state_dir") or "/var/lib/compliance-agent"),
@@ -743,7 +751,118 @@ class EventPipeline:
         return count
 
 
-# ── Watchdog wiring ───────────────────────────────────────────────────────────
+# ── File-watch backends ───────────────────────────────────────────────────────
+#
+# Two interchangeable backends expose the SAME tiny contract — start(), stop(),
+# join(timeout) and feeding debouncer.offer(path, event_type):
+#
+#   * watchdog (inotify) — event-driven, near-zero latency, preferred;
+#   * _PollingWatcher (stdlib only) — a periodic stat sweep, used when watchdog
+#     is not installed. This is what lets the agent run on ANY node with just
+#     python3 (no pip, no distro package, airgap-safe) — the enforcement plane
+#     must not be blocked by a missing optional dependency.
+
+
+def _enumerate_targets(watch_paths: list[str]) -> tuple[list[str], dict[str, set[str]]]:
+    """Split configured paths into recursive dir targets and per-parent exact
+    file targets — shared by both backends so they watch identically."""
+    file_targets: dict[str, set[str]] = {}   # parent dir -> exact file paths
+    dir_targets: list[str] = []
+    for raw in watch_paths:
+        path = os.path.normpath(raw)
+        if os.path.isdir(path):
+            dir_targets.append(path)
+        else:
+            file_targets.setdefault(os.path.dirname(path) or "/", set()).add(path)
+    return dir_targets, file_targets
+
+
+class _PollingWatcher:
+    """Stdlib-only fallback watcher: periodically stats every watched file and
+    offers created/modified/deleted events when a path's signature
+    (mtime_ns, size, inode) changes. Same offer() contract as the watchdog
+    handlers, so everything downstream (debounce → pipeline → gateway) is
+    identical. The first sweep seeds signatures WITHOUT emitting so a restart
+    does not replay the whole watched tree as "modified"."""
+
+    def __init__(self, config: AgentConfig, debouncer: Debouncer) -> None:
+        self._debouncer = debouncer
+        self._interval = max(1.0, float(config.poll_interval_seconds))
+        self._dir_targets, self._file_targets = _enumerate_targets(config.watch_paths)
+        self._sigs: dict[str, tuple] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._loop, name="sabc-poller", daemon=True)
+
+    # watchdog-Observer-compatible surface -------------------------------------
+    def start(self) -> None:
+        self._sigs = self._scan()          # seed silently
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def join(self, timeout: Optional[float] = None) -> None:
+        self._thread.join(timeout)
+
+    # internals ----------------------------------------------------------------
+    def _iter_paths(self) -> Iterator[str]:
+        for d in self._dir_targets:
+            for root, _dirs, files in os.walk(d):
+                for name in files:
+                    yield os.path.normpath(os.path.join(root, name))
+        for parent, exact in self._file_targets.items():
+            for p in exact:
+                yield p
+
+    def _scan(self) -> dict[str, tuple]:
+        sigs: dict[str, tuple] = {}
+        for p in self._iter_paths():
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue  # gone between walk and stat — handled as a deletion
+            sigs[p] = (st.st_mtime_ns, st.st_size, st.st_ino)
+        return sigs
+
+    def _emit_changes(self, new: dict[str, tuple]) -> None:
+        """Offer created/modified/deleted for the delta vs the last sweep, then
+        adopt the new signatures as the baseline."""
+        for path, sig in new.items():
+            old = self._sigs.get(path)
+            if old is None:
+                self._debouncer.offer(path, "created")
+            elif old != sig:
+                self._debouncer.offer(path, "modified")
+        for path in self._sigs.keys() - new.keys():
+            self._debouncer.offer(path, "deleted")
+        self._sigs = new
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                new = self._scan()
+            except Exception:
+                logger.exception("poll scan failed")
+                continue
+            self._emit_changes(new)
+
+
+def _build_watcher(config: AgentConfig, debouncer: Debouncer):
+    """Return the best available watcher: watchdog (inotify) if importable,
+    otherwise the stdlib polling fallback. Logs which backend is in use."""
+    try:
+        import watchdog  # noqa: F401
+    except ImportError:
+        logger.warning(
+            "the 'watchdog' library is not installed — falling back to stdlib "
+            "polling every %.0fs (install python3-watchdog for inotify-speed "
+            "detection)", max(1.0, float(config.poll_interval_seconds)),
+        )
+        return _PollingWatcher(config, debouncer)
+    logger.info("using watchdog (inotify) file-change backend")
+    return _build_observer(config, debouncer)
+
 
 def _build_observer(config: AgentConfig, debouncer: Debouncer):
     """Set up watchdog watches for every configured path.
@@ -755,15 +874,7 @@ def _build_observer(config: AgentConfig, debouncer: Debouncer):
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
 
-    file_targets: dict[str, set[str]] = {}   # parent dir -> exact file paths
-    dir_targets: list[str] = []
-
-    for raw in config.watch_paths:
-        path = os.path.normpath(raw)
-        if os.path.isdir(path):
-            dir_targets.append(path)
-        else:
-            file_targets.setdefault(os.path.dirname(path) or "/", set()).add(path)
+    dir_targets, file_targets = _enumerate_targets(config.watch_paths)
 
     class Handler(FileSystemEventHandler):
         def __init__(self, exact: Optional[set[str]] = None) -> None:
@@ -828,7 +939,7 @@ def run(config: AgentConfig) -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    observer = _build_observer(config, debouncer)
+    observer = _build_watcher(config, debouncer)
     observer.start()
     logger.info(
         "watching %d path(s) for %s → %s",
@@ -886,15 +997,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.error("cannot load config %s: %s", args.config, exc)
         return 2
 
-    try:
-        import watchdog  # noqa: F401
-    except ImportError:
-        logger.error(
-            "the 'watchdog' library is required (apt/dnf install python3-watchdog "
-            "or pip3 install watchdog)"
-        )
-        return 3
-
+    # watchdog is optional: run() selects the inotify backend when it is
+    # importable and transparently falls back to stdlib polling otherwise, so a
+    # missing optional dependency never stops the agent from starting.
     run(config)
     return 0
 
