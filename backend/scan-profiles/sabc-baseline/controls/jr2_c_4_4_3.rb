@@ -3,7 +3,7 @@ control 'JR2.C.4.4.3' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_4_4_3'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       grep -P -- '^\h*password\h+([^#\n\r]+\h+)?(pam_pwhistory\.so|pam_unix\.so)\b' /etc/pam.d/common-password
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.4.4.3' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       grep -P 'pam_faillock\.so' /etc/pam.d/system-auth /etc/pam.d/password-auth
       grep -P '^\h*(deny|unlock_time)' /etc/security/faillock.conf

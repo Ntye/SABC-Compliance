@@ -3,7 +3,7 @@ control 'JR2.C.1.2.1' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_1_2_1'
-  if os[:family] == 'debian'
+  if os.debian?
     describe package('aide') do
       it { should be_installed }
     end
@@ -11,7 +11,7 @@ control 'JR2.C.1.2.1' do
       it { should be_installed }
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     describe package('aide') do
       it { should be_installed }
     end

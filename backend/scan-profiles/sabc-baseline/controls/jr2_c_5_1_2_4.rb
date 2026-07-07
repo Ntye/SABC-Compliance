@@ -3,7 +3,7 @@ control 'JR2.C.5.1.2.4' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_5_1_2_4'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
@@ -19,7 +19,7 @@ control 'JR2.C.5.1.2.4' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1

@@ -3,7 +3,7 @@ control 'JR2.C.3.1.2' do
   impact 0.7
   tag cis_level: 2
   tag control_key: 'jr2_c_3_1_2'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       dpkg-query -W bluez >/dev/null 2>&1 || exit 0
@@ -21,7 +21,7 @@ control 'JR2.C.3.1.2' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       rpm -q bluez >/dev/null 2>&1 || exit 0

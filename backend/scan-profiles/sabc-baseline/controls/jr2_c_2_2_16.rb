@@ -3,7 +3,7 @@ control 'JR2.C.2.2.16' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_2_2_16'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       dpkg-query -W rsync >/dev/null 2>&1 || exit 0
@@ -21,7 +21,7 @@ control 'JR2.C.2.2.16' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       rpm -q rsync-daemon >/dev/null 2>&1 || rpm -q rsync >/dev/null 2>&1 || exit 0

@@ -363,12 +363,18 @@ OS_FAMILIES = ("debian", "redhat")
 def normalize_family(value: str | None) -> str | None:
     """Map a node's os_family fact (or a referential token) to 'debian'|'redhat'.
 
-    Accepts the puppet/facter form ('Debian'/'RedHat') and the referential form
-    ('debian'/'redhat'); returns None for anything unrecognised."""
+    Accepts the puppet/facter form ('Debian'/'RedHat'), the InSpec/train form
+    ('amazon'), a raw distro id from /etc/os-release ('amzn', 'ol', 'rocky'),
+    and the referential form ('debian'/'redhat'). The two families cover every
+    derivative the platform supports so scan/enforce resolution never silently
+    drops a RHEL-compatible node (Amazon Linux, Oracle Linux, …) to 'Unknown'.
+    Returns None for anything genuinely unrecognised."""
     v = (value or "").strip().lower()
-    if v in ("debian", "ubuntu", "mint"):
+    if v in ("debian", "ubuntu", "mint", "raspbian", "kali", "pop", "linuxmint"):
         return "debian"
-    if v in ("redhat", "rhel", "centos", "rocky", "almalinux", "alma", "fedora"):
+    if v in ("redhat", "rhel", "centos", "rocky", "almalinux", "alma", "fedora",
+             "amazon", "amzn", "oracle", "ol", "oraclelinux", "scientific",
+             "cloudlinux"):
         return "redhat"
     return v or None
 

@@ -3,7 +3,7 @@ control 'JR2.C.6.2.4' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_6_2_4'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       awk -F: '($1=="shadow") {print $NF}' /etc/group
       awk -F: -v GID="$(awk -F: '($1=="shadow") {print $3}' /etc/group)" '($4==GID) {print $1}' /etc/passwd
@@ -18,7 +18,7 @@ control 'JR2.C.6.2.4' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       awk -F: '($1=="shadow") {print $NF}' /etc/group
       awk -F: -v GID="$(awk -F: '($1=="shadow") {print $3}' /etc/group)" '($4==GID) {print $1}' /etc/passwd

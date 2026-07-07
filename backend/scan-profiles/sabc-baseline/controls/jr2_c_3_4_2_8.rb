@@ -3,7 +3,7 @@ control 'JR2.C.3.4.2.8' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_3_4_2_8'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
@@ -21,7 +21,7 @@ control 'JR2.C.3.4.2.8' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101

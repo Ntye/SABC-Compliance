@@ -3,12 +3,12 @@ control 'JR2.C.3.4.2.2' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_3_4_2_2'
-  if os[:family] == 'debian'
+  if os.debian?
     describe package('ufw') do
       it { should be_installed }
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       grep -P '^\h*FirewallBackend=nftables' /etc/firewalld/firewalld.conf
     SABC_V

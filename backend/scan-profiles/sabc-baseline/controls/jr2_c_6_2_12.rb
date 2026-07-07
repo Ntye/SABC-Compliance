@@ -3,7 +3,7 @@ control 'JR2.C.6.2.12' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_6_2_12'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/usr/bin/env bash
       
@@ -107,7 +107,7 @@ control 'JR2.C.6.2.12' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/usr/bin/env bash
       

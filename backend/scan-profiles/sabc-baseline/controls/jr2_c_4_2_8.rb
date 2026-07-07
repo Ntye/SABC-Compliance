@@ -3,7 +3,7 @@ control 'JR2.C.4.2.8' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_4_2_8'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/hosts | awk '{print $1}')" | grep hostbasedauthentication
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.4.2.8' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/hosts | awk '{print $1}')" | grep hostbasedauthentication
     SABC_V

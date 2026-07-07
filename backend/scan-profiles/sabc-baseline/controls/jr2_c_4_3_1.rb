@@ -3,7 +3,7 @@ control 'JR2.C.4.3.1' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_4_3_1'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       dpkg-query -W sudo >/dev/null 2>&1 && exit 0
@@ -20,7 +20,7 @@ control 'JR2.C.4.3.1' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       rpm -q sudo >/dev/null 2>&1 && exit 0

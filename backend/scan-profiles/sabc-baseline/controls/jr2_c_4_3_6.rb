@@ -3,7 +3,7 @@ control 'JR2.C.4.3.6' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_4_3_6'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Eqs '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so[[:space:]].*use_uid.*group=' /etc/pam.d/su || exit 1
@@ -23,7 +23,7 @@ control 'JR2.C.4.3.6' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Eqs '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so[[:space:]].*use_uid.*group=' /etc/pam.d/su || exit 1

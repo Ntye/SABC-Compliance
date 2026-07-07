@@ -192,18 +192,22 @@ class TestPuppet:
 
 class TestInspec:
     def test_control_guarded_by_os_family(self, tmp_path) -> None:
+        # Guards use os.redhat?/os.debian? so the whole family matches — incl.
+        # Amazon Linux, where InSpec reports os[:family] == 'amazon' and the
+        # old literal 'redhat' test skipped every control.
         generate_inspec_profile(profile([control("JR2.C.1")]), str(tmp_path))
         rb = (tmp_path / "controls" / "jr2_c_1.rb").read_text()
         assert "control 'JR2.C.1'" in rb
-        assert "os[:family] == 'debian'" in rb
-        assert "os[:family] == 'redhat'" in rb
+        assert "os.debian?" in rb
+        assert "os.redhat?" in rb
+        assert "os[:family] ==" not in rb        # no brittle literal string test
         assert "exit_status" in rb
 
     def test_redhat_only_control_guards_only_redhat(self, tmp_path) -> None:
         generate_inspec_profile(profile([control("R", applies="redhat")]), str(tmp_path))
         rb = (tmp_path / "controls" / "r.rb").read_text()
-        assert "os[:family] == 'redhat'" in rb
-        assert "os[:family] == 'debian'" not in rb
+        assert "os.redhat?" in rb
+        assert "os.debian?" not in rb
 
     def test_empty_validate_reported_pending(self, tmp_path) -> None:
         res = generate_inspec_profile(

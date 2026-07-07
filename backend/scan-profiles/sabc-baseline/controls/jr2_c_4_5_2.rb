@@ -3,7 +3,7 @@ control 'JR2.C.4.5.2' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_4_5_2'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Eqs '^[[:space:]]*UMASK[[:space:]]+027' /etc/login.defs || exit 1
@@ -20,7 +20,7 @@ control 'JR2.C.4.5.2' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       grep -P '^\h*ENCRYPT_METHOD' /etc/login.defs
       grep -P 'pam_unix\.so.*(sha512|yescrypt)' /etc/pam.d/system-auth /etc/pam.d/password-auth

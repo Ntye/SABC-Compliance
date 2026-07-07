@@ -3,7 +3,7 @@ control 'JR2.C.2.2.15' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_2_2_15'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       ss -lntu | grep -P ':25\b' | grep -Pv '\h+(127\.0\.0\.1|\[?::1\]?):25\b'
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.2.2.15' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       ss -lntu | grep -P ':25\b' | grep -Pv '\h+(127\.0\.0\.1|\[?::1\]?):25\b'
     SABC_V

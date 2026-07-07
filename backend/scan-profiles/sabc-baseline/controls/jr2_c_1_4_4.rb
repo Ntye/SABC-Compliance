@@ -3,7 +3,7 @@ control 'JR2.C.1.4.4' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_1_4_4'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       dpkg-query -s apport > /dev/null 2>&1 && grep -Psi -- '^\h*enabled\h*=\h*[^0]\b' /etc/default/apport
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.1.4.4' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       dpkg-query -s apport > /dev/null 2>&1 && grep -Psi -- '^\h*enabled\h*=\h*[^0]\b' /etc/default/apport
     SABC_V

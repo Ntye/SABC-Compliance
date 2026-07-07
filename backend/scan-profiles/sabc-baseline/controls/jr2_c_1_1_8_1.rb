@@ -3,7 +3,7 @@ control 'JR2.C.1.1.8.1' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_1_1_8_1'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       findmnt -kn /dev/shm >/dev/null 2>&1 || exit 101
@@ -20,7 +20,7 @@ control 'JR2.C.1.1.8.1' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       findmnt -kn /dev/shm >/dev/null 2>&1 || exit 101

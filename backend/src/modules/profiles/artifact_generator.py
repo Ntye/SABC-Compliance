@@ -449,6 +449,18 @@ def _package_audit(validate: str, title: str) -> tuple[list[str], bool] | None:
     return pkgs, bool(_NOT_INSTALLED_TITLE.search(title or ""))
 
 
+# InSpec family predicate per referential token. `os.redhat?` / `os.debian?`
+# match the WHOLE family — RHEL, CentOS, Rocky, Alma, Oracle, **Amazon Linux**,
+# Fedora / Debian, Ubuntu, Mint — whereas `os[:family] == 'redhat'` is a
+# literal string test that InSpec fails on Amazon Linux (train reports its
+# family as 'amazon'), silently skipping every control on EC2's default distro.
+_INSPEC_FAMILY_PRED = {"debian": "os.debian?", "redhat": "os.redhat?"}
+
+
+def _inspec_family_guard(fam: str) -> str:
+    return _INSPEC_FAMILY_PRED.get(fam, f"os[:family] == '{fam}'")
+
+
 def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
     key = _puppet_key(control)
     pending: list[str] = []
@@ -467,14 +479,14 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
                 f"      it {{ {matcher} }}\n"
                 f"    end\n" for p in pkgs
             )
-            checks.append(f"  if os[:family] == '{fam}'\n{body}  end")
+            checks.append(f"  if {_inspec_family_guard(fam)}\n{body}  end")
             continue
         # Run the family's validate procedure; pass iff it exits 0. Exit
         # NA_EXIT_CODE means the control does not apply on this node (its
         # prerequisite package/service is absent) → report a SKIP, never a
         # fail. The command resource is bound once so the script runs once.
         checks.append(
-            f"  if os[:family] == '{fam}'\n"
+            f"  if {_inspec_family_guard(fam)}\n"
             f"    v_{fam} = command(<<-'SABC_V'.chomp)\n"
             f"{_ruby_heredoc(validate)}"
             f"    SABC_V\n"

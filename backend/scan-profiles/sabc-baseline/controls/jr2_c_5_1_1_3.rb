@@ -3,7 +3,7 @@ control 'JR2.C.5.1.1.3' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_5_1_1_3'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Ehs '^[[:space:]]*Storage[[:space:]]*=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf 2>/dev/null | tail -1 | grep -qi 'persistent' && exit 0
@@ -19,7 +19,7 @@ control 'JR2.C.5.1.1.3' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       #!/bin/bash
       grep -Ehs '^[[:space:]]*Storage[[:space:]]*=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf 2>/dev/null | tail -1 | grep -qi 'persistent' && exit 0

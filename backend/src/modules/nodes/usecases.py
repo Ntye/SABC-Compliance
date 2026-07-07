@@ -119,9 +119,15 @@ class RegisterNodeUseCase:
         id_like = fields.get("ID_LIKE", "").lower()
         combined = f"{id_val} {id_like}"
 
-        if re.search(r"rhel|centos|rocky|almalinux|fedora", combined):
+        # Match the whole RHEL-compatible family, including the AWS/Oracle
+        # derivatives whose ID is neither 'rhel' nor 'centos' (Amazon Linux is
+        # ID=amzn, sometimes with no ID_LIKE at all; Oracle Linux is ID=ol).
+        # RHEL derivatives never carry debian/ubuntu tokens, so order is
+        # unambiguous.
+        if re.search(r"rhel|centos|rocky|alma|fedora|amzn|amazon|oracle|"
+                     r"\bol\b|scientific|cloudlinux", combined):
             os_family = "RedHat"
-        elif re.search(r"debian|ubuntu", combined):
+        elif re.search(r"debian|ubuntu|mint|raspbian|pop", combined):
             os_family = "Debian"
         else:
             os_family = "Unknown"

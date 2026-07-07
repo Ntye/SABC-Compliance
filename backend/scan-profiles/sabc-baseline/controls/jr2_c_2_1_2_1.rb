@@ -3,7 +3,7 @@ control 'JR2.C.2.1.2.1' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_2_1_2_1'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       ps -ef | awk '(/[c]hronyd/ && $1!="_chrony") { print $1 }'
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.2.1.2.1' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       ps -ef | awk '(/[c]hronyd/ && $1!="_chrony") { print $1 }'
     SABC_V

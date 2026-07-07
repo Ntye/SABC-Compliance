@@ -3,7 +3,7 @@ control 'JR2.C.1.3.3' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_1_3_3'
-  if os[:family] == 'debian'
+  if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
       grep -Eq '^root:\$[0-9]' /etc/shadow || echo "root is locked"
     SABC_V
@@ -17,7 +17,7 @@ control 'JR2.C.1.3.3' do
       end
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       grep -Eq '^root:\$[0-9]' /etc/shadow || echo "root is locked"
     SABC_V

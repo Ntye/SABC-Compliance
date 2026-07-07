@@ -3,12 +3,12 @@ control 'JR2.C.3.4.3.1.3' do
   impact 0.5
   tag cis_level: 1
   tag control_key: 'jr2_c_3_4_3_1_3'
-  if os[:family] == 'debian'
+  if os.debian?
     describe package('ufw') do
       it { should be_installed }
     end
   end
-  if os[:family] == 'redhat'
+  if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
       systemctl is-active firewalld
       systemctl is-enabled nftables 2>/dev/null || echo 'nftables service masked/inactive (managed by firewalld)'
