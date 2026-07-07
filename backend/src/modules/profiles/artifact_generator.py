@@ -37,6 +37,14 @@ from core.domain.entities import Profile, ProfileControl
 # Facter family value per referential family token.
 _FACTER_FAMILY = {"debian": "Debian", "redhat": "RedHat"}
 
+# Exit-code convention for authored Validate scripts: 0 = compliant, non-zero =
+# non-compliant, and NA_EXIT_CODE = "control not applicable on this node" (the
+# prerequisite package/service is absent — GDM checks on a headless server, ntp
+# checks on a chrony host, nftables checks when ufw is the active firewall …).
+# The scan reports N/A as a SKIP (excluded from the score denominator, like
+# CIS does) and enforcement treats it as already-satisfied (nothing to do).
+NA_EXIT_CODE = 101
+
 
 def _puppet_key(control: ProfileControl) -> str:
     """Puppet class name segment: a valid class name from the control key/id."""
@@ -290,6 +298,9 @@ def _puppet_class(control: ProfileControl) -> tuple[str, dict[str, str], list[st
             guard = (
                 f"    $chk_{fam} = find_file('sabc_hardening/{chk_name}')\n"
             )
+        # unless: exit 0 (compliant) or NA_EXIT_CODE (not applicable) both mean
+        # "do not run Configure". `\$?` keeps the shell's $? out of Puppet's
+        # string interpolation.
         branches.append(
             f"  if $facts['os']['family'] == '{facter}' {{\n"
             f"    $cfg_{fam} = find_file('sabc_hardening/{cfg_name}')\n"
@@ -298,7 +309,7 @@ def _puppet_class(control: ProfileControl) -> tuple[str, dict[str, str], list[st
             f"      command   => \"/bin/bash '${{cfg_{fam}}}' </dev/null\",\n"
             f"      provider  => 'shell',\n"
             f"      path      => ['/usr/sbin', '/usr/bin', '/sbin', '/bin'],\n"
-            + (f"      unless    => \"/bin/bash '${{chk_{fam}}}' </dev/null\",\n" if validate else "")
+            + (f"      unless    => \"/bin/bash '${{chk_{fam}}}' </dev/null || [ \\$? -eq {NA_EXIT_CODE} ]\",\n" if validate else "")
             + f"      logoutput => 'on_failure',\n"
             f"    }}\n"
             f"  }}"
@@ -414,7 +425,14 @@ def _puppet_array(items: list[str]) -> str:
 # translated to InSpec's package resource instead, with the polarity taken from
 # the control's title.
 _PKG_QUERY_CMD = re.compile(r"^(?:dpkg-query\s+-W|rpm\s+-q)\b")
-_NOT_INSTALLED_TITLE = re.compile(r"\bnot\b[^.]*\binstalled\b|\binstalled\b[^.]*\bnot\b", re.I)
+# Absence-demanding titles: "… is not installed", "… installed … not", and
+# "Disable X." — CIS "Disable Automounting" audits `dpkg-query -W autofs`
+# where NOT installed is the compliant state; judging it positively fails
+# exactly the compliant nodes.
+_NOT_INSTALLED_TITLE = re.compile(
+    r"\bnot\b[^.]*\binstalled\b|\binstalled\b[^.]*\bnot\b|^\s*disable\b",
+    re.I,
+)
 
 
 def _package_audit(validate: str, title: str) -> tuple[list[str], bool] | None:
@@ -451,14 +469,24 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
             )
             checks.append(f"  if os[:family] == '{fam}'\n{body}  end")
             continue
-        # Run the family's validate procedure; pass iff it exits 0. Guarded so
-        # only the node's family runs its own check.
+        # Run the family's validate procedure; pass iff it exits 0. Exit
+        # NA_EXIT_CODE means the control does not apply on this node (its
+        # prerequisite package/service is absent) → report a SKIP, never a
+        # fail. The command resource is bound once so the script runs once.
         checks.append(
             f"  if os[:family] == '{fam}'\n"
-            f"    describe command(<<-'SABC_V'.chomp) do\n"
+            f"    v_{fam} = command(<<-'SABC_V'.chomp)\n"
             f"{_ruby_heredoc(validate)}"
             f"    SABC_V\n"
-            f"      its('exit_status') {{ should cmp 0 }}\n"
+            f"    if v_{fam}.exit_status == {NA_EXIT_CODE}\n"
+            f"      describe 'Not applicable' do\n"
+            f"        skip 'Not applicable on this node: the validate procedure "
+            f"reported its prerequisite (package/service) is absent.'\n"
+            f"      end\n"
+            f"    else\n"
+            f"      describe v_{fam} do\n"
+            f"        its('exit_status') {{ should cmp 0 }}\n"
+            f"      end\n"
             f"    end\n"
             f"  end"
         )

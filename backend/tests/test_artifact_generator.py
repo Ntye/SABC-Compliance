@@ -167,6 +167,15 @@ class TestPuppet:
         assert (tmp_path / "manifests" / "l1.pp").exists()
         assert (tmp_path / "manifests" / "l2.pp").exists()
 
+    def test_unless_treats_na_exit_code_as_satisfied(self, tmp_path) -> None:
+        # A Validate that exits 101 (control not applicable on this node) must
+        # NOT trigger Configure — enforcing a GDM fix on a headless server or
+        # nftables chains on a ufw host would be wrong. `\$?` keeps the shell's
+        # $? out of Puppet string interpolation.
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        pp = (tmp_path / "manifests" / "jr2_c_1.pp").read_text()
+        assert "|| [ \\$? -eq 101 ]" in pp
+
     def test_metadata_has_keys_puppet_requires(self, tmp_path) -> None:
         # When metadata.json exists, Puppet's module loader raises MissingMetadata
         # ("No source module metadata provided for sabc_hardening") unless
@@ -230,6 +239,27 @@ class TestInspec:
         generate_inspec_profile(profile([c]), str(tmp_path))
         rb = (tmp_path / "controls" / "jr2_c_x.rb").read_text()
         assert "exit_status" in rb and "package(" not in rb
+
+    def test_disable_title_package_audit_negates(self, tmp_path) -> None:
+        # CIS "Disable Automounting" audits `dpkg-query -W autofs` — absent is
+        # the COMPLIANT state, so the package resource must be negated (the
+        # positive reading failed exactly the compliant nodes).
+        c = control("JR2.C.1.1.1", vdeb="```\n# dpkg-query -W autofs\n```",
+                    vrh="```\n# rpm -q autofs\n```")
+        c.title = "Disable Automounting."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_1_1_1.rb").read_text()
+        assert "package('autofs')" in rb and "should_not be_installed" in rb
+
+    def test_validate_exit_101_reported_as_not_applicable_skip(self, tmp_path) -> None:
+        # Authored validates exit 101 when their prerequisite is absent (GDM on
+        # a headless server, ntp on a chrony host). The generated check must
+        # branch: 101 → skip 'Not applicable…', anything else → assert exit 0.
+        generate_inspec_profile(profile([control("JR2.C.1.7.9")]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_1_7_9.rb").read_text()
+        assert "exit_status == 101" in rb
+        assert "skip 'Not applicable on this node" in rb
+        assert "should cmp 0" in rb              # the normal path still asserts
 
     def test_inspec_yml_supports_both_families(self, tmp_path) -> None:
         generate_inspec_profile(profile([control("JR2.C.1")]), str(tmp_path))
