@@ -9,9 +9,9 @@ control 'JR2.C.1.7.1' do
       
       {
        l_pkgoutput=""
-       if command -v dpkg-query > /dev/null 2> then
+       if command -v dpkg-query > /dev/null 2>&1; then
        l_pq="dpkg-query -W"
-       elif command -v rpm > /dev/null 2> then
+       elif command -v rpm > /dev/null 2>&1; then
        l_pq="rpm -q"
        fi
        l_pcl="gdm gdm3" # Space separated list of packages to check
@@ -72,9 +72,9 @@ control 'JR2.C.1.7.1' do
       
       {
        l_pkgoutput=""
-       if command -v dpkg-query > /dev/null 2> then
+       if command -v dpkg-query > /dev/null 2>&1; then
        l_pq="dpkg-query -W"
-       elif command -v rpm > /dev/null 2> then
+       elif command -v rpm > /dev/null 2>&1; then
        l_pq="rpm -q"
        fi
        l_pcl="gdm gdm3" # Space separated list of packages to check

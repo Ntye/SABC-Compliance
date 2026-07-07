@@ -30,7 +30,7 @@ control 'JR2.C.1.1.2' do
        module_loaded_chk()
        {
        # Check if the module is currently loaded
-       if ! lsmod | grep "$l_mname" > /dev/null 2> then
+       if ! lsmod | grep "$l_mname" > /dev/null 2>&1; then
        l_output="$l_output\n - module: \"$l_mname\" is not loaded"
        else
        l_output2="$l_output2\n - module: \"$l_mname\" is loaded"
@@ -99,7 +99,7 @@ control 'JR2.C.1.1.2' do
        module_loaded_chk()
        {
        # Check if the module is currently loaded
-       if ! lsmod | grep "$l_mname" > /dev/null 2> then
+       if ! lsmod | grep "$l_mname" > /dev/null 2>&1; then
        l_output="$l_output\n - module: \"$l_mname\" is not loaded"
        else
        l_output2="$l_output2\n - module: \"$l_mname\" is loaded"

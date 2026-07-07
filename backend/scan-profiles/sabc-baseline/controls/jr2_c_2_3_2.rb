@@ -4,17 +4,13 @@ control 'JR2.C.2.3.2' do
   tag cis_level: 1
   tag control_key: 'jr2_c_2_3_2'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' rsh-client
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('rsh-client') do
+      it { should_not be_installed }
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      rpm -q rsh-client
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('rsh-client') do
+      it { should_not be_installed }
     end
   end
 end

@@ -11,9 +11,9 @@ control 'JR2.C.1.7.4' do
        # Check if GNOME Desktop Manager is installed. If package isn't installed, recommendation is Not Applicable\n
        # determine system's package manager
        l_pkgoutput=""
-       if command -v dpkg-query > /dev/null 2> then
+       if command -v dpkg-query > /dev/null 2>&1; then
        l_pq="dpkg-query -W"
-       elif command -v rpm > /dev/null 2> then
+       elif command -v rpm > /dev/null 2>&1; then
        l_pq="rpm -q"
        fi
        # Check if GDM is installed
@@ -69,9 +69,9 @@ control 'JR2.C.1.7.4' do
        # Check if GNOME Desktop Manager is installed. If package isn't installed, recommendation is Not Applicable\n
        # determine system's package manager
        l_pkgoutput=""
-       if command -v dpkg-query > /dev/null 2> then
+       if command -v dpkg-query > /dev/null 2>&1; then
        l_pq="dpkg-query -W"
-       elif command -v rpm > /dev/null 2> then
+       elif command -v rpm > /dev/null 2>&1; then
        l_pq="rpm -q"
        fi
        # Check if GDM is installed

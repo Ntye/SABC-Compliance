@@ -4,17 +4,13 @@ control 'JR2.C.5.1.1.1.1' do
   tag cis_level: 1
   tag control_key: 'jr2_c_5_1_1_1_1'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' systemd-journal-remote
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('systemd-journal-remote') do
+      it { should be_installed }
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      rpm -q systemd-journal-remote
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('systemd-journal-remote') do
+      it { should be_installed }
     end
   end
 end

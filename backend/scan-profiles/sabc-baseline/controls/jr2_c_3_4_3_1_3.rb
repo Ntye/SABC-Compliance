@@ -4,10 +4,8 @@ control 'JR2.C.3.4.3.1.3' do
   tag cis_level: 1
   tag control_key: 'jr2_c_3_4_3_1_3'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' ufw
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('ufw') do
+      it { should be_installed }
     end
   end
   if os[:family] == 'redhat'

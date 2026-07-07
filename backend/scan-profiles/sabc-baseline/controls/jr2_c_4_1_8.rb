@@ -9,7 +9,7 @@ control 'JR2.C.4.1.8' do
       
       {
        l_output="" l_output2=""
-       if dpkg-query -W cron > /dev/null 2> then
+       if dpkg-query -W cron > /dev/null 2>&1; then
        l_file="/etc/cron.allow"
        [ -e /etc/cron.deny ] && l_output2="$l_output2\n - cron.deny exists"
        if [ ! -e /etc/cron.allow ]; then 
@@ -54,7 +54,7 @@ control 'JR2.C.4.1.8' do
       
       {
        l_output="" l_output2=""
-       if rpm -q cron > /dev/null 2> then
+       if rpm -q cron > /dev/null 2>&1; then
        l_file="/etc/cron.allow"
        [ -e /etc/cron.deny ] && l_output2="$l_output2\n - cron.deny exists"
        if [ ! -e /etc/cron.allow ]; then 

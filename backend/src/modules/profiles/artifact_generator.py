@@ -407,6 +407,30 @@ def _puppet_array(items: list[str]) -> str:
 
 # ── InSpec profile ────────────────────────────────────────────────────────────
 
+# A validate that is a bare package query: `dpkg-query -W [...] pkg [pkg2]` or
+# `rpm -q pkg`. Its EXIT CODE means "installed" (0) / "absent" (non-zero) — so
+# judging it with `exit_status == 0` INVERTS every "Ensure X is not installed"
+# control: the node fails the scan precisely because it is compliant. These are
+# translated to InSpec's package resource instead, with the polarity taken from
+# the control's title.
+_PKG_QUERY_CMD = re.compile(r"^(?:dpkg-query\s+-W|rpm\s+-q)\b")
+_NOT_INSTALLED_TITLE = re.compile(r"\bnot\b[^.]*\binstalled\b|\binstalled\b[^.]*\bnot\b", re.I)
+
+
+def _package_audit(validate: str, title: str) -> tuple[list[str], bool] | None:
+    """If *validate* is a single bare package query, return (packages, negate).
+    negate=True when the title demands the package be ABSENT."""
+    lines = [l for l in validate.splitlines() if l.strip()]
+    if len(lines) != 1 or not _PKG_QUERY_CMD.match(lines[0].strip()):
+        return None
+    pkgs = [t for t in lines[0].split()[1:]
+            if not t.startswith("-") and "=" not in t and "$" not in t
+            and "'" not in t and t not in ("query",)]
+    if not pkgs:
+        return None
+    return pkgs, bool(_NOT_INSTALLED_TITLE.search(title or ""))
+
+
 def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
     key = _puppet_key(control)
     pending: list[str] = []
@@ -415,6 +439,17 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
         validate = extract_shell(control.validate_for(fam))
         if not validate:
             pending.append(f"{control.control_id}/{fam}: no runnable Validate guidance")
+            continue
+        pkg_audit = _package_audit(validate, control.title)
+        if pkg_audit:
+            pkgs, negate = pkg_audit
+            matcher = "should_not be_installed" if negate else "should be_installed"
+            body = "".join(
+                f"    describe package('{p}') do\n"
+                f"      it {{ {matcher} }}\n"
+                f"    end\n" for p in pkgs
+            )
+            checks.append(f"  if os[:family] == '{fam}'\n{body}  end")
             continue
         # Run the family's validate procedure; pass iff it exits 0. Guarded so
         # only the node's family runs its own check.

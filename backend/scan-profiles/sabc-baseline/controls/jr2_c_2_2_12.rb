@@ -4,17 +4,13 @@ control 'JR2.C.2.2.12' do
   tag cis_level: 1
   tag control_key: 'jr2_c_2_2_12'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' snmpd
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('snmpd') do
+      it { should_not be_installed }
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      rpm -q snmpd
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('snmpd') do
+      it { should_not be_installed }
     end
   end
 end

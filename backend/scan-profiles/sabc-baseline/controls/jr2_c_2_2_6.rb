@@ -4,17 +4,13 @@ control 'JR2.C.2.2.6' do
   tag cis_level: 1
   tag control_key: 'jr2_c_2_2_6'
   if os[:family] == 'debian'
-    describe command(<<-'SABC_V'.chomp) do
-      dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' bind9
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('bind9') do
+      it { should_not be_installed }
     end
   end
   if os[:family] == 'redhat'
-    describe command(<<-'SABC_V'.chomp) do
-      rpm -q bind9
-    SABC_V
-      its('exit_status') { should cmp 0 }
+    describe package('bind9') do
+      it { should_not be_installed }
     end
   end
 end

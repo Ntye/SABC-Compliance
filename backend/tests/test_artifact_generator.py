@@ -201,6 +201,36 @@ class TestInspec:
             profile([control("JR2.C.9", vrh="")]), str(tmp_path))
         assert any("JR2.C.9/redhat" in p for p in res.pending)
 
+    def test_not_installed_package_audit_uses_negated_package_resource(self, tmp_path) -> None:
+        # `dpkg-query -W cups` exits 0 when cups IS installed, so judging it by
+        # exit_status==0 inverts every "not installed" control — a compliant
+        # (purged) node fails the scan. Must use the package resource instead.
+        c = control("JR2.C.2.2.2",
+                    vdeb="```\n# dpkg-query -W -f='${binary:Package}' cups\n```",
+                    vrh="```\n# rpm -q cups\n```")
+        c.title = "Ensure CUPS is not installed."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_2_2_2.rb").read_text()
+        assert "package('cups')" in rb
+        assert "should_not be_installed" in rb
+        assert "exit_status" not in rb
+
+    def test_installed_package_audit_uses_positive_package_resource(self, tmp_path) -> None:
+        c = control("JR2.C.3.4.1.1", vdeb="```\n# dpkg-query -W ufw\n```",
+                    vrh="```\n# rpm -q ufw\n```")
+        c.title = "Ensure ufw is installed."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_3_4_1_1.rb").read_text()
+        assert "package('ufw')" in rb and "should be_installed" in rb
+        assert "should_not" not in rb
+
+    def test_multiline_validate_still_uses_exit_code_command(self, tmp_path) -> None:
+        c = control("JR2.C.X", vdeb="```\n# systemctl is-enabled autofs\n# lsmod | grep autofs\n```")
+        c.title = "Disable Automounting."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_x.rb").read_text()
+        assert "exit_status" in rb and "package(" not in rb
+
     def test_inspec_yml_supports_both_families(self, tmp_path) -> None:
         generate_inspec_profile(profile([control("JR2.C.1")]), str(tmp_path))
         yml = (tmp_path / "inspec.yml").read_text()

@@ -6,7 +6,6 @@ control 'JR2.C.2.2.16' do
   if os[:family] == 'debian'
     describe command(<<-'SABC_V'.chomp) do
       dpkg-query -W -f='${binary:Package}\t${Status}\t${db:Status-Status}\n' rsync
-      
       rsync unknown ok not-installed not-installed
     SABC_V
       its('exit_status') { should cmp 0 }

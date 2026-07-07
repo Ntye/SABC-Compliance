@@ -9,7 +9,7 @@ control 'JR2.C.4.1.9' do
       
       {
        l_output="" l_output2=""
-       if dpkg-query -W at > /dev/null 2> then
+       if dpkg-query -W at > /dev/null 2>&1; then
        l_file="/etc/at.allow"
        [ -e /etc/at.deny ] && l_output2="$l_output2\n - at.deny exists"
        if [ ! -e /etc/at.allow ]; then 
@@ -54,7 +54,7 @@ control 'JR2.C.4.1.9' do
       
       {
        l_output="" l_output2=""
-       if rpm -q at > /dev/null 2> then
+       if rpm -q at > /dev/null 2>&1; then
        l_file="/etc/at.allow"
        [ -e /etc/at.deny ] && l_output2="$l_output2\n - at.deny exists"
        if [ ! -e /etc/at.allow ]; then 
