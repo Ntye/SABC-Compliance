@@ -444,7 +444,7 @@ async def lifespan(app: FastAPI):
         allowed_source_ips=settings.detection_webhook_source_ip,
     )
     detection_routes.set_use_cases(
-        list_events_uc=ListDetectionEventsUseCase(detection_repo, node_repo),
+        list_events_uc=ListDetectionEventsUseCase(detection_repo, node_repo, compliance_repo),
         node_status_uc=GetNodeDetectionStatusUseCase(detection_repo, node_repo),
         blob_uc=GetConfigBlobUseCase(detection_repo),
     )

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Activity, ChevronDown, FileDiff, FileWarning, RefreshCw, ShieldOff } from 'lucide-react'
 import { jobWsUrl, listDetectionEvents, listNodes } from '../lib/api.js'
+import { eventStatus } from '../hooks/usePosture.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
@@ -17,22 +18,31 @@ function shortHash(h) {
   return h ? h.slice(0, 10) : '—'
 }
 
-// Badge explaining the gateway's suppression decision for an event.
-function SuppressionBadge({ event, t }) {
-  if (!event.suppressed) {
-    return <span className={badge('danger')}>{t('detection.live')}</span>
+// Lifecycle status badge: a change is only an "Active" alert while it is
+// unresolved. Once remediation succeeds it is Resolved; a sanctioned change
+// (suppressed during a puppet run / remediation window) is not an alert at all.
+function StatusBadge({ event, t }) {
+  const status = eventStatus(event)
+  if (status === 'suppressed') {
+    const labels = {
+      remediation_pending: t('detection.suppressedRemediation'),
+      puppet_run: t('detection.suppressedPuppetRun'),
+      baseline: t('detection.baseline'),
+    }
+    return (
+      <span className={badge('gray')} title={event.suppress_reason || ''}>
+        <ShieldOff size={9} className="inline mr-0.5 -mt-px" />
+        {labels[event.suppress_reason] || t('detection.statusSuppressed')}
+      </span>
+    )
   }
-  const labels = {
-    remediation_pending: t('detection.suppressedRemediation'),
-    puppet_run: t('detection.suppressedPuppetRun'),
-    baseline: t('detection.baseline'),
-  }
-  return (
-    <span className={badge('gray')} title={event.suppress_reason || ''}>
-      <ShieldOff size={9} className="inline mr-0.5 -mt-px" />
-      {labels[event.suppress_reason] || t('detection.suppressed')}
-    </span>
-  )
+  const meta = {
+    active:      ['danger',  t('detection.statusActive')],
+    failed:      ['danger',  t('detection.statusFailed')],
+    remediating: ['warning', t('detection.statusRemediating')],
+    resolved:    ['success', t('detection.statusResolved')],
+  }[status] || ['gray', status]
+  return <span className={badge(meta[0])}>{meta[1]}</span>
 }
 
 function EventTypeBadge({ type }) {
@@ -67,6 +77,7 @@ export default function DetectionEventsPage() {
   const [events, setEvents] = useState([])
   const [nodes, setNodes] = useState([])
   const [nodeFilter, setNodeFilter] = useState(searchParams.get('node') || '')
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(false)
@@ -138,11 +149,36 @@ export default function DetectionEventsPage() {
     return () => { try { ws?.close() } catch (_) {} }
   }, [nodeFilter])
 
-  const liveCount = useMemo(() => events.filter((e) => !e.suppressed).length, [events])
-  const suppressedCount = events.length - liveCount
+  // Count by lifecycle status. "Active" excludes changes already corrected.
+  const counts = useMemo(() => {
+    const c = { active: 0, resolved: 0, remediating: 0, failed: 0, suppressed: 0 }
+    for (const e of events) c[eventStatus(e)] = (c[eventStatus(e)] || 0) + 1
+    return c
+  }, [events])
+  const activeCount = counts.active + counts.failed
+
+  // Group each status value under the coarse filter buckets the dropdown offers.
+  const statusMatches = (e, bucket) => {
+    if (!bucket) return true
+    const s = eventStatus(e)
+    if (bucket === 'active') return s === 'active' || s === 'failed'
+    return s === bucket
+  }
+  const visibleEvents = useMemo(
+    () => events.filter((e) => statusMatches(e, statusFilter)),
+    [events, statusFilter],
+  )
+
+  function updateStatus(next) {
+    setStatusFilter(next)
+    const params = {}
+    if (nodeFilter) params.node = nodeFilter
+    if (next) params.status = next
+    setSearchParams(params, { replace: true })
+  }
 
   return (
-    <div className="p-6 max-w-6xl">
+    <div className="p-6">
       <div className="flex items-center justify-between mb-5">
         <div>
           <h2 className="text-[18px] font-semibold text-gray-900 flex items-center gap-2">
@@ -158,12 +194,31 @@ export default function DetectionEventsPage() {
           <p className="text-[12px] text-gray-400 mt-0.5">{t('detection.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Status filter — surfaces the active alerts counted on the dashboard */}
+          <div className="relative">
+            <select
+              value={statusFilter}
+              onChange={(e) => updateStatus(e.target.value)}
+              className="appearance-none pl-3 pr-8 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white text-gray-700"
+            >
+              <option value="">{t('detection.statusAll')}</option>
+              <option value="active">{t('detection.statusActive')}</option>
+              <option value="remediating">{t('detection.statusRemediating')}</option>
+              <option value="resolved">{t('detection.statusResolved')}</option>
+              <option value="suppressed">{t('detection.statusSuppressed')}</option>
+            </select>
+            <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
           <div className="relative">
             <select
               value={nodeFilter}
               onChange={(e) => {
-                setNodeFilter(e.target.value)
-                setSearchParams(e.target.value ? { node: e.target.value } : {}, { replace: true })
+                const v = e.target.value
+                setNodeFilter(v)
+                const params = {}
+                if (v) params.node = v
+                if (statusFilter) params.status = statusFilter
+                setSearchParams(params, { replace: true })
               }}
               className="appearance-none pl-3 pr-8 py-2 text-[12px] border border-gray-200 rounded-lg outline-none focus:border-brand bg-white text-gray-700"
             >
@@ -181,13 +236,30 @@ export default function DetectionEventsPage() {
         </div>
       </div>
 
-      {/* Counters */}
-      <div className="flex items-center gap-3 mb-4">
+      {/* Counters — clickable chips double as the status filter */}
+      <div className="flex items-center gap-2.5 mb-4">
         <span className="text-[11px] text-gray-500">
           <span className="font-semibold text-gray-800">{events.length}</span> {t('detection.eventsShown')}
         </span>
-        <span className={badge('danger')}>{liveCount} {t('detection.live')}</span>
-        <span className={badge('gray')}>{suppressedCount} {t('detection.suppressed')}</span>
+        <button onClick={() => updateStatus('active')} className={badge('danger')}>
+          {activeCount} {t('detection.statusActive')}
+        </button>
+        {counts.remediating > 0 && (
+          <button onClick={() => updateStatus('remediating')} className={badge('warning')}>
+            {counts.remediating} {t('detection.statusRemediating')}
+          </button>
+        )}
+        <button onClick={() => updateStatus('resolved')} className={badge('success')}>
+          {counts.resolved} {t('detection.resolved')}
+        </button>
+        <button onClick={() => updateStatus('suppressed')} className={badge('gray')}>
+          {counts.suppressed} {t('detection.statusSuppressed')}
+        </button>
+        {statusFilter && (
+          <button onClick={() => updateStatus('')} className="text-[11px] text-gray-400 hover:text-gray-700 underline ml-1">
+            {t('common.clear') || 'clear'}
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -216,7 +288,14 @@ export default function DetectionEventsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {events.map((e) => (
+                {visibleEvents.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-10 text-center text-[12px] text-gray-400">
+                      {t('detection.emptyTitle')}
+                    </td>
+                  </tr>
+                )}
+                {visibleEvents.map((e) => (
                   <tr key={e.id} className="hover:bg-gray-50/60">
                     <td className="px-4 py-2.5 whitespace-nowrap">
                       <Link to={`/nodes/${e.node_id}`} className="font-medium text-gray-800 hover:text-brand hover:underline">
@@ -235,7 +314,7 @@ export default function DetectionEventsPage() {
                         title={`${e.prev_hash || '∅'} → ${e.new_hash || '∅'}`}>
                       {shortHash(e.prev_hash)} → {shortHash(e.new_hash)}
                     </td>
-                    <td className="px-4 py-2.5"><SuppressionBadge event={e} t={t} /></td>
+                    <td className="px-4 py-2.5"><StatusBadge event={e} t={t} /></td>
                     <td className="px-4 py-2.5">
                       {e.event_type === 'baseline' || (!e.prev_hash && !e.new_hash) ? (
                         <span className="text-gray-300">—</span>

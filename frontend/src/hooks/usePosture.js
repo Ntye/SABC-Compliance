@@ -3,6 +3,24 @@ import { getComplianceSummary, listDetectionEvents } from '../lib/api.js'
 
 // The report that represents a node's compliance (a real scan first, then a
 // CIS-over-SSH run, then anything that isn't a bare puppet run).
+// Lifecycle status of a detection event. A change that has been corrected
+// (remediation succeeded) or that was suppressed as sanctioned is NOT an open
+// alert; only a genuine, unresolved change — or one whose remediation failed —
+// counts against the "active alerts" figure.
+export function eventStatus(e) {
+  if (e.suppressed) return 'suppressed'
+  const o = e.remediation_outcome
+  if (o === 'success' || o === 'skipped') return 'resolved'
+  if (o === 'pending') return 'remediating'
+  if (o === 'failed') return 'failed'
+  return 'active'
+}
+
+export function isActiveAlert(e) {
+  const s = eventStatus(e)
+  return s === 'active' || s === 'failed'
+}
+
 export function primaryReport(node) {
   const reports = node.reports || []
   return (
@@ -60,7 +78,7 @@ export function usePosture() {
       }
       const globalScore = scanned.length ? Math.round(scoreSum / scanned.length) : 0
       const outOfCompliance = scanned.filter(({ report }) => (report.score || 0) < 90).length
-      const activeAlerts = (Array.isArray(events) ? events : []).filter((e) => !e.suppressed).length
+      const activeAlerts = (Array.isArray(events) ? events : []).filter(isActiveAlert).length
       const validationOnly = list.filter((n) => n.enforcement_enabled === false).length
 
       setState({

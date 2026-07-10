@@ -396,17 +396,37 @@ class ReceiveDetectionEventUseCase:
 
 
 class ListDetectionEventsUseCase:
-    """Detection Events page: recent events, optionally filtered by node."""
+    """Detection Events page: recent events, optionally filtered by node.
+
+    Each event is enriched with the outcome of the remediation it triggered (if
+    any) so the UI can tell a still-open change from one already corrected.
+    ``remediation_outcome`` is pending|success|failed|skipped, or None when no
+    remediation was dispatched for the change.
+    """
 
     def __init__(self, detection_repo: IDetectionRepository,
-                 node_repo: INodeRepository) -> None:
+                 node_repo: INodeRepository,
+                 compliance_repo=None) -> None:
         self._repo = detection_repo
         self._nodes = node_repo
+        self._compliance = compliance_repo
 
     async def execute(self, node_id: str | None = None, limit: int = 100) -> list[dict]:
         limit = max(1, min(int(limit or 100), 500))
         events = await self._repo.find_events(node_id=node_id, limit=limit)
         hostnames = {n.id: n.hostname for n in await self._nodes.find_all({})}
+
+        # Map detection_event_id → remediation outcome so a corrected change is
+        # not reported as an open alert.
+        outcome_by_event: dict[str, str] = {}
+        if self._compliance is not None:
+            try:
+                for rem in await self._compliance.find_all_remediations(500):
+                    if rem.detection_event_id:
+                        outcome_by_event[rem.detection_event_id] = rem.outcome
+            except Exception:
+                outcome_by_event = {}
+
         return [
             {
                 "id": e.id,
@@ -423,6 +443,7 @@ class ListDetectionEventsUseCase:
                 "suppressed": e.suppressed,
                 "suppress_reason": e.suppress_reason,
                 "remediation_event_id": e.remediation_event_id,
+                "remediation_outcome": outcome_by_event.get(e.id),
                 "created_at": e.created_at.isoformat(),
             }
             for e in events
