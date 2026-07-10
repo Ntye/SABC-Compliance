@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, RefreshCw, Search, X } from 'lucide-react'
+import { Download, Lock, RefreshCw, Search, X } from 'lucide-react'
 import { getAuditLog, getAuditFacets, getUserRole } from '../lib/api.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
@@ -101,10 +101,21 @@ export default function AuditLogPage() {
   const hasFilters = !exportsOnly || user || resourceType || q || dateFrom || dateTo
 
   if (!isAdmin) {
+    // The VIEW is always reachable; the DATA is access-controlled. Show the page
+    // frame with a clear restricted-access notice rather than a dead end.
     return (
-      <div className="p-6">
-        <h2 className="text-[18px] font-semibold text-gray-900 mb-2">{t('audit.title')}</h2>
-        <p className="text-[13px] text-gray-500">{t('audit.adminOnly')}</p>
+      <div className="p-6 space-y-4">
+        <div>
+          <h2 className="text-[18px] font-semibold text-gray-900 flex items-center gap-2">
+            <Download size={17} className="text-gray-400" /> {t('audit.title')}
+          </h2>
+          <p className="text-[13px] text-gray-500 mt-0.5">{t('audit.subtitle')}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
+          <Lock size={22} className="text-gray-300 mx-auto mb-2" />
+          <div className="text-[13px] font-medium text-gray-700">{t('audit.adminOnly')}</div>
+          <div className="text-[11px] text-gray-400 mt-1">{t('topbar.restricted')}</div>
+        </div>
       </div>
     )
   }
