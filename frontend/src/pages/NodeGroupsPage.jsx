@@ -14,6 +14,8 @@ import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 const OPERATORS = ['=', '!=', '~', '>', '>=', '<', '<=']
 
@@ -734,6 +736,7 @@ export default function NodeGroupsPage() {
     return groups.filter((g) =>
       !q || g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
   }, [groups, query])
+  const pager = usePagination(filtered)
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -921,6 +924,7 @@ export default function NodeGroupsPage() {
                   {query ? 'No groups match your filter.' : t('nodeGroups.noGroups')}
                 </div>
               ) : (
+                <>
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-gray-100">
@@ -933,7 +937,7 @@ export default function NodeGroupsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {filtered.map((g) => (
+                    {pager.pageItems.map((g) => (
                       <tr key={g.id} className="hover:bg-gray-50/50">
                         <td className="px-4 py-3 font-medium text-gray-800">
                           <div className="flex items-center gap-2">
@@ -987,6 +991,8 @@ export default function NodeGroupsPage() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination {...pager} />
+                </>
               )
             )}
           </div>

@@ -4,8 +4,7 @@ import { getAuditLog, getAuditFacets, getUserRole } from '../lib/api.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import { utcDate } from '../lib/time.js'
-
-const PAGE_SIZE = 100
+import Pagination from '../components/Pagination.jsx'
 
 const FORMAT_VARIANT = { csv: 'success', json: 'info', pdf: 'danger' }
 
@@ -50,7 +49,8 @@ export default function AuditLogPage() {
   const [facets, setFacets] = useState({ users: [], resource_types: [] })
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
-  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -70,23 +70,25 @@ export default function AuditLogPage() {
     date_to: dateTo || undefined,
   }), [exportsOnly, user, resourceType, qDebounced, dateFrom, dateTo])
 
-  const load = useCallback(async (nextOffset = 0) => {
+  // Server-side pagination: fetch exactly one page and replace the rows. total
+  // comes from the API so the footer can show the true element count.
+  const load = useCallback(async (nextPage = 1, size = pageSize) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await getAuditLog({ ...filters, limit: PAGE_SIZE, offset: nextOffset })
+      const res = await getAuditLog({ ...filters, limit: size, offset: (nextPage - 1) * size })
       setTotal(res.total || 0)
-      setOffset(nextOffset)
-      setItems((prev) => (nextOffset === 0 ? res.items : [...prev, ...res.items]))
+      setPage(nextPage)
+      setItems(res.items)
     } catch (err) {
       setError(err.message || t('audit.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [filters, t])
+  }, [filters, pageSize, t])
 
-  // Reload from the top whenever a filter changes.
-  useEffect(() => { if (isAdmin) load(0) }, [load, isAdmin])
+  // Reload page 1 whenever a filter or the page size changes.
+  useEffect(() => { if (isAdmin) load(1) }, [load, isAdmin])
 
   useEffect(() => {
     if (!isAdmin) return
@@ -130,7 +132,7 @@ export default function AuditLogPage() {
           <p className="text-[13px] text-gray-500 mt-0.5">{t('audit.subtitle')}</p>
         </div>
         <button
-          onClick={() => load(0)}
+          onClick={() => load(1)}
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-gray-600 text-[12px] font-medium hover:bg-gray-50"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {t('audit.refresh')}
@@ -253,19 +255,16 @@ export default function AuditLogPage() {
             </tbody>
           </table>
         </div>
-      </div>
-
-      <div className="flex items-center justify-between text-[12px] text-gray-400">
-        <span>{t('audit.showing', { count: items.length, total })}</span>
-        {items.length < total && (
-          <button
-            onClick={() => load(offset + PAGE_SIZE)}
-            disabled={loading}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-50"
-          >
-            {t('audit.loadMore')}
-          </button>
-        )}
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          totalPages={Math.max(1, Math.ceil(total / pageSize))}
+          start={total === 0 ? 0 : (page - 1) * pageSize + 1}
+          end={Math.min(page * pageSize, total)}
+          setPage={(p) => load(p, pageSize)}
+          setPageSize={(n) => setPageSize(n)}
+        />
       </div>
     </div>
   )

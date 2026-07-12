@@ -7,6 +7,10 @@ export const translations = {
       copy: 'Copy', copied: 'Copied', copyFailed: 'Copy failed', justNow: 'just now', edit: 'Edit',
       minutesAgo: '{{n}}m ago', hoursAgo: '{{n}}h ago',
       enrolled: 'enrolled', notEnrolled: 'none', active: 'active', revoked: 'revoked',
+      rowsPerPage: 'Rows per page',
+      showingRange: 'Showing {{start}}–{{end}} of {{total}}',
+      pageOf: 'Page {{page}} / {{totalPages}}',
+      prevPage: 'Previous page', nextPage: 'Next page',
     },
     nav: {
       overview: 'Overview', nodes: 'Node Registry', addServer: 'Add Server',
@@ -780,6 +784,10 @@ export const translations = {
       copy: 'Copier', copied: 'Copié', copyFailed: 'Échec de la copie', justNow: 'à l\'instant', edit: 'Modifier',
       minutesAgo: 'il y a {{n}}m', hoursAgo: 'il y a {{n}}h',
       enrolled: 'enrôlé', notEnrolled: 'aucun', active: 'actif', revoked: 'révoqué',
+      rowsPerPage: 'Lignes par page',
+      showingRange: 'Affichage de {{start}}–{{end}} sur {{total}}',
+      pageOf: 'Page {{page}} / {{totalPages}}',
+      prevPage: 'Page précédente', nextPage: 'Page suivante',
     },
     nav: {
       overview: 'Aperçu', nodes: 'Registre des nœuds', addServer: 'Ajouter VM',

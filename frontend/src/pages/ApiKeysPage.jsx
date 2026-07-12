@@ -12,6 +12,8 @@ import { badge } from '../lib/tw.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function relativeTime(iso, t) {
   if (!iso) return '—'
@@ -54,6 +56,7 @@ export default function ApiKeysPage() {
       return true
     })
   }, [keys, query, roleFilter, statusFilter])
+  const pager = usePagination(filtered)
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -196,6 +199,7 @@ export default function ApiKeysPage() {
           ) : filtered.length === 0 ? (
             <div className="p-8 text-center text-[13px] text-gray-400">No keys match the filters.</div>
           ) : (
+            <>
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-gray-100">
@@ -208,7 +212,7 @@ export default function ApiKeysPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map((k) => (
+                {pager.pageItems.map((k) => (
                   <tr key={k.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium">{k.name}</td>
                     <td className="px-4 py-3"><span className={badge(k.role)}>{k.role}</span></td>
@@ -233,6 +237,8 @@ export default function ApiKeysPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
+            </>
           )
         )}
       </div>

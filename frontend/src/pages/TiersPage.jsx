@@ -14,6 +14,8 @@ import { useToast } from '../context/ToastContext.jsx'
 import { badge, btn, btnSm, btnDangerSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx'
 
 function scopeLabel(tier, t) {
@@ -131,6 +133,7 @@ export default function TiersPage() {
   const [loading, setLoading] = useState(true)
   const [closedLoop, setClosedLoop] = useState(false)
   const [savingLoop, setSavingLoop] = useState(false)
+  const pager = usePagination(tiers)
 
   const [formTier, setFormTier] = useState(undefined)  // undefined=closed, null=create, obj=edit
   const [confirmDel, setConfirmDel] = useState(null)
@@ -281,7 +284,7 @@ export default function TiersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {tiers.map((tier) => (
+              {pager.pageItems.map((tier) => (
                 <tr key={tier.id} className="hover:bg-gray-50/60">
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-800">{tier.name}</div>
@@ -319,6 +322,7 @@ export default function TiersPage() {
               ))}
             </tbody>
           </table>
+          <Pagination {...pager} />
         </div>
       )}
 

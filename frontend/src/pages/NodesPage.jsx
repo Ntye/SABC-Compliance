@@ -11,6 +11,8 @@ import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
 import StatusDot from '../components/common/StatusDot.jsx'
 import DnsModal from '../components/nodes/DnsModal.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function Skeleton() {
   return (
@@ -52,6 +54,7 @@ export default function NodesPage() {
     () => listNodes({ status: statusFilter || undefined, os_family: osFamilyFilter || undefined }),
     { deps: [statusFilter, osFamilyFilter] }
   )
+  const pager = usePagination(nodes)
 
   async function handlePingAll() {
     setPingingAll(true)
@@ -182,7 +185,7 @@ export default function NodesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {nodes.map((node) => (
+                {pager.pageItems.map((node) => (
                   <tr
                     key={node.id}
                     onClick={() => navigate(`/nodes/${node.id}`)}
@@ -290,6 +293,7 @@ export default function NodesPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
           </div>
         )}
       </div>

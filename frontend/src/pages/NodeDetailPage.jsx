@@ -17,6 +17,8 @@ import Spinner from '../components/common/Spinner.jsx'
 import StatusDot from '../components/common/StatusDot.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import DnsModal from '../components/nodes/DnsModal.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -232,6 +234,7 @@ function DetectionPanel({ node, t }) {
   const lastSeen = status?.agent_last_seen
   // The agent heartbeats every 10 min — silent for >25 min means it is likely down.
   const stale = lastSeen ? (Date.now() - new Date(lastSeen).getTime()) > 25 * 60 * 1000 : true
+  const pager = usePagination(status?.watched_paths || [])
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-5 mt-4">
@@ -273,7 +276,7 @@ function DetectionPanel({ node, t }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {status.watched_paths.map((p) => (
+              {pager.pageItems.map((p) => (
                 <tr key={p.path} className="hover:bg-gray-50/60">
                   <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{p.path}</td>
                   <td className="px-3 py-2">
@@ -287,6 +290,7 @@ function DetectionPanel({ node, t }) {
               ))}
             </tbody>
           </table>
+          <Pagination {...pager} />
         </div>
       )}
     </div>

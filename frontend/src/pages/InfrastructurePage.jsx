@@ -14,6 +14,8 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn, btnSm, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -587,6 +589,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
   const [launching, setLaunching]       = useState(false)
   const [activeJob, setActiveJob]       = useState(null)
   const toast = useToast()
+  const pager = usePagination(nodes)
 
   const enrollable = nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned')
 
@@ -836,7 +839,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
               </tr>
             </thead>
             <tbody>
-              {nodes.map((n) => (
+              {pager.pageItems.map((n) => (
                 <tr key={n.id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-5 py-3">
                     <p className="font-medium text-gray-800">{n.hostname}</p>
@@ -867,6 +870,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
             </tbody>
           </table>
         )}
+        <Pagination {...pager} />
       </div>
 
       {activeJob && (
@@ -889,6 +893,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
   const [activeJob, setActiveJob]     = useState(null)
   const [results, setResults]     = useState(null)
   const toast = useToast()
+  const pager = usePagination(nodes)
 
   async function loadStatus() {
     try {
@@ -1073,7 +1078,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
               </tr>
             </thead>
             <tbody>
-              {nodes.map((n) => (
+              {pager.pageItems.map((n) => (
                 <tr key={n.id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-5 py-3">
                     <p className="font-medium text-gray-800">{n.hostname}</p>
@@ -1119,6 +1124,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
             </tbody>
           </table>
         )}
+        <Pagination {...pager} />
       </div>
 
       {activeJob && (

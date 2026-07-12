@@ -8,6 +8,8 @@ import { badge, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import DiffModal from '../components/detection/DiffModal.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -168,6 +170,7 @@ export default function DetectionEventsPage() {
     () => events.filter((e) => statusMatches(e, statusFilter)),
     [events, statusFilter],
   )
+  const pager = usePagination(visibleEvents)
 
   function updateStatus(next) {
     setStatusFilter(next)
@@ -295,7 +298,7 @@ export default function DetectionEventsPage() {
                     </td>
                   </tr>
                 )}
-                {visibleEvents.map((e) => (
+                {pager.pageItems.map((e) => (
                   <tr key={e.id} className="hover:bg-gray-50/60">
                     <td className="px-4 py-2.5 whitespace-nowrap">
                       <Link to={`/nodes/${e.node_id}`} className="font-medium text-gray-800 hover:text-brand hover:underline">
@@ -332,6 +335,7 @@ export default function DetectionEventsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
           </div>
         </div>
       )}

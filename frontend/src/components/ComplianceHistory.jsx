@@ -8,6 +8,8 @@ import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { utcDate } from '../lib/time.js'
 import { scoreColor, scoreBarColor } from '../lib/tw.js'
+import Pagination from './Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 import {
   exportHistoryJson, exportHistoryCsv, exportHistoryPdf,
   exportControlsJson, exportControlsCsv, exportControlsPdf,
@@ -212,7 +214,7 @@ export default function ComplianceHistory({ nodeId = null, nodeName = null }) {
   }
 
   const rangeActive = Boolean(from || to)
-  const shownRows = sortedRows.slice(0, 150)
+  const pager = usePagination(sortedRows)
 
   return (
     <div className="space-y-4">
@@ -379,7 +381,7 @@ export default function ComplianceHistory({ nodeId = null, nodeName = null }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {shownRows.map((r) => (
+                {pager.pageItems.map((r) => (
                   <tr key={r.id} className="hover:bg-gray-50/50">
                     <td className="px-5 py-2.5 text-gray-500">{utcDate(r.collected_at)?.toLocaleString()}</td>
                     {!nodeId && <td className="px-5 py-2.5 text-gray-700 font-medium">{r.hostname || r.node_id}</td>}
@@ -410,11 +412,7 @@ export default function ComplianceHistory({ nodeId = null, nodeName = null }) {
                 ))}
               </tbody>
             </table>
-            {rows.length > shownRows.length && (
-              <div className="px-5 py-2.5 text-[11px] text-gray-400 border-t border-gray-50">
-                {t('compliance.showingFirst', { shown: shownRows.length, total: rows.length })}
-              </div>
-            )}
+            <Pagination {...pager} />
           </div>
         )}
       </div>

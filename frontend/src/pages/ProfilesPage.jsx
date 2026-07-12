@@ -10,6 +10,8 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function Modal({ title, onClose, children }) {
   return (
@@ -34,6 +36,7 @@ export default function ProfilesPage() {
   const navigate = useNavigate()
   const isAdmin = getUserRole() === 'admin'
   const { data: profiles, loading, error, refetch } = useApi(listProfiles)
+  const pager = usePagination(profiles)
 
   const [showCreate, setShowCreate] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -192,6 +195,7 @@ export default function ProfilesPage() {
           {(profiles || []).length === 0 ? (
             <div className="py-16 text-center text-[13px] text-gray-400">{t('profiles.empty')}</div>
           ) : (
+            <>
             <table className="w-full text-[12px]">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
@@ -203,7 +207,7 @@ export default function ProfilesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {(profiles || []).map((p) => (
+                {pager.pageItems.map((p) => (
                   <tr
                     key={p.id}
                     onClick={() => navigate(`/profiles/${p.id}`)}
@@ -288,6 +292,8 @@ export default function ProfilesPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
+            </>
           )}
         </div>
       )}

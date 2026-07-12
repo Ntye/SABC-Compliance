@@ -13,6 +13,8 @@ import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
 import { utcDate } from '../lib/time.js'
 import RunScanButton from '../components/RunScanButton.jsx'
 import ComplianceHistory from '../components/ComplianceHistory.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 import { exportFleetJson, exportFleetCsv, exportFleetPdf } from '../lib/complianceExport.js'
 
 const C = { pass: '#16a34a', fail: '#dc2626', skip: '#9ca3af', high: '#dc2626' }
@@ -283,6 +285,7 @@ export default function CompliancePage() {
     .slice(0, 12)
 
   const hasData = stats.scanned.length > 0
+  const pager = usePagination(stats.nodes)
 
   async function scanAll(profileId = null) {
     if (!stats.nodes.length) return
@@ -456,6 +459,7 @@ export default function CompliancePage() {
         ) : !stats.nodes.length ? (
           <div className="p-8 text-center text-[13px] text-gray-400">{t('compliance.noNodes')}</div>
         ) : (
+          <>
           <table className="w-full text-[12px]">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
@@ -468,7 +472,7 @@ export default function CompliancePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {stats.nodes.map((node) => {
+              {pager.pageItems.map((node) => {
                 const r = primaryReport(node)
                 return (
                   <tr key={node.node_id} className="hover:bg-gray-50/50">
@@ -512,6 +516,8 @@ export default function CompliancePage() {
               })}
             </tbody>
           </table>
+          <Pagination {...pager} />
+          </>
         )}
       </div>
       </>

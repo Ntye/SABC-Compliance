@@ -4,6 +4,8 @@ import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import { useState, useMemo } from 'react'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 const MATRIX = [
   { action: 'View nodes & jobs',          readonly: true,  operator: true,  admin: true  },
@@ -53,6 +55,7 @@ export default function PermissionsPage() {
       u.username.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
     )
   }, [users, query])
+  const pager = usePagination(filteredUsers)
 
   return (
     <div className="p-6 max-w-4xl space-y-6">
@@ -117,6 +120,7 @@ export default function PermissionsPage() {
           ) : filteredUsers.length === 0 ? (
             <div className="p-6 text-center text-[13px] text-gray-400">No users match the search.</div>
           ) : (
+            <>
             <table className="w-full text-[12px]">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
@@ -127,7 +131,7 @@ export default function PermissionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filteredUsers.map((u) => (
+                {pager.pageItems.map((u) => (
                   <tr key={u.id} className="hover:bg-gray-50/50">
                     <td className="px-5 py-3 font-medium text-gray-800">{u.username}</td>
                     <td className="px-5 py-3 text-gray-400">{u.email || '—'}</td>
@@ -151,6 +155,8 @@ export default function PermissionsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
+            </>
           )
         )}
       </div>
