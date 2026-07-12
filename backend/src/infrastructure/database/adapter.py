@@ -1004,6 +1004,61 @@ class ComplianceRepository(IComplianceRepository):
             kf_details = await self._hydrate(s, rows)
             return [self._report_to_entity(r, kf_details) for r in rows]
 
+    async def find_history(
+        self, node_id: str | None = None, since: str | None = None,
+        until: str | None = None, limit: int = 1000,
+    ) -> list[dict]:
+        """Lightweight scan-history rows (no details) for the History tab —
+        one per scan, newest first, optionally scoped to a node and a
+        collected_at window. collected_at is stored as sortable ISO-8601 text,
+        so the range compares lexicographically."""
+        c = compliance_reports_table.c
+        async with self._session() as s:
+            q = select(
+                c.id, c.node_id, c.source, c.framework,
+                c.passed_checks, c.failed_checks, c.total_checks, c.skipped_checks,
+                c.profile, c.profile_id, c.profile_version, c.tier_name,
+                c.compliance_group_id, c.os_family, c.collected_at,
+            )
+            if node_id:
+                q = q.where(c.node_id == node_id)
+            if since:
+                q = q.where(c.collected_at >= since)
+            if until:
+                q = q.where(c.collected_at <= until)
+            q = q.order_by(c.collected_at.desc()).limit(max(1, min(int(limit or 1000), 5000)))
+            rows = (await s.execute(q)).all()
+
+        out: list[dict] = []
+        for r in rows:
+            total = r.total_checks or 0
+            score = round((r.passed_checks or 0) / total * 100) if total else 0
+            out.append({
+                "id": r.id, "node_id": r.node_id, "source": r.source or "puppet",
+                "framework": r.framework or "cis", "score": score,
+                "passed_checks": r.passed_checks or 0, "failed_checks": r.failed_checks or 0,
+                "total_checks": total, "skipped_checks": r.skipped_checks or 0,
+                "profile": r.profile, "profile_id": r.profile_id,
+                "profile_version": r.profile_version, "tier_name": r.tier_name,
+                "compliance_group_id": r.compliance_group_id, "os_family": r.os_family,
+                "collected_at": _dt(r.collected_at).isoformat() if _dt(r.collected_at) else r.collected_at,
+            })
+        return out
+
+    async def find_report(self, report_id: str) -> ComplianceReport | None:
+        """One scan report by id, with its details hydrated (following the
+        keyframe pointer for confirmation rows) — for viewing/exporting a
+        specific historical scan."""
+        c = compliance_reports_table.c
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_reports_table).where(c.id == report_id)
+            )).first()
+            if row is None:
+                return None
+            kf_details = await self._hydrate(s, [row])
+            return self._report_to_entity(row, kf_details)
+
     async def find_summary(self) -> list[dict]:
         async with self._session() as s:
             node_rows = (await s.execute(select(nodes_table))).all()

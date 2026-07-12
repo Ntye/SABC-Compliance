@@ -343,6 +343,23 @@ export async function getNodeCompliance(id) {
   return request('GET', `/compliance/nodes/${id}`)
 }
 
+// Scan history (lightweight rows: score + counts + context, no control details).
+// Omit nodeId for the whole fleet. from/to are ISO-8601 bounds on collected_at.
+export async function getComplianceHistory({ nodeId = null, from = null, to = null, limit = 1000 } = {}) {
+  const p = new URLSearchParams()
+  if (nodeId) p.set('node_id', nodeId)
+  if (from) p.set('since', from)
+  if (to) p.set('until', to)
+  if (limit) p.set('limit', String(limit))
+  const qs = p.toString()
+  return request('GET', `/compliance/history${qs ? '?' + qs : ''}`)
+}
+
+// One historical scan report with full control details (for view/export).
+export async function getComplianceReport(reportId) {
+  return request('GET', `/compliance/reports/${encodeURIComponent(reportId)}`)
+}
+
 export async function collectNodeCompliance(id, profileId = null) {
   return request('POST', `/compliance/nodes/${id}/collect`, profileId ? { profile_id: profileId } : undefined)
 }

@@ -108,6 +108,62 @@ class GetNodeComplianceUseCase:
         }
 
 
+class GetComplianceHistoryUseCase:
+    """Scan history for the History tab — lightweight rows (no control details),
+    newest first, for a single node or the whole fleet, within an optional
+    collected_at window. Each row is tagged with its node hostname so the fleet
+    view and CSV/JSON interval exports are self-describing."""
+
+    def __init__(self, node_repo: INodeRepository, compliance_repo: IComplianceRepository) -> None:
+        self._nodes = node_repo
+        self._repo = compliance_repo
+
+    async def execute(
+        self, node_id: str | None = None, since: str | None = None,
+        until: str | None = None, limit: int = 1000,
+    ) -> list[dict]:
+        resolved_id = None
+        if node_id:
+            node = await _resolve_node(self._nodes, node_id)
+            resolved_id = node.id
+        rows = await self._repo.find_history(
+            node_id=resolved_id, since=since, until=until, limit=limit)
+        hostnames = {n.id: n.hostname for n in await self._nodes.find_all({})}
+        for r in rows:
+            r["hostname"] = hostnames.get(r["node_id"], r["node_id"])
+        return rows
+
+
+class GetComplianceReportUseCase:
+    """One historical scan report by id, with full control details — for viewing
+    or exporting a specific past scan (any node)."""
+
+    def __init__(self, node_repo: INodeRepository, compliance_repo: IComplianceRepository) -> None:
+        self._nodes = node_repo
+        self._repo = compliance_repo
+
+    async def execute(self, report_id: str) -> dict:
+        report = await self._repo.find_report(report_id)
+        if report is None:
+            raise NotFoundError(f"Scan report '{report_id}' not found")
+        node = await self._nodes.find_by_id(report.node_id)
+        return {
+            "id": report.id, "node_id": report.node_id,
+            "hostname": node.hostname if node else report.node_id,
+            "ip": node.ip if node else None,
+            "os_family": report.os_family or (node.os_family if node else None),
+            "source": report.source, "framework": report.framework,
+            "score": report.score, "passed_checks": report.passed_checks,
+            "failed_checks": report.failed_checks, "total_checks": report.total_checks,
+            "skipped_checks": report.skipped_checks, "severity_counts": report.severity_counts,
+            "profile": report.profile, "profile_id": report.profile_id,
+            "profile_version": report.profile_version, "tier_name": report.tier_name,
+            "compliance_group_id": report.compliance_group_id,
+            "duration": report.duration, "details": report.details,
+            "collected_at": report.collected_at.isoformat(),
+        }
+
+
 class CollectNodeComplianceUseCase:
     """
     Run a structured compliance scan against an enrolled node using CINC Auditor.
@@ -453,6 +509,14 @@ class CollectNodeComplianceUseCase:
                     for k, v in tags.items()
                     if k == "cis" and v
                 }
+                # CIS Level (1|2) rides on the generated control's `tag cis_level`
+                # — surface it so the tier that made the control in-scope is
+                # visible in the detail view and every export.
+                cis_level = tags.get("cis_level")
+                try:
+                    cis_level = int(cis_level) if cis_level is not None else None
+                except (TypeError, ValueError):
+                    cis_level = None
 
                 if status == "pass":
                     passed += 1
@@ -467,6 +531,7 @@ class CollectNodeComplianceUseCase:
                     "status": status,
                     "severity": severity,
                     "impact": impact,
+                    "cis_level": cis_level,
                     "frameworks": frameworks,
                     "section": _cis_section(frameworks.get("cis")),
                     "desc": (ctrl.get("desc") or "").strip()[:600],

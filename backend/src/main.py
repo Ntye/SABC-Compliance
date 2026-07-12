@@ -55,6 +55,7 @@ from modules.provisioning.usecases import (
 )
 from modules.compliance.usecases import (
     CollectNodeComplianceUseCase, EnforceReferentialUseCase,
+    GetComplianceHistoryUseCase, GetComplianceReportUseCase,
     GetComplianceSummaryUseCase, GetNodeComplianceUseCase,
     ScanComplianceGroupUseCase, TriggerRemediationUseCase, RunClosedLoopUseCase,
 )
@@ -417,6 +418,8 @@ async def lifespan(app: FastAPI):
         remediate_uc=remediate_uc,
         closed_loop_uc=closed_loop_uc,
         enforce_uc=enforce_uc,
+        history_uc=GetComplianceHistoryUseCase(node_repo, compliance_repo),
+        report_uc=GetComplianceReportUseCase(node_repo, compliance_repo),
         config_repo=platform_config_repo,
     )
 
