@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
   ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
-  List, Network, Layers, RefreshCw, RotateCw, UploadCloud,
+  List, Network, Layers, RefreshCw, RotateCw, UploadCloud, Zap,
 } from 'lucide-react'
 import {
   listNodeGroups, createNodeGroup, deleteNodeGroup, listNodes,
@@ -950,6 +950,14 @@ export default function NodeGroupsPage() {
                             {g.group_type === 'system' && (
                               <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded font-medium">
                                 {t('nodeGroups.systemGroup')}
+                              </span>
+                            )}
+                            {g.active_response_enabled && (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded font-medium"
+                                title={t('nodeGroups.closedLoopHint')}
+                              >
+                                <Zap size={9} /> {t('nodeGroups.closedLoopActive')}
                               </span>
                             )}
                             {g.parent && g.parent !== 'All Nodes' && (

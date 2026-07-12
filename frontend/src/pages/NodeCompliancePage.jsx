@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts'
 import {
-  ArrowLeft, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
-  Download, ShieldAlert, ShieldCheck,
+  ArrowLeft, CheckCircle2, XCircle, MinusCircle, ChevronDown,
+  Download, ShieldAlert, ShieldCheck, Zap,
 } from 'lucide-react'
 import {
-  getNodeCompliance, collectNodeCompliance, triggerRemediation,
+  getNodeCompliance, collectNodeCompliance,
   getScanEngineStatus, installScanEngineOnController, enforceReferential,
+  getClosedLoopSetting, listNodeGroups,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
@@ -218,6 +219,11 @@ function ControlRow({ ctrl, t }) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {ctrl.status === 'skip' && (
+            <span className="inline-flex items-center px-2 py-[3px] rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
+              {t('compliance.skippedTag')}
+            </span>
+          )}
           {fwKeys.map((k) => (
             <span key={k} className={badge(k)}>
               {k.toUpperCase()} {fw[k]}
@@ -237,10 +243,20 @@ function ControlRow({ ctrl, t }) {
       {open && (
         <div className="px-5 pb-3 pl-[42px] space-y-1.5">
           {ctrl.desc && <p className="text-[12px] text-gray-500">{ctrl.desc}</p>}
-          {ctrl.message && (
-            <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">
-              {ctrl.message}
-            </pre>
+          {ctrl.status === 'skip' ? (
+            <div className="flex items-start gap-1.5 text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2">
+              <MinusCircle size={13} className="text-gray-400 mt-0.5 flex-shrink-0" />
+              <span>
+                <b className="text-gray-700">{t('compliance.whySkipped')}: </b>
+                {ctrl.message || t('compliance.skippedGeneric')}
+              </span>
+            </div>
+          ) : (
+            ctrl.message && (
+              <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">
+                {ctrl.message}
+              </pre>
+            )
           )}
         </div>
       )}
@@ -402,6 +418,8 @@ export default function NodeCompliancePage() {
   const toast = useToast()
   const { data, loading, refetch } = useApi(() => getNodeCompliance(id), { deps: [id] })
   const { data: scanEngineStatus, refetch: refetchScanEngine } = useApi(getScanEngineStatus)
+  const { data: closedLoopSetting } = useApi(getClosedLoopSetting)
+  const { data: allGroups } = useApi(listNodeGroups)
   const [scanning,    setScanning]    = useState(false)
   const [scanPct,     setScanPct]     = useState(0)
   const scanStartRef = useRef(null)
@@ -426,7 +444,6 @@ export default function NodeCompliancePage() {
     return () => clearInterval(scanTimerRef.current)
   }, [scanning])
   const [installing,     setInstalling]    = useState(false)
-  const [remediating,    setRemediating]   = useState(false)
   const [enforcing,      setEnforcing]     = useState(false)
   const [filter,         setFilter]        = useState('all')
   const [fwFilter,       setFwFilter]      = useState('all')
@@ -445,12 +462,40 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
+  // Failed and skipped controls broken down by severity, computed from the
+  // per-control details so only buckets that actually have controls render
+  // (no "Low 0 / Info 0" noise) and skipped controls are surfaced too.
+  const sevBreakdown = useMemo(() => {
+    const empty = () => ({ high: 0, medium: 0, low: 0, info: 0 })
+    const fail = empty(), skip = empty()
+    for (const d of report?.details || []) {
+      const s = SEV[d.severity] ? d.severity : 'info'
+      if (d.status === 'fail') fail[s] += 1
+      else if (d.status === 'skip') skip[s] += 1
+    }
+    return { fail, skip }
+  }, [report])
+
+  // Is the closed remediation loop active for THIS node? Either the platform-
+  // wide switch is on, or a node group the server belongs to has active
+  // response enabled. Enforcement itself is available once Puppet is enrolled.
+  const closedLoop = useMemo(() => {
+    if (closedLoopSetting?.enabled) return { active: true, via: t('compliance.clPlatform') }
+    const nid = data?.node_id
+    const g = nid && (allGroups || []).find(
+      (grp) => grp.active_response_enabled && (grp.matching_node_ids || []).includes(nid),
+    )
+    if (g) return { active: true, via: t('compliance.clGroup', { name: g.name }) }
+    return { active: false, via: null }
+  }, [closedLoopSetting, allGroups, data, t])
+
   // Controls after the active status + framework filters — the exact set the
   // tree renders and the exporters write, so exports honour the active filters.
   const filteredControls = useMemo(() => {
     let details = report?.details || []
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
     else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
+    else if (filter === 'skipped') details = details.filter((d) => d.status === 'skip')
     if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
     return details
   }, [report, filter, fwFilter])
@@ -464,6 +509,7 @@ export default function NodeCompliancePage() {
     const parts = []
     if (filter === 'failed') parts.push(t('compliance.filterFailed'))
     else if (filter === 'passed') parts.push(t('compliance.filterPassed'))
+    else if (filter === 'skipped') parts.push(t('compliance.filterSkipped'))
     if (fwFilter !== 'all') parts.push(fwFilter.toUpperCase())
     return parts.length ? parts.join(' · ') : null
   }, [filter, fwFilter, t])
@@ -518,19 +564,6 @@ export default function NodeCompliancePage() {
     }
   }
 
-  async function remediate() {
-    setRemediating(true)
-    try {
-      await triggerRemediation(id)
-      toast(t('compliance.remediated'), 'success')
-      await refetch()
-    } catch (err) {
-      toast(err.message, 'error')
-    } finally {
-      setRemediating(false)
-    }
-  }
-
   async function enforce() {
     setEnforcing(true)
     try {
@@ -553,6 +586,29 @@ export default function NodeCompliancePage() {
           </Link>
           <h2 className="text-[18px] font-semibold text-gray-900">{data?.hostname || id}</h2>
           {data && <p className="text-[12px] text-gray-400">{data.ip} · {data.os_family}</p>}
+          {data && (
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-medium ${
+                  closedLoop.active ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'
+                }`}
+                title={closedLoop.active ? t('compliance.clActiveHint') : t('compliance.clOffHint')}
+              >
+                <Zap size={10} />
+                {closedLoop.active ? t('compliance.clActive') : t('compliance.clOff')}
+                {closedLoop.via && <span className="opacity-70">· {closedLoop.via}</span>}
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-medium ${
+                  data.puppet_enrolled ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-400'
+                }`}
+                title={data.puppet_enrolled ? t('compliance.enforceReadyHint') : t('compliance.puppetFirst')}
+              >
+                <ShieldCheck size={10} />
+                {data.puppet_enrolled ? t('compliance.enforceReady') : t('compliance.enforceUnavailable')}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {tab === 'posture' && exportMeta && <ExportMenu controls={filteredControls} meta={exportMeta} t={t} />}
@@ -565,15 +621,6 @@ export default function NodeCompliancePage() {
           >
             <ShieldCheck size={14} />
             {enforcing ? t('compliance.enforcing') : t('tiers.enforce')}
-          </button>
-          <button
-            onClick={remediate}
-            disabled={remediating || !data?.puppet_enrolled}
-            title={!data?.puppet_enrolled ? t('compliance.puppetFirst') : ''}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Wrench size={14} />
-            {remediating ? t('compliance.remediating') : t('compliance.remediate')}
           </button>
         </div>
       </div>
@@ -689,20 +736,53 @@ export default function NodeCompliancePage() {
                   </div>
                 ))}
               </div>
-              <div className="mt-4">
-                <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.failuresBySeverity')}</div>
-                <div className="flex flex-wrap gap-2">
-                  {['high', 'medium', 'low', 'info'].map((k) => (
-                    <span
-                      key={k}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
-                      style={{ background: `${SEV[k]}18`, color: SEV[k] }}
-                    >
-                      {t(`compliance.${k}`)}
-                      <b>{report.severity_counts?.[k] || 0}</b>
-                    </span>
-                  ))}
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.failuresBySeverity')}</div>
+                  {report.failed_checks > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {['high', 'medium', 'low', 'info']
+                        .filter((k) => sevBreakdown.fail[k] > 0)
+                        .map((k) => (
+                          <span
+                            key={k}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
+                            style={{ background: `${SEV[k]}18`, color: SEV[k] }}
+                          >
+                            {t(`compliance.${k}`)} <b>{sevBreakdown.fail[k]}</b>
+                          </span>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-green-600 flex items-center gap-1">
+                      <CheckCircle2 size={12} /> {t('compliance.noFailures')}
+                    </p>
+                  )}
                 </div>
+                {(report.skipped_checks || 0) > 0 && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.skippedBySeverity')}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {['high', 'medium', 'low', 'info']
+                        .filter((k) => sevBreakdown.skip[k] > 0)
+                        .map((k) => (
+                          <span
+                            key={k}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-100 text-gray-500"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: SEV[k] }} />
+                            {t(`compliance.${k}`)} <b>{sevBreakdown.skip[k]}</b>
+                          </span>
+                        ))}
+                    </div>
+                    <button
+                      onClick={() => setFilter('skipped')}
+                      className="text-[11px] text-brand hover:underline mt-1.5"
+                    >
+                      {t('compliance.viewSkipped')}
+                    </button>
+                  </div>
+                )}
               </div>
             </Panel>
           </div>
@@ -735,7 +815,7 @@ export default function NodeCompliancePage() {
                   ))}
                 </div>
                 <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                  {['all', 'failed', 'passed'].map((f) => (
+                  {['all', 'failed', 'passed', 'skipped'].map((f) => (
                     <button
                       key={f}
                       onClick={() => setFilter(f)}
