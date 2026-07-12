@@ -1,104 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts'
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  LineChart, Line,
-} from 'recharts'
-import {
-  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
+  ArrowLeft, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
   Download, ShieldAlert, ShieldCheck,
 } from 'lucide-react'
 import {
   getNodeCompliance, collectNodeCompliance, triggerRemediation,
-  getScanEngineStatus, installScanEngineOnController, recordExport, enforceReferential,
+  getScanEngineStatus, installScanEngineOnController, enforceReferential,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
+import RunScanButton from '../components/RunScanButton.jsx'
+import ComplianceHistory from '../components/ComplianceHistory.jsx'
+import { exportControlsJson, exportControlsCsv, exportControlsPdf } from '../lib/complianceExport.js'
 
-// ── Export helpers ────────────────────────────────────────────────────────────
+// ── Export menu (posture tab) ─────────────────────────────────────────────────
+// Exports the currently filtered controls, so whatever status/framework filter
+// is active is reflected in the JSON, CSV and PDF alike (same column set).
 
-function downloadBlob(content, type, filename) {
-  const blob = new Blob([content], { type })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
-}
-
-function exportNodeJson(data, report) {
-  const payload = {
-    exported_at: new Date().toISOString(),
-    node: { hostname: data.hostname, ip: data.ip, os_family: data.os_family },
-    report: {
-      score: report.score, passed_checks: report.passed_checks,
-      failed_checks: report.failed_checks, skipped_checks: report.skipped_checks,
-      source: report.source, collected_at: report.collected_at, profile: report.profile,
-      controls: report.details || [],
-    },
-  }
-  downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
-    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.json`)
-  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'json', count: (report.details || []).length })
-}
-
-function exportNodeCsv(data, report) {
-  const rows = [['Control ID', 'Title', 'Status', 'Severity', 'Section', 'Description', 'Failure Detail']]
-  for (const ctrl of (report.details || [])) {
-    rows.push([ctrl.control_id, ctrl.title, ctrl.status, ctrl.severity || '',
-      ctrl.section || '', ctrl.desc || '', ctrl.message || ''])
-  }
-  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-  downloadBlob(csv, 'text/csv',
-    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.csv`)
-  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'csv', count: (report.details || []).length })
-}
-
-function exportNodePdf(data, report) {
-  const rows = (report.details || []).map((ctrl) => {
-    const color = ctrl.status === 'fail' ? '#dc2626' : ctrl.status === 'pass' ? '#16a34a' : '#6b7280'
-    const bg = ctrl.status === 'fail' ? '#fff5f5' : ''
-    return `<tr style="background:${bg}">
-      <td>${ctrl.control_id}</td>
-      <td>${ctrl.title}</td>
-      <td style="color:${color};font-weight:600">${ctrl.status}</td>
-      <td>${ctrl.severity || ''}</td>
-      <td>${ctrl.section || ''}</td>
-    </tr>`
-  }).join('')
-  const scoreColor = report.score >= 90 ? '#16a34a' : report.score >= 70 ? '#f59e0b' : '#dc2626'
-  const html = `<!DOCTYPE html><html><head><title>SABC — ${data.hostname}</title>
-<style>
-  body{font-family:sans-serif;font-size:11px;margin:24px}
-  h2{margin:0 0 4px}.meta{color:#555;margin-bottom:16px}
-  .score{font-size:22px;font-weight:700;color:${scoreColor}}
-  table{width:100%;border-collapse:collapse;margin-top:12px}
-  th,td{border:1px solid #e5e7eb;padding:5px 8px;text-align:left;vertical-align:top}
-  th{background:#f9fafb;font-size:10px;font-weight:600;text-transform:uppercase}
-  @media print{body{margin:0}}
-</style></head><body>
-<h2>SABC Compliance Report — ${data.hostname}</h2>
-<div class="meta">
-  IP: ${data.ip} · OS: ${data.os_family} ·
-  Score: <span class="score">${report.score}%</span> ·
-  ${report.passed_checks} passed · ${report.failed_checks} failed ·
-  Scanned: ${new Date(report.collected_at).toLocaleString()}
-</div>
-<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Severity</th><th>Section</th></tr></thead>
-<tbody>${rows}</tbody></table></body></html>`
-  const win = window.open('', '_blank')
-  if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
-  recordExport({ resource_type: 'node', resource_id: data.node_id || data.id, resource_name: data.hostname, format: 'pdf', count: (report.details || []).length })
-}
-
-function ExportMenu({ nodeData, report, t }) {
+function ExportMenu({ controls, meta, t }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-  function close() { setOpen(false) }
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50"
@@ -109,11 +35,17 @@ function ExportMenu({ nodeData, report, t }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={close} />
-          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-36 py-1 text-[12px]">
-            <button onClick={() => { exportNodeJson(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportJson')}</button>
-            <button onClick={() => { exportNodeCsv(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportCsv')}</button>
-            <button onClick={() => { exportNodePdf(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportPdf')}</button>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-40 py-1 text-[12px]">
+            {[['json', exportControlsJson], ['csv', exportControlsCsv], ['pdf', exportControlsPdf]].map(([fmt, fn]) => (
+              <button
+                key={fmt}
+                onClick={() => { fn(controls, meta); setOpen(false) }}
+                className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700"
+              >
+                {t(`compliance.export${fmt.charAt(0).toUpperCase() + fmt.slice(1)}`)}
+              </button>
+            ))}
           </div>
         </>
       )}
@@ -134,12 +66,6 @@ const CIS_SECTIONS = {
 const FRAMEWORKS = [
   { key: 'all', label: 'All' },
   { key: 'cis', label: 'CIS' },
-]
-
-const PROFILE_OPTIONS = [
-  { id: null,                  labelKey: 'compliance.allProfiles' },
-  { id: 'cis-benchmark',       labelKey: 'compliance.cisBenchmark' },
-  { id: 'sabc-linux-baseline', labelKey: 'compliance.internalRef' },
 ]
 
 function sectionOf(ctrl) {
@@ -505,32 +431,10 @@ export default function NodeCompliancePage() {
   const [filter,         setFilter]        = useState('all')
   const [fwFilter,       setFwFilter]      = useState('all')
   const [sortMode,       setSortMode]      = useState('section')  // 'section' | 'risk'
-  const [scanProfileId,  setScanProfileId] = useState(null)       // null = all profiles
+  const [tab,            setTab]           = useState('posture')  // 'posture' | 'history'
 
   const scanEngineInstalled = scanEngineStatus?.installed
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
-
-  const history = useMemo(() => {
-    if (!data) return []
-    return (data.reports || [])
-      .filter((r) => r.source === 'scan' || r.source === 'cis-ssh')
-      .map((r) => ({
-        ts: new Date(r.collected_at).getTime(),
-        date: new Date(r.collected_at).toLocaleDateString(),
-        score: r.score,
-      }))
-      .sort((a, b) => a.ts - b.ts)
-  }, [data])
-
-  const severityBars = useMemo(() => {
-    const sc = report?.severity_counts || {}
-    return [
-      { name: t('compliance.high'), key: 'high', value: sc.high || 0 },
-      { name: t('compliance.medium'), key: 'medium', value: sc.medium || 0 },
-      { name: t('compliance.low'), key: 'low', value: sc.low || 0 },
-      { name: t('compliance.info'), key: 'info', value: sc.info || 0 },
-    ]
-  }, [report, t])
 
   const distribution = useMemo(() => {
     if (!report) return []
@@ -541,13 +445,37 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
-  const complianceTree = useMemo(() => {
+  // Controls after the active status + framework filters — the exact set the
+  // tree renders and the exporters write, so exports honour the active filters.
+  const filteredControls = useMemo(() => {
     let details = report?.details || []
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
     else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
     if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
-    return sortMode === 'risk' ? buildRiskTree(details) : buildComplianceTree(details)
-  }, [report, filter, fwFilter, sortMode])
+    return details
+  }, [report, filter, fwFilter])
+
+  const complianceTree = useMemo(
+    () => (sortMode === 'risk' ? buildRiskTree(filteredControls) : buildComplianceTree(filteredControls)),
+    [filteredControls, sortMode],
+  )
+
+  const filterLabel = useMemo(() => {
+    const parts = []
+    if (filter === 'failed') parts.push(t('compliance.filterFailed'))
+    else if (filter === 'passed') parts.push(t('compliance.filterPassed'))
+    if (fwFilter !== 'all') parts.push(fwFilter.toUpperCase())
+    return parts.length ? parts.join(' · ') : null
+  }, [filter, fwFilter, t])
+
+  const exportMeta = useMemo(() => (data && report ? {
+    hostname: data.hostname, ip: data.ip, os_family: data.os_family,
+    score: report.score, passed_checks: report.passed_checks, failed_checks: report.failed_checks,
+    skipped_checks: report.skipped_checks, total_checks: report.total_checks,
+    source: report.source, profile: report.profile, collected_at: report.collected_at,
+    resourceType: 'node', resourceId: data.node_id || data.id, resourceName: data.hostname,
+    filterLabel,
+  } : null), [data, report, filterLabel])
 
   const totalShown = useMemo(
     () =>
@@ -560,10 +488,10 @@ export default function NodeCompliancePage() {
     [complianceTree, sortMode],
   )
 
-  async function runScan() {
+  async function runScan(profileId = null) {
     setScanning(true)
     try {
-      const res = await collectNodeCompliance(id, scanProfileId)
+      const res = await collectNodeCompliance(id, profileId)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
       await Promise.all([refetch(), refetchScanEngine()])
     } catch (err) {
@@ -627,29 +555,8 @@ export default function NodeCompliancePage() {
           {data && <p className="text-[12px] text-gray-400">{data.ip} · {data.os_family}</p>}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {report && data && <ExportMenu nodeData={data} report={report} t={t} />}
-          {/* Profile selector */}
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {PROFILE_OPTIONS.map((p) => (
-              <button
-                key={String(p.id)}
-                onClick={() => setScanProfileId(p.id)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
-                  scanProfileId === p.id ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {t(p.labelKey)}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={runScan}
-            disabled={scanning}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Play size={14} className={scanning ? 'animate-pulse' : ''} />
-            {scanning ? t('compliance.scanning') : t('compliance.runScan')}
-          </button>
+          {tab === 'posture' && exportMeta && <ExportMenu controls={filteredControls} meta={exportMeta} t={t} />}
+          <RunScanButton onRun={runScan} running={scanning} t={t} />
           <button
             onClick={enforce}
             disabled={enforcing || !data?.puppet_enrolled}
@@ -669,6 +576,21 @@ export default function NodeCompliancePage() {
             {remediating ? t('compliance.remediating') : t('compliance.remediate')}
           </button>
         </div>
+      </div>
+
+      {/* Tabs — Compliance posture (primary) + History */}
+      <div className="flex items-center gap-1 border-b border-gray-100">
+        {[['posture', 'compliance.postureTab'], ['history', 'compliance.historyTab']].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`px-4 py-2 text-[13px] font-medium border-b-2 -mb-px transition ${
+              tab === key ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t(label)}
+          </button>
+        ))}
       </div>
 
       {/* Scan progress bar */}
@@ -695,7 +617,7 @@ export default function NodeCompliancePage() {
       )}
 
       {/* Scan engine not installed on the platform — offer to install it right here */}
-      {scanEngineStatus && !scanEngineInstalled && (
+      {tab === 'posture' && scanEngineStatus && !scanEngineInstalled && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
           <ShieldAlert size={17} className="text-blue-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -713,7 +635,9 @@ export default function NodeCompliancePage() {
         </div>
       )}
 
-      {loading && !data ? (
+      {tab === 'history' ? (
+        <ComplianceHistory nodeId={id} nodeName={data?.hostname} />
+      ) : loading && !data ? (
         <div className="space-y-3">
           {[1, 2].map((i) => <div key={i} className="h-32 bg-gray-100 animate-pulse rounded-xl" />)}
         </div>
@@ -724,8 +648,8 @@ export default function NodeCompliancePage() {
         </div>
       ) : (
         <>
-          {/* Top row: score donut + breakdown + severity */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Top row: score donut + results breakdown */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Panel title={t('compliance.overallScore')}>
               <div className="relative">
                 <ResponsiveContainer width="100%" height={200}>
@@ -752,37 +676,34 @@ export default function NodeCompliancePage() {
               </div>
             </Panel>
 
-            <Panel title={t('compliance.severityBreakdown')}>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={severityBars} margin={{ left: -16, right: 8 }}>
-                  <CartesianGrid vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip cursor={{ fill: '#f8fafc' }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]} barSize={34}>
-                    {severityBars.map((b) => <Cell key={b.key} fill={SEV[b.key]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel title={t('compliance.scoreHistory')}>
-              {history.length > 1 ? (
-                <ResponsiveContainer width="100%" height={200}>
-                  <LineChart data={history} margin={{ left: -16, right: 8 }}>
-                    <CartesianGrid vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                    <Tooltip formatter={(v) => [`${v}%`, t('compliance.score')]} />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-[200px] flex flex-col items-center justify-center gap-2 text-center">
-                  <span className={`text-[40px] font-bold leading-none ${scoreColor(report.score)}`}>{report.score}%</span>
-                  <span className="text-[11px] text-gray-400">{t('compliance.noChartData')}</span>
+            <Panel title={t('compliance.resultsBreakdown')}>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  ['pass', t('compliance.passed'), report.passed_checks, 'text-green-600'],
+                  ['fail', t('compliance.failed'), report.failed_checks, 'text-red-600'],
+                  ['skip', t('compliance.skipped'), report.skipped_checks || 0, 'text-gray-500'],
+                ].map(([key, label, value, color]) => (
+                  <div key={key} className="rounded-lg border border-gray-100 bg-gray-50/40 px-3 py-3 text-center">
+                    <div className={`text-[24px] font-bold leading-none ${color}`}>{value}</div>
+                    <div className="text-[11px] text-gray-400 mt-1">{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4">
+                <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.failuresBySeverity')}</div>
+                <div className="flex flex-wrap gap-2">
+                  {['high', 'medium', 'low', 'info'].map((k) => (
+                    <span
+                      key={k}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
+                      style={{ background: `${SEV[k]}18`, color: SEV[k] }}
+                    >
+                      {t(`compliance.${k}`)}
+                      <b>{report.severity_counts?.[k] || 0}</b>
+                    </span>
+                  ))}
                 </div>
-              )}
+              </div>
             </Panel>
           </div>
 
