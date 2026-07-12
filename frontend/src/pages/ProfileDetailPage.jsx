@@ -642,36 +642,35 @@ export default function ProfileDetailPage() {
 
       {/* Header */}
       <div className="bg-white border border-gray-100 rounded-xl p-5 mb-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-[17px] font-semibold text-gray-900">{profile.name}</h2>
-              {profile.source === 'builtin' ? (
-                <>
-                  <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
-                  {profile.locked
-                    ? <span className={badge('gray')}>{t('profiles.readOnly')}</span>
-                    : <span className={badge('internal')}>{t('profiles.adminEditable')}</span>}
-                </>
-              ) : (
-                <span className={badge('gray')}>{t('profiles.custom')}</span>
-              )}
-            </div>
-            {profile.description && (
-              <p className="text-[12px] text-gray-500 mt-1.5 max-w-2xl">{profile.description}</p>
-            )}
-            <div className="flex items-center gap-4 mt-3">
-              <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
-                <ListChecks size={13} className="text-gray-400" />{profile.control_count} {t('profiles.controls')}
-              </span>
-              <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
-                <Layers size={13} className="text-gray-400" />{profile.section_count} {t('profiles.sections')}
-              </span>
-              <span className="text-[12px] text-gray-400">v{profile.version} · {profile.os_family}</span>
-            </div>
-          </div>
+        {/* Title + metadata — full width so the description is never squeezed */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="text-[17px] font-semibold text-gray-900">{profile.name}</h2>
+          {profile.source === 'builtin' ? (
+            <>
+              <span className={badge('info')}><Lock size={9} className="mr-1" />{t('profiles.builtin')}</span>
+              {profile.locked
+                ? <span className={badge('gray')}>{t('profiles.readOnly')}</span>
+                : <span className={badge('internal')}>{t('profiles.adminEditable')}</span>}
+            </>
+          ) : (
+            <span className={badge('gray')}>{t('profiles.custom')}</span>
+          )}
+        </div>
+        {profile.description && (
+          <p className="text-[13px] text-gray-500 mt-2 leading-relaxed max-w-3xl">{profile.description}</p>
+        )}
+        <div className="flex items-center gap-4 mt-3">
+          <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
+            <ListChecks size={13} className="text-gray-400" />{profile.control_count} {t('profiles.controls')}
+          </span>
+          <span className="flex items-center gap-1.5 text-[12px] text-gray-600">
+            <Layers size={13} className="text-gray-400" />{profile.section_count} {t('profiles.sections')}
+          </span>
+          <span className="text-[12px] text-gray-400">v{profile.version} · {profile.os_family}</span>
+        </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+        {/* Action toolbar — its own row below the title, wraps naturally */}
+        <div className="flex items-center gap-2 flex-wrap mt-4 pt-4 border-t border-gray-100">
             <button
               onClick={handleExportCsv}
               title={t('profiles.exportCsv')}
@@ -706,25 +705,6 @@ export default function ProfileDetailPage() {
                 </button>
               </>
             )}
-            {!readOnly && profile.source === 'builtin' && (
-              <button
-                onClick={async () => {
-                  setImporting(true)
-                  try {
-                    const r = await importScanControls(id)
-                    toast(t('profiles.importDone', { n: r.updated }), 'success')
-                    refetch()
-                  } catch (e) {
-                    toast(e.message || t('profiles.importFailed'), 'error')
-                  } finally { setImporting(false) }
-                }}
-                disabled={importing}
-                className="flex items-center gap-1.5 border border-brand/30 bg-brand/5 text-brand text-[12px] font-medium px-3 py-2 rounded-lg hover:bg-brand/10 disabled:opacity-50"
-              >
-                {importing ? <Spinner size={12} /> : <History size={13} />}
-                {importing ? t('profiles.importing') : t('profiles.importScanControls')}
-              </button>
-            )}
             {canRevert && (
               <button
                 onClick={handleRevert}
@@ -753,7 +733,6 @@ export default function ProfileDetailPage() {
               </>
             )}
           </div>
-        </div>
 
         {readOnly && (
           <div className="mt-4 flex items-center gap-2 text-[12px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
