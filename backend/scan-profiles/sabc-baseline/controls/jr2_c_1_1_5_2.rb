@@ -1,7 +1,7 @@
 control 'JR2.C.1.1.5.2' do
   title 'Ensure noexec option set on /var/log partition.'
-  impact 0.5
-  tag cis_level: 1
+  impact 0.7
+  tag cis_level: 2
   tag control_key: 'jr2_c_1_1_5_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)

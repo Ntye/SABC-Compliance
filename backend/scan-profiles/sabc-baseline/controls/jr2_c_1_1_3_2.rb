@@ -1,7 +1,7 @@
 control 'JR2.C.1.1.3.2' do
   title 'Ensure nosuid option set on /var partition.'
-  impact 0.5
-  tag cis_level: 1
+  impact 0.7
+  tag cis_level: 2
   tag control_key: 'jr2_c_1_1_3_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)

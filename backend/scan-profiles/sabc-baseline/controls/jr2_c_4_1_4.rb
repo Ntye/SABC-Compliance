@@ -1,7 +1,7 @@
 control 'JR2.C.4.1.4' do
   title 'Ensure permissions on /etc/cron.daily are configured.'
-  impact 0.7
-  tag cis_level: 2
+  impact 0.5
+  tag cis_level: 1
   tag control_key: 'jr2_c_4_1_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)

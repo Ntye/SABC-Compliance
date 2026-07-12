@@ -24,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from authored_remediations import REMEDIATIONS  # noqa: E402
+from control_levels import level_for  # noqa: E402
 from redhat_translation import PROV_AUTHORED, derive_redhat  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +85,15 @@ def load_rows() -> list[dict]:
 
 def build(report: bool = False) -> list[list[str]]:
     rows = load_rows()
+
+    # Guard: every Level-2 id must be a real control in the source — a typo
+    # would silently leave a control at Level 1 and skew the tiers.
+    from control_levels import CIS_LEVEL_2
+    control_ids = {r["control_id"] for r in rows if r["type"] == "control"}
+    unknown_l2 = sorted(CIS_LEVEL_2 - control_ids)
+    if unknown_l2:
+        raise SystemExit(f"control_levels.CIS_LEVEL_2 references unknown controls: {unknown_l2}")
+
     stats = {"authored": 0, "derived": 0, "empty": 0}
     pending: list[str] = []
     out_rows: list[list[str]] = [COLUMNS]
@@ -115,9 +125,14 @@ def build(report: bool = False) -> list[list[str]]:
                 if p == "empty":
                     pending.append(f"{cid}/{fld}")
 
+        # Authoritative CIS level: controls get their real Level (1|2) from the
+        # curated map; section rows carry no level. This overrides the blank /
+        # inconsistent values in the source spreadsheet so the tiers are real.
+        cis_level = level_for(cid) if is_control else ""
+
         out_rows.append([
             cid, _slug(cid), r["type"], r["section"], r["title"],
-            r["applies_to"] or "debian;redhat", r["cis_level"],
+            r["applies_to"] or "debian;redhat", cis_level,
             r["framework_reference"], r["agreed_value"], r["description"],
             r["rationale"],
             r["validate_debian"], r["configure_debian"], v_rh, c_rh,
@@ -125,8 +140,11 @@ def build(report: bool = False) -> list[list[str]]:
 
     if report:
         controls = [r for r in rows if r["type"] == "control"]
+        n_l2 = sum(1 for r in controls if r["control_id"] in CIS_LEVEL_2)
         print(f"Source rows: {len(rows)} ({len(controls)} controls, "
               f"{len(rows) - len(controls)} sections)")
+        print(f"CIS level — Level 1: {len(controls) - n_l2}, Level 2: {n_l2} "
+              f"(Non-critical enforces L1; Critical adds the {n_l2} L2 controls)")
         print(f"Red Hat cells — authored: {stats['authored']}, "
               f"derived (mechanical): {stats['derived']}, empty: {stats['empty']}")
         authored_ids = sorted({

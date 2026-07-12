@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 # 1.1.0: authored remediations for ~28 config-edit controls (pwquality, sudoers,
 #        journald, umask, TMOUT, firewall-alternative N/A guards, …) and the
 #        exit-101 "not applicable" convention.
-SEED_VERSION = "1.1.0"
+# 1.2.0: real CIS Level per control (15 Level-2: dedicated partitions, bluetooth,
+#        audit-tool integrity) so Non-critical (L1) and Critical (L1+L2) differ.
+SEED_VERSION = "1.2.0"
 _SEED_MARKER_KEY = "sabc_baseline_seed_version"
 
 _SEED_FILENAME = "sabc_baseline.csv"
