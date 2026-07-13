@@ -80,7 +80,27 @@ def node(nid, family, tier=NON_CRITICAL_TIER_ID):
                 os_family=family, tier_id=tier)
 
 
-def build(nodes, groups=None, group_members=None):
+class FakeNotificationRepo:
+    def __init__(self): self.saved = []
+    async def save(self, n): self.saved.append(n)
+
+
+class FakeCollect:
+    """CollectNodeComplianceUseCase stand-in for the post-enforcement scan."""
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.calls: list[str] = []
+    async def execute(self, node_id):
+        self.calls.append(node_id)
+        if self.fail:
+            raise RuntimeError("scan engine unreachable")
+        return {"node_id": node_id, "collected": [
+            {"source": "scan", "score": 94},
+            {"source": "puppet", "score": 100},
+        ]}
+
+
+def build(nodes, groups=None, group_members=None, notification_repo=None, collect_uc=None):
     node_repo = FakeNodeRepo(nodes)
     resolver = ScanPlanResolver(node_repo, FakeGroupRepo(groups or []),
                                 FakeTierRepo(), FakeProfileRepo(),
@@ -90,6 +110,7 @@ def build(nodes, groups=None, group_members=None):
         node_repo=node_repo, start_job_uc=start, scan_resolver=resolver,
         profile_repo=FakeProfileRepo(), module_src="/app/puppet/modules/sabc_hardening",
         get_group_uc=FakeGetGroup(group_members or {}),
+        notification_repo=notification_repo, collect_uc=collect_uc,
     )
     return uc, start
 
@@ -174,6 +195,56 @@ class TestGroup:
         out = await uc.execute(group_id="g")
         assert out["launched"] == 1 and out["skipped"] == 1
         assert len(start.started) == 1
+
+
+class TestTiersPageNotificationChain:
+    """Enforcement launched from the Tiers page (notify_on_complete): the
+    finished job records a platform notification, then chains a verification
+    scan whose outcome is notified too."""
+
+    def _built(self, collect=None):
+        notif = FakeNotificationRepo()
+        collect = collect or FakeCollect()
+        uc, start = build([node("n1", "Debian")],
+                          notification_repo=notif, collect_uc=collect)
+        return uc, start, notif, collect
+
+    async def test_on_complete_attached_only_when_requested(self) -> None:
+        uc, start, _, _ = self._built()
+        await uc.execute(node_id="n1")
+        assert start.started[0]["on_complete"] is None
+        await uc.execute(node_id="n1", notify_on_complete=True)
+        attached = start.started[1]["on_complete"]
+        assert attached is not None and attached.__func__ is uc._on_complete.__func__
+
+    async def test_success_notifies_then_scans_then_notifies(self) -> None:
+        uc, _, notif, collect = self._built()
+        job = Job(id="j1", status="success", exit_code=0, node_id="n1")
+        await uc._on_complete(job, node("n1", "Debian"))
+
+        assert collect.calls == ["n1"]
+        assert [n.kind for n in notif.saved] == ["enforcement", "scan"]
+        assert all(n.severity == "success" for n in notif.saved)
+        assert notif.saved[0].job_id == "j1" and notif.saved[0].node_id == "n1"
+        assert "94%" in notif.saved[1].message  # primary (non-puppet) report score
+
+    async def test_failed_job_notifies_error_and_skips_scan(self) -> None:
+        uc, _, notif, collect = self._built()
+        job = Job(id="j1", status="failed", exit_code=2, node_id="n1")
+        await uc._on_complete(job, node("n1", "Debian"))
+
+        assert collect.calls == []
+        assert len(notif.saved) == 1
+        assert notif.saved[0].kind == "enforcement" and notif.saved[0].severity == "error"
+
+    async def test_scan_failure_notifies_error_without_raising(self) -> None:
+        uc, _, notif, _ = self._built(collect=FakeCollect(fail=True))
+        job = Job(id="j1", status="success", exit_code=0, node_id="n1")
+        await uc._on_complete(job, node("n1", "Debian"))  # must not raise
+
+        assert [n.kind for n in notif.saved] == ["enforcement", "scan"]
+        assert notif.saved[1].severity == "error"
+        assert "unreachable" in notif.saved[1].message
 
 
 class TestValidation:

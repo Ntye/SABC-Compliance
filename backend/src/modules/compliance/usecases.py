@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 from core.domain.entities import (
     CIS_BENCHMARK_PROFILE_ID, INTERNAL_PROFILE_ID,
-    ComplianceReport, Node, RemediationEvent,
+    ComplianceReport, Node, Notification, RemediationEvent,
 )
 from core.domain.interfaces import (
     IComplianceRepository, INodeRepository, ISSHClient,
@@ -936,6 +936,8 @@ class EnforceReferentialUseCase:
         profile_repo,                 # IProfileRepository
         module_src: str,
         get_group_uc=None,            # GetNodeGroupUseCase
+        notification_repo=None,       # INotificationRepository
+        collect_uc=None,              # CollectNodeComplianceUseCase
     ) -> None:
         self._nodes = node_repo
         self._start = start_job_uc
@@ -943,11 +945,16 @@ class EnforceReferentialUseCase:
         self._profiles = profile_repo
         self._module_src = module_src
         self._get_group = get_group_uc
+        self._notifications = notification_repo
+        self._collect = collect_uc
         # control_id → puppet class key, cached per profile across a run.
         self._key_maps: dict[str, dict[str, str]] = {}
 
     async def execute(
-        self, node_id: str | None = None, group_id: str | None = None
+        self,
+        node_id: str | None = None,
+        group_id: str | None = None,
+        notify_on_complete: bool = False,
     ) -> dict:
         if bool(node_id) == bool(group_id):
             raise ValidationError("Provide exactly one of node_id or group_id.")
@@ -990,6 +997,7 @@ class EnforceReferentialUseCase:
                     "sabc_module_src": self._module_src,
                     "sabc_controls": keys,
                 },
+                "on_complete": self._on_complete if notify_on_complete else None,
             })
             jobs.append({"node_id": nid, "hostname": node.hostname,
                          "status": "launched", "job_id": job.id,
@@ -1003,6 +1011,71 @@ class EnforceReferentialUseCase:
             "skipped": skipped,
             "jobs": jobs,
         }
+
+    # ── Tiers-page chain: notify when the job lands, then scan + notify ───────
+
+    async def _on_complete(self, job, node) -> None:
+        """Runs when an enforcement job launched with ``notify_on_complete``
+        finishes: record a platform notification with the job outcome, then
+        launch the follow-up compliance scan and record its outcome too."""
+        hostname = node.hostname if node else (job.node_id or "node")
+        succeeded = job.status == "success"
+        await self._notify(
+            kind="enforcement",
+            severity="success" if succeeded else "error",
+            title=(f"Enforcement complete on {hostname}" if succeeded
+                   else f"Enforcement failed on {hostname}"),
+            message=(f"Referential enforcement job finished with status "
+                     f"'{job.status}' (exit {job.exit_code}). "
+                     + ("Launching verification scan."
+                        if succeeded and self._collect is not None
+                        else "Verification scan skipped.")),
+            node_id=node.id if node else job.node_id,
+            job_id=job.id,
+        )
+        if not (succeeded and node is not None and self._collect is not None):
+            return
+
+        try:
+            result = await self._collect.execute(node.id)
+            collected = result.get("collected") or []
+            primary = next(
+                (c for c in collected if c.get("source") != "puppet"),
+                collected[0] if collected else None,
+            )
+            score = primary.get("score") if primary else None
+            await self._notify(
+                kind="scan",
+                severity="success",
+                title=f"Post-enforcement scan complete on {hostname}",
+                message=(f"Compliance scan finished"
+                         + (f" — score {score}%." if score is not None else ".")
+                         + f" {len(collected)} report(s) collected."),
+                node_id=node.id,
+                job_id=job.id,
+            )
+        except Exception as exc:
+            logger.error("Post-enforcement scan failed for %s: %s", hostname, exc)
+            await self._notify(
+                kind="scan",
+                severity="error",
+                title=f"Post-enforcement scan failed on {hostname}",
+                message=str(exc),
+                node_id=node.id,
+                job_id=job.id,
+            )
+
+    async def _notify(self, *, kind: str, severity: str, title: str,
+                      message: str, node_id: str | None, job_id: str | None) -> None:
+        if self._notifications is None:
+            return
+        try:
+            await self._notifications.save(Notification(
+                id=str(uuid.uuid4()), title=title, message=message,
+                kind=kind, severity=severity, node_id=node_id, job_id=job_id,
+            ))
+        except Exception as exc:  # a notification failure must never break the chain
+            logger.error("Failed to record notification '%s': %s", title, exc)
 
     async def _resolve_keys(self, node: Node) -> list[str]:
         """The sabc_hardening class keys applicable to *node* (tier × family)."""

@@ -14,15 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from core.domain.entities import (
     ApiKey, ComplianceGroup, ComplianceReport, ConfigChangeEvent, Job, Node,
-    NodeGroup, Profile, ProfileControl, RemediationEvent, Rule, Tier, User,
-    UserGroup,
+    NodeGroup, Notification, Profile, ProfileControl, RemediationEvent, Rule,
+    Tier, User, UserGroup,
 )
 from core.domain.interfaces import (
     IApiKeyRepository, IAuditRepository, IComplianceGroupRepository,
     IComplianceRepository, IDetectionRepository, IJobRepository,
-    INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
-    IProfileRepository, IRuleRepository, ITierRepository, IUserRepository,
-    IUserGroupRepository,
+    INodeGroupRepository, INodeRepository, INotificationRepository,
+    IPlatformConfigRepository, IProfileRepository, IRuleRepository,
+    ITierRepository, IUserRepository, IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,22 @@ job_logs_table = Table(
     Column("ts", Text),
     Column("level", Text, default="info"),
     Column("line", Text),
+)
+
+# In-platform notifications (header bell) — written when a background chain
+# (e.g. enforcement job → follow-up scan) finishes so the outcome is visible
+# even to operators who weren't watching the job stream.
+notifications_table = Table(
+    "notifications", metadata,
+    Column("id", Text, primary_key=True),
+    Column("title", Text, nullable=False),
+    Column("message", Text),
+    Column("kind", Text, default="info"),
+    Column("severity", Text, default="info"),
+    Column("node_id", Text),
+    Column("job_id", Text),
+    Column("is_read", Integer, default=0),
+    Column("created_at", Text),
 )
 
 compliance_reports_table = Table(
@@ -2181,6 +2197,70 @@ class TierRepository(ITierRepository):
                             .where(tier_extra_controls_table.c.tier_id == id))
             await s.execute(delete(tiers_table).where(tiers_table.c.id == id))
             await s.commit()
+
+
+class NotificationRepository(INotificationRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    def _to_entity(self, row) -> Notification:
+        return Notification(
+            id=row.id,
+            title=row.title,
+            message=row.message,
+            kind=row.kind or "info",
+            severity=row.severity or "info",
+            node_id=row.node_id,
+            job_id=row.job_id,
+            is_read=bool(row.is_read),
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    async def save(self, n: Notification) -> None:
+        async with self._session() as s:
+            await s.execute(notifications_table.insert().values(
+                id=n.id, title=n.title, message=n.message, kind=n.kind,
+                severity=n.severity, node_id=n.node_id, job_id=n.job_id,
+                is_read=int(n.is_read), created_at=_ts(n.created_at),
+            ))
+            await s.commit()
+
+    async def find_all(self, limit: int = 50, unread_only: bool = False) -> list[Notification]:
+        async with self._session() as s:
+            q = select(notifications_table)
+            if unread_only:
+                q = q.where(notifications_table.c.is_read == 0)
+            q = q.order_by(notifications_table.c.created_at.desc()).limit(limit)
+            rows = (await s.execute(q)).all()
+            return [self._to_entity(r) for r in rows]
+
+    async def unread_count(self) -> int:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(func.count()).select_from(notifications_table)
+                .where(notifications_table.c.is_read == 0)
+            )).scalar()
+            return int(row or 0)
+
+    async def mark_read(self, id: str) -> bool:
+        async with self._session() as s:
+            res = await s.execute(
+                update(notifications_table)
+                .where(notifications_table.c.id == id)
+                .values(is_read=1)
+            )
+            await s.commit()
+            return bool(res.rowcount)
+
+    async def mark_all_read(self) -> int:
+        async with self._session() as s:
+            res = await s.execute(
+                update(notifications_table)
+                .where(notifications_table.c.is_read == 0)
+                .values(is_read=1)
+            )
+            await s.commit()
+            return int(res.rowcount or 0)
 
 
 # ── Compliance Group Repository (platform-only; never Puppet NC) ──────────────

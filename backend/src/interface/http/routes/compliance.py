@@ -41,6 +41,10 @@ class EnforceRequest(BaseModel):
     # (sabc_hardening) so the internal referential fully passes on the target.
     node_id: str | None = None
     group_id: str | None = None
+    # Set by the Tiers page: when each enforcement job finishes, record a
+    # platform notification, then run a verification scan and notify its
+    # outcome too.
+    notify_on_complete: bool = False
 
 
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
@@ -191,12 +195,17 @@ async def enforce_referential(
     ``{"group_id": "..."}`` (a Puppet node group; every member is enforced).
 
     Returns the launched Ansible job(s); each streams progress on its own job
-    channel. Follow with a compliance scan to confirm the node now passes.
+    channel. With ``notify_on_complete`` (sent by the Tiers page) each finished
+    job records a platform notification and chains a verification scan whose
+    outcome is notified as well; otherwise follow up with a manual scan.
     """
     if _enforce_uc is None:
         raise HTTPException(status_code=503, detail="Referential enforcement not available")
     try:
-        return await _enforce_uc.execute(node_id=body.node_id, group_id=body.group_id)
+        return await _enforce_uc.execute(
+            node_id=body.node_id, group_id=body.group_id,
+            notify_on_complete=body.notify_on_complete,
+        )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValidationError as exc:
