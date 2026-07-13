@@ -22,7 +22,8 @@ class TierResponse(BaseModel):
     id: str
     name: str
     description: str | None = None
-    includes_level_2: bool
+    includes_level_2: bool          # Axis 1 — validation scope
+    enforce: bool                   # Axis 2 — auto-enforcement
     is_system: bool
     created_by: str | None = None
     extra_control_ids: list[str] = []
@@ -33,6 +34,7 @@ class CreateTierRequest(BaseModel):
     name: str
     description: str | None = None
     includes_level_2: bool = False
+    enforce: bool = False
     extra_control_ids: list[str] = []
 
 
@@ -40,6 +42,7 @@ class UpdateTierRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     includes_level_2: bool | None = None
+    enforce: bool | None = None
     extra_control_ids: list[str] | None = None
 
 
@@ -68,7 +71,7 @@ def set_use_cases(list_uc=None, get_uc=None, create_uc=None, update_uc=None,
 def _resp(t) -> TierResponse:
     return TierResponse(
         id=t.id, name=t.name, description=t.description,
-        includes_level_2=t.includes_level_2, is_system=t.is_system,
+        includes_level_2=t.includes_level_2, enforce=t.enforce, is_system=t.is_system,
         created_by=t.created_by, extra_control_ids=t.extra_control_ids,
         created_at=t.created_at,
     )

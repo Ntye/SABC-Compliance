@@ -14,10 +14,11 @@ detection agents, records them as evidence, and re-assesses compliance.
             compliance.violation_detected, and ALWAYS launch a compliance
             SCAN so the dashboard reflects the node's true posture
     ⑤ remediation is decoupled from detection: a genuine change re-scans, but
-       Puppet enforcement runs ONLY when the closed loop is explicitly enabled
-       — globally (platform config ``detection_closed_loop_enabled``) or for a
-       Puppet node group the node belongs to (``active_response_enabled``).
-       With the loop off the platform observes and reports; it never
+       Puppet enforcement runs ONLY when the closed loop is enabled for the
+       node — because its TIER enforces (Tier 3/4, Axis 2), or via a legacy
+       override: the global switch (``detection_closed_loop_enabled``) or a
+       Puppet node group's ``active_response_enabled``. On a validation-only
+       tier with no override the platform observes and reports; it never
        auto-enforces behind the operator's back.
     ⑥ every stored event is broadcast over WebSocket so the dashboard
        updates live (node-<id> channel + the global detection-events feed)
@@ -85,6 +86,7 @@ class ReceiveDetectionEventUseCase:
         collect_uc: Any = None,          # CollectNodeComplianceUseCase
         config_repo: Any = None,         # IPlatformConfigRepository
         node_group_repo: Any = None,     # INodeGroupRepository
+        tier_repo: Any = None,           # ITierRepository
         event_bus: Any = None,
         ws_manager: Any = None,
     ) -> None:
@@ -95,6 +97,7 @@ class ReceiveDetectionEventUseCase:
         self._collect = collect_uc
         self._config = config_repo
         self._node_groups = node_group_repo
+        self._tiers = tier_repo
         self._bus = event_bus
         self._ws = ws_manager
         # Closes the race between two events arriving before the first one's
@@ -278,12 +281,29 @@ class ReceiveDetectionEventUseCase:
     async def _closed_loop_enabled(self, node: Node) -> bool:
         """True when Puppet enforcement may run automatically for this node.
 
-        Two independent levers, either of which turns the loop on:
+        Enforcement (Axis 2) is primarily a property of the node's TIER: a node
+        on an enforcing tier (Tier 3/4) auto-remediates drift; a node on a
+        validation-only tier (Tier 1/2) is scanned and reported but not
+        auto-enforced. Two legacy levers still force the loop on regardless of
+        tier — the global switch and a group's active response — so an operator
+        can opt specific nodes in without moving them between tiers:
+
+          0. the node's tier has ``enforce`` set (Tier 3/4);
           1. the global platform switch ``detection_closed_loop_enabled``;
           2. ``active_response_enabled`` on any Puppet node group the node
              belongs to — per-group active response.
-        With neither set the platform observes and scans but never enforces.
+        With none set the platform observes and scans but never enforces.
         """
+        # (0) the node's tier decides enforcement (Axis 2)
+        if self._tiers is not None:
+            try:
+                from modules.tiers.usecases import resolve_node_tier
+                tier = await resolve_node_tier(node, self._tiers)
+                if tier is not None and getattr(tier, "enforce", False):
+                    return True
+            except Exception as exc:
+                logger.error("closed-loop tier read failed for %s: %s", node.id, exc)
+
         # (1) global switch
         if self._config is not None:
             try:

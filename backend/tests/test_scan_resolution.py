@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from core.domain.entities import (
-    CRITICAL_TIER_ID, NON_CRITICAL_TIER_ID, SABC_BASELINE_PROFILE_ID,
+    TIER_1_ID, TIER_2_ID, SABC_BASELINE_PROFILE_ID,
     ComplianceGroup, Node, Profile, ProfileControl, Tier,
 )
 from modules.compliance.scan_resolver import ScanPlanResolver
@@ -41,9 +41,9 @@ class FakeProfileRepo:
 class FakeTierRepo:
     def __init__(self):
         self.t = {
-            NON_CRITICAL_TIER_ID: Tier(id=NON_CRITICAL_TIER_ID, name="Non-critical",
+            TIER_1_ID: Tier(id=TIER_1_ID, name="Tier 1",
                                        includes_level_2=False, is_system=True),
-            CRITICAL_TIER_ID: Tier(id=CRITICAL_TIER_ID, name="Critical",
+            TIER_2_ID: Tier(id=TIER_2_ID, name="Tier 2",
                                    includes_level_2=True, is_system=True),
         }
     async def find_by_id(self, i): return self.t.get(i)
@@ -60,7 +60,7 @@ class FakeNodeRepo:
     async def find_by_id(self, i): return self.nodes.get(i)
 
 
-def node(nid, family, tier=NON_CRITICAL_TIER_ID):
+def node(nid, family, tier=TIER_1_ID):
     return Node(id=nid, hostname=nid, ip="1.1.1.1", os_family=family, tier_id=tier)
 
 
@@ -78,7 +78,7 @@ class TestFamily:
         n = node("n1", "Debian")
         g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
         plan = await resolver([n], [g]).for_node(n)
-        assert plan.os_family == "debian" and plan.tier_name == "Non-critical"
+        assert plan.os_family == "debian" and plan.tier_name == "Tier 1"
         assert set(plan.specs[0].applicable_control_ids) == {"c1", "c2"}  # L1, debian
 
     async def test_redhat_noncritical_excludes_debian_only_control(self) -> None:
@@ -99,14 +99,14 @@ class TestFamily:
 
 class TestTier:
     async def test_critical_debian_adds_level_2_both_family_control(self) -> None:
-        n = node("n1", "Debian", tier=CRITICAL_TIER_ID)
+        n = node("n1", "Debian", tier=TIER_2_ID)
         g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
         plan = await resolver([n], [g]).for_node(n)
         # L1 debian (c1,c2) + L2 both (c3); c4 is redhat-only
         assert set(plan.specs[0].applicable_control_ids) == {"c1", "c2", "c3"}
 
     async def test_critical_redhat_gets_l2_redhat_control(self) -> None:
-        n = node("n1", "RedHat", tier=CRITICAL_TIER_ID)
+        n = node("n1", "RedHat", tier=TIER_2_ID)
         g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
         plan = await resolver([n], [g]).for_node(n)
         assert set(plan.specs[0].applicable_control_ids) == {"c1", "c3", "c4"}
@@ -140,7 +140,7 @@ class TestGroups:
 
     async def test_for_group_yields_plan_per_member(self) -> None:
         d = node("d", "Debian")
-        r = node("r", "RedHat", tier=CRITICAL_TIER_ID)
+        r = node("r", "RedHat", tier=TIER_2_ID)
         g = ComplianceGroup(id="g", name="Mixed", profile_ids=["std"], node_ids=["d", "r"])
         plans = await resolver([d, r], [g]).for_group(g)
         by_node = {p.node_id: p for p in plans}

@@ -7,7 +7,7 @@ import json
 import pytest
 
 from core.domain.entities import (
-    CRITICAL_TIER_ID, NON_CRITICAL_TIER_ID, SABC_BASELINE_PROFILE_ID,
+    TIER_1_ID, TIER_2_ID, SABC_BASELINE_PROFILE_ID,
     ComplianceGroup, Node, Profile, ProfileControl, Tier,
 )
 from modules.compliance.scan_resolver import ScanPlanResolver
@@ -38,8 +38,8 @@ class FakeProfileRepo:
 
 class FakeTierRepo:
     def __init__(self):
-        self.t = {NON_CRITICAL_TIER_ID: Tier(id=NON_CRITICAL_TIER_ID, name="Non-critical", is_system=True),
-                  CRITICAL_TIER_ID: Tier(id=CRITICAL_TIER_ID, name="Critical", includes_level_2=True, is_system=True)}
+        self.t = {TIER_1_ID: Tier(id=TIER_1_ID, name="Tier 1", is_system=True),
+                  TIER_2_ID: Tier(id=TIER_2_ID, name="Tier 2", includes_level_2=True, is_system=True)}
     async def find_by_id(self, i): return self.t.get(i)
 
 
@@ -109,7 +109,7 @@ def build_collect(monkeypatch, captured, nodes, groups):
     return uc, repo, resolver
 
 
-def node(nid, family, tier=NON_CRITICAL_TIER_ID):
+def node(nid, family, tier=TIER_1_ID):
     return Node(id=nid, hostname=nid, ip="10.0.0.9", ssh_user="ansible", os_family=family, tier_id=tier)
 
 
@@ -130,7 +130,7 @@ class TestControlFiltering:
 
     async def test_critical_redhat_passes_l2_redhat_control(self, monkeypatch) -> None:
         captured = {}
-        n = node("n1", "RedHat", tier=CRITICAL_TIER_ID)  # → c1, c3, c4
+        n = node("n1", "RedHat", tier=TIER_2_ID)  # → c1, c3, c4
         g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
         uc, _, _ = build_collect(monkeypatch, captured, [n], [g])
         await uc.execute("n1")
@@ -153,7 +153,7 @@ class TestReportTagging:
         r = repo.saved[0]
         assert r.profile_id == "std" and r.profile_version == "2.1.0"
         assert r.compliance_group_id == "g1"
-        assert r.tier_name == "Non-critical"
+        assert r.tier_name == "Tier 1"
         assert r.os_family == "debian"
 
 
@@ -161,7 +161,7 @@ class TestGroupScan:
     async def test_group_scan_iterates_members(self, monkeypatch) -> None:
         captured = {}
         d = node("d", "Debian")
-        r = node("r", "RedHat", tier=CRITICAL_TIER_ID)
+        r = node("r", "RedHat", tier=TIER_2_ID)
         g = ComplianceGroup(id="g", name="Mixed", profile_ids=["std"], node_ids=["d", "r"])
         uc, repo, resolver = build_collect(monkeypatch, captured, [d, r], [g])
         scan_group = ScanComplianceGroupUseCase(FakeGroupRepo([g]), FakeNodeRepo([d, r]), resolver, uc)

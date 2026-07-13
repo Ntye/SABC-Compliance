@@ -34,6 +34,7 @@ function TierFormModal({ tier, onClose, onSaved }) {
   const [name, setName] = useState(tier?.name || '')
   const [description, setDescription] = useState(tier?.description || '')
   const [includesL2, setIncludesL2] = useState(tier?.includes_level_2 || false)
+  const [enforce, setEnforce] = useState(tier?.enforce || false)
   const [extra, setExtra] = useState((tier?.extra_control_ids || []).join(', '))
   const [saving, setSaving] = useState(false)
 
@@ -44,6 +45,7 @@ function TierFormModal({ tier, onClose, onSaved }) {
       name: name.trim(),
       description: description.trim() || null,
       includes_level_2: includesL2,
+      enforce,
       extra_control_ids: includesL2
         ? []
         : extra.split(',').map((s) => s.trim()).filter(Boolean),
@@ -86,13 +88,28 @@ function TierFormModal({ tier, onClose, onSaved }) {
               className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand"
             />
           </div>
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input type="checkbox" checked={includesL2} onChange={(e) => setIncludesL2(e.target.checked)} className="mt-0.5" />
-            <span>
-              <span className="text-[13px] font-medium text-gray-800">{t('tiers.includesLevel2')}</span>
-              <span className="block text-[11px] text-gray-400">{t('tiers.includesLevel2Hint')}</span>
-            </span>
-          </label>
+          {/* Axis 1 — validation scope */}
+          <div>
+            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">{t('tiers.axisValidation')}</div>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" checked={includesL2} onChange={(e) => setIncludesL2(e.target.checked)} className="mt-0.5" />
+              <span>
+                <span className="text-[13px] font-medium text-gray-800">{t('tiers.includesLevel2')}</span>
+                <span className="block text-[11px] text-gray-400">{t('tiers.includesLevel2Hint')}</span>
+              </span>
+            </label>
+          </div>
+          {/* Axis 2 — enforcement */}
+          <div>
+            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">{t('tiers.axisEnforcement')}</div>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" checked={enforce} onChange={(e) => setEnforce(e.target.checked)} className="mt-0.5" />
+              <span>
+                <span className="text-[13px] font-medium text-gray-800">{t('tiers.enforceOn')}</span>
+                <span className="block text-[11px] text-gray-400">{t('tiers.enforceHintModal')}</span>
+              </span>
+            </label>
+          </div>
           {!includesL2 && (
             <div>
               <label className="block text-[12px] font-medium text-gray-700 mb-1">{t('tiers.extraControlIds')}</label>
@@ -165,7 +182,7 @@ export default function TiersPage() {
   const nodeCountByTier = useMemo(() => {
     const m = {}
     for (const n of nodes) {
-      const tid = n.tier_id || 'tier-non-critical'
+      const tid = n.tier_id || 'tier-1'
       m[tid] = (m[tid] || 0) + 1
     }
     return m
@@ -282,7 +299,7 @@ export default function TiersPage() {
           <table className="w-full text-[12px]">
             <thead>
               <tr className="border-b border-gray-100">
-                {[t('tiers.colTier'), t('tiers.colScope'), t('tiers.colKind'), t('tiers.colNodes'), t('tiers.colActions')].map((h, i) => (
+                {[t('tiers.colTier'), t('tiers.colScope'), t('tiers.colEnforcement'), t('tiers.colKind'), t('tiers.colNodes'), t('tiers.colActions')].map((h, i) => (
                   <th key={i} className="text-left px-4 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
                 ))}
               </tr>
@@ -299,6 +316,19 @@ export default function TiersPage() {
                       <ShieldCheck size={12} className="text-gray-400" />
                       {scopeLabel(tier, t)}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {tier.enforce ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                        {t('tiers.enforceOnBadge')}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-gray-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                        {t('tiers.enforceOffBadge')}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className={badge(tier.is_system ? 'gray' : 'internal')}>

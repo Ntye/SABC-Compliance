@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 import pytest
 
-from core.domain.entities import ConfigChangeEvent, Node, RemediationEvent
+from core.domain.entities import ConfigChangeEvent, Node, RemediationEvent, Tier
 from core.errors import NotFoundError, ValidationError
 from modules.detection.usecases import (
     GetConfigBlobUseCase, ReceiveDetectionEventUseCase,
@@ -135,6 +135,15 @@ class FakeNodeGroupRepo:
         return self.groups
 
 
+class FakeTierRepo:
+    """Serves tiers by id so _closed_loop_enabled can read a node's tier.enforce."""
+    def __init__(self, tiers: Optional[dict] = None) -> None:
+        self.tiers = dict(tiers or {})
+
+    async def find_by_id(self, tier_id: str):
+        return self.tiers.get(tier_id)
+
+
 class FakeBus:
     def __init__(self) -> None:
         self.published: list[tuple[str, dict]] = []
@@ -163,8 +172,10 @@ NODE = Node(id="node-1", hostname="web-01", ip="10.0.0.5", puppet_enrolled=True)
 def make_uc(pending: Optional[RemediationEvent] = None, *,
             collect: Optional["FakeCollectUC"] = None,
             config: Optional["FakeConfigRepo"] = None,
-            groups: Optional[list["FakeNodeGroup"]] = None):
-    node_repo = FakeNodeRepo([NODE])
+            groups: Optional[list["FakeNodeGroup"]] = None,
+            node: Optional[Node] = None,
+            tiers: Optional[dict] = None):
+    node_repo = FakeNodeRepo([node or NODE])
     detection_repo = FakeDetectionRepo()
     compliance_repo = FakeComplianceRepo(pending)
     remediate = FakeRemediateUC()
@@ -178,6 +189,7 @@ def make_uc(pending: Optional[RemediationEvent] = None, *,
         collect_uc=collect,
         config_repo=config,
         node_group_repo=FakeNodeGroupRepo(groups) if groups is not None else None,
+        tier_repo=FakeTierRepo(tiers) if tiers is not None else None,
         event_bus=bus,
         ws_manager=ws,
     )
@@ -350,6 +362,44 @@ async def test_other_groups_active_response_does_not_leak() -> None:
 
     assert result["closed_loop"] is False
     assert remediate.calls == []
+
+
+# ── Enforcement is driven by the node's tier (Axis 2) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_enforcing_tier_enables_remediation() -> None:
+    # Global switch off, no active-response groups, but the node sits on an
+    # enforcing tier (Tier 3/4) → the closed loop runs.
+    collect = FakeCollectUC()
+    node = Node(id="node-1", hostname="web-01", ip="10.0.0.5",
+                puppet_enrolled=True, tier_id="tier-3")
+    tiers = {"tier-3": Tier(id="tier-3", name="Tier 3", enforce=True, is_system=True)}
+    uc, repo, remediate, _, _ = make_uc(
+        collect=collect, config=FakeConfigRepo({"detection_closed_loop_enabled": "false"}),
+        node=node, tiers=tiers,
+    )
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["closed_loop"] is True
+    assert len(remediate.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_validation_only_tier_does_not_remediate() -> None:
+    # A node on a validation-only tier (Tier 1/2) is scanned but never enforced.
+    collect = FakeCollectUC()
+    node = Node(id="node-1", hostname="web-01", ip="10.0.0.5",
+                puppet_enrolled=True, tier_id="tier-2")
+    tiers = {"tier-2": Tier(id="tier-2", name="Tier 2",
+                            includes_level_2=True, enforce=False, is_system=True)}
+    uc, _, remediate, _, _ = make_uc(collect=collect, node=node, tiers=tiers)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["closed_loop"] is False
+    assert remediate.calls == []
+    assert collect.calls == ["node-1"]   # still scanned
 
 
 # ── Passive event types ───────────────────────────────────────────────────────

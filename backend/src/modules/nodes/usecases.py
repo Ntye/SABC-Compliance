@@ -6,7 +6,7 @@ import socket
 import uuid
 from datetime import datetime
 
-from core.domain.entities import NON_CRITICAL_TIER_ID, Node
+from core.domain.entities import DEFAULT_TIER_ID, Node
 from core.domain.interfaces import IEventBus, INodeRepository, ISSHClient, IPlatformConfigRepository
 from core.errors import ConflictError, NotFoundError, SSHConnectError, ValidationError
 from core.events import Events
@@ -68,11 +68,11 @@ class RegisterNodeUseCase:
         if existing:
             raise ConflictError(f"Node '{hostname}' is already registered")
 
-        # Criticality tier picked at enrolment (defaults to Non-critical). An
-        # unknown tier is rejected before the SSH round-trips so the operator
-        # isn't left with a registered node on the wrong tier.
-        tier_id = (data.get("tier_id") or "").strip() or NON_CRITICAL_TIER_ID
-        if self._tiers is not None and tier_id != NON_CRITICAL_TIER_ID:
+        # Tier picked at enrolment (defaults to Tier 1 — Level 1, validation
+        # only). An unknown tier is rejected before the SSH round-trips so the
+        # operator isn't left with a registered node on the wrong tier.
+        tier_id = (data.get("tier_id") or "").strip() or DEFAULT_TIER_ID
+        if self._tiers is not None and tier_id != DEFAULT_TIER_ID:
             if await self._tiers.find_by_id(tier_id) is None:
                 raise ValidationError(f"Tier '{tier_id}' does not exist")
 
@@ -104,8 +104,8 @@ class RegisterNodeUseCase:
             description=data.get("description"),
             tags=data.get("tags", []),
             status="reachable",
-            # Tier chosen at enrolment (Non-critical unless the operator picked
-            # one on the Add Server form); later changes are audited.
+            # Tier chosen at enrolment (Tier 1 unless the operator picked one on
+            # the Add Server form); later changes are audited.
             tier_id=tier_id,
             last_seen=now,
             created_at=now,

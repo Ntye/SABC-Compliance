@@ -7,7 +7,7 @@ import { btn, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import CopyButton from '../components/common/CopyButton.jsx'
 
-const NON_CRITICAL_TIER_ID = 'tier-non-critical'
+const DEFAULT_TIER_ID = 'tier-1'
 
 const DEFAULT_FORM = {
   hostname: '',
@@ -17,7 +17,7 @@ const DEFAULT_FORM = {
   ssh_key_path: '',
   description: '',
   tags: '',
-  tier_id: NON_CRITICAL_TIER_ID,
+  tier_id: DEFAULT_TIER_ID,
 }
 
 export default function AddServerPage() {
@@ -181,7 +181,7 @@ export default function AddServerPage() {
               className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all bg-white text-gray-700"
             >
               {tiers.length === 0 && (
-                <option value={NON_CRITICAL_TIER_ID}>{t('addServer.tierDefault')}</option>
+                <option value={DEFAULT_TIER_ID}>{t('addServer.tierDefault')}</option>
               )}
               {tiers.map((tier) => (
                 <option key={tier.id} value={tier.id}>

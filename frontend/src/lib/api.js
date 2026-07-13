@@ -417,7 +417,7 @@ export async function getTier(id) {
 }
 
 export async function createTier(data) {
-  // { name, description?, includes_level_2?, extra_control_ids? }
+  // { name, description?, includes_level_2?, enforce?, extra_control_ids? }
   return request('POST', '/tiers', data)
 }
 

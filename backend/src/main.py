@@ -444,6 +444,7 @@ async def lifespan(app: FastAPI):
         collect_uc=collect_uc,
         config_repo=platform_config_repo,
         node_group_repo=node_group_repo,
+        tier_repo=tier_repo,
         event_bus=event_bus,
         ws_manager=ws_manager,
     )
@@ -482,7 +483,7 @@ async def lifespan(app: FastAPI):
     settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
 
     # -- Tiers (criticality classification; CIS Level → node scope) --
-    seed_tiers_uc = SeedSystemTiersUseCase(tier_repo)
+    seed_tiers_uc = SeedSystemTiersUseCase(tier_repo, node_repo)
     tiers_routes.set_use_cases(
         list_uc=ListTiersUseCase(tier_repo),
         get_uc=GetTierUseCase(tier_repo),

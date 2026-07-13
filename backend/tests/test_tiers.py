@@ -4,7 +4,8 @@ from __future__ import annotations
 import pytest
 
 from core.domain.entities import (
-    CRITICAL_TIER_ID, NON_CRITICAL_TIER_ID, Profile, ProfileControl, Tier,
+    TIER_1_ID, TIER_2_ID, TIER_3_ID, TIER_4_ID,
+    Profile, ProfileControl, Tier,
 )
 from core.errors import ForbiddenError, ValidationError
 from modules.tiers.usecases import (
@@ -91,14 +92,53 @@ def seeded_repo():
 
 
 class TestSeeding:
-    async def test_seeds_two_system_tiers_idempotently(self, seeded_repo) -> None:
+    async def test_seeds_four_system_tiers_idempotently(self, seeded_repo) -> None:
         uc = SeedSystemTiersUseCase(seeded_repo)
-        assert await uc.execute() == 2
+        assert await uc.execute() == 4
         assert await uc.execute() == 0  # idempotent
-        nc = await seeded_repo.find_by_id(NON_CRITICAL_TIER_ID)
-        cr = await seeded_repo.find_by_id(CRITICAL_TIER_ID)
-        assert nc.is_system and not nc.includes_level_2
-        assert cr.is_system and cr.includes_level_2
+        # The four tiers are every combination of the two axes.
+        t1 = await seeded_repo.find_by_id(TIER_1_ID)
+        t2 = await seeded_repo.find_by_id(TIER_2_ID)
+        t3 = await seeded_repo.find_by_id(TIER_3_ID)
+        t4 = await seeded_repo.find_by_id(TIER_4_ID)
+        assert all(t.is_system for t in (t1, t2, t3, t4))
+        # Axis 1 — validation scope.
+        assert (t1.includes_level_2, t2.includes_level_2) == (False, True)
+        assert (t3.includes_level_2, t4.includes_level_2) == (False, True)
+        # Axis 2 — enforcement.
+        assert (t1.enforce, t2.enforce) == (False, False)
+        assert (t3.enforce, t4.enforce) == (True, True)
+
+    async def test_migrates_legacy_tiers_and_remaps_nodes(self, seeded_repo) -> None:
+        # A DB seeded before the 4-tier model: legacy rows + a node on each.
+        seeded_repo.tiers["tier-non-critical"] = Tier(
+            id="tier-non-critical", name="Non-critical", is_system=True)
+        seeded_repo.tiers["tier-critical"] = Tier(
+            id="tier-critical", name="Critical", includes_level_2=True, is_system=True)
+        nodes = _FakeNodeRepo([_FakeNode("a", tier_id="tier-non-critical"),
+                               _FakeNode("b", tier_id="tier-critical")])
+
+        await SeedSystemTiersUseCase(seeded_repo, nodes).execute()
+
+        # Legacy rows removed, nodes remapped onto the two Off tiers.
+        assert await seeded_repo.find_by_id("tier-non-critical") is None
+        assert await seeded_repo.find_by_id("tier-critical") is None
+        assert nodes.nodes["a"].tier_id == TIER_1_ID
+        assert nodes.nodes["b"].tier_id == TIER_2_ID
+
+
+class TestEnforceAxis:
+    async def test_create_custom_tier_with_enforce(self, seeded_repo) -> None:
+        uc = CreateTierUseCase(seeded_repo, FakeProfileRepo(CONTROLS))
+        t = await uc.execute({"name": "Ops", "enforce": True})
+        assert t.enforce is True and not t.includes_level_2
+
+    async def test_update_custom_tier_enforce(self, seeded_repo) -> None:
+        create = CreateTierUseCase(seeded_repo, FakeProfileRepo(CONTROLS))
+        t = await create.execute({"name": "Ops", "enforce": False})
+        upd = UpdateTierUseCase(seeded_repo, FakeProfileRepo(CONTROLS))
+        out = await upd.execute(t.id, {"enforce": True})
+        assert out.enforce is True
 
 
 # ── Custom tier validation (extra controls must be real Level 2) ──────────────
@@ -127,7 +167,7 @@ class TestCustomTierValidation:
         await SeedSystemTiersUseCase(seeded_repo).execute()
         uc = UpdateTierUseCase(seeded_repo, FakeProfileRepo(CONTROLS))
         with pytest.raises(ForbiddenError):
-            await uc.execute(NON_CRITICAL_TIER_ID, {"includes_level_2": True})
+            await uc.execute(TIER_1_ID, {"includes_level_2": True})
 
     async def test_delete_system_tier_forbidden(self, seeded_repo) -> None:
         await SeedSystemTiersUseCase(seeded_repo).execute()
@@ -136,13 +176,13 @@ class TestCustomTierValidation:
             async def find_all(self, f): return []
         uc = DeleteTierUseCase(seeded_repo, _Nodes())
         with pytest.raises(ForbiddenError):
-            await uc.execute(CRITICAL_TIER_ID)
+            await uc.execute(TIER_2_ID)
 
 
 # ── Group tier assignment ─────────────────────────────────────────────────────
 
 class _FakeNode:
-    def __init__(self, nid, tier_id=NON_CRITICAL_TIER_ID):
+    def __init__(self, nid, tier_id=TIER_1_ID):
         self.id = nid
         self.hostname = nid
         self.tier_id = tier_id
@@ -152,6 +192,7 @@ class _FakeNode:
 class _FakeNodeRepo:
     def __init__(self, nodes): self.nodes = {n.id: n for n in nodes}
     async def find_by_id(self, i): return self.nodes.get(i)
+    async def find_all(self, f=None): return list(self.nodes.values())
     async def update(self, n): self.nodes[n.id] = n
 
 
@@ -171,19 +212,19 @@ class TestGroupTierAssignment:
         groups = _FakeGroupRepo([_FakeGroup("g", ["a", "b"])])
         uc = AssignGroupTierUseCase(groups, nodes, seeded_repo)
 
-        out = await uc.execute("g", CRITICAL_TIER_ID, actor="alice")
+        out = await uc.execute("g", TIER_4_ID, actor="alice")
 
         assert out["assigned"] == 2 and out["members"] == 2
-        assert nodes.nodes["a"].tier_id == CRITICAL_TIER_ID
-        assert nodes.nodes["b"].tier_id == CRITICAL_TIER_ID
-        assert nodes.nodes["c"].tier_id == NON_CRITICAL_TIER_ID  # not a member
+        assert nodes.nodes["a"].tier_id == TIER_4_ID
+        assert nodes.nodes["b"].tier_id == TIER_4_ID
+        assert nodes.nodes["c"].tier_id == TIER_1_ID  # not a member
 
     async def test_missing_members_are_skipped(self, seeded_repo) -> None:
         await SeedSystemTiersUseCase(seeded_repo).execute()
         nodes = _FakeNodeRepo([_FakeNode("a")])
         groups = _FakeGroupRepo([_FakeGroup("g", ["a", "ghost"])])
         uc = AssignGroupTierUseCase(groups, nodes, seeded_repo)
-        out = await uc.execute("g", CRITICAL_TIER_ID)
+        out = await uc.execute("g", TIER_4_ID)
         assert out["assigned"] == 1 and out["members"] == 2
 
     async def test_unknown_group_raises(self, seeded_repo) -> None:
@@ -191,4 +232,4 @@ class TestGroupTierAssignment:
         await SeedSystemTiersUseCase(seeded_repo).execute()
         uc = AssignGroupTierUseCase(_FakeGroupRepo([]), _FakeNodeRepo([]), seeded_repo)
         with pytest.raises(NotFoundError):
-            await uc.execute("ghost", CRITICAL_TIER_ID)
+            await uc.execute("ghost", TIER_4_ID)

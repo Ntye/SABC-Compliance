@@ -42,8 +42,9 @@ class Node:
     puppet_enrolled: bool = False
     detection_enrolled: bool = False
     scan_ready: bool = False
-    # Criticality tier — decides which CIS Levels are scanned/enforced. Defaults
-    # to Non-critical on enrolment; every reassignment is audited.
+    # Tier — the (validation scope × enforcement) combination applied to this
+    # node. Defaults to Tier 1 (Level 1, validation only) on enrolment; every
+    # reassignment is audited.
     tier_id: str | None = None
     last_seen: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -516,22 +517,58 @@ class Profile:
                 if c.kind == "control" and c.status != "retired"]
 
 
-# ── Tiers — platform criticality classification driven by CIS Level ───────────
+# ── Tiers — two independent axes: validation scope × enforcement ──────────────
+#
+# A tier is the combination of two orthogonal decisions:
+#   Axis 1 — validation scope : which CIS Levels are scanned
+#             (Level 1, or Level 1 + Level 2)  →  ``includes_level_2``
+#   Axis 2 — enforcement       : whether drift auto-remediates (Puppet closed
+#             loop) or the node is validation-only  →  ``enforce``
+#
+# The four system tiers are every combination of the two axes:
+#
+#   ┌────────┬──────────────────────┬───────────────────────┐
+#   │ Tier   │ Validation (Axis 1)  │ Enforcement (Axis 2)  │
+#   ├────────┼──────────────────────┼───────────────────────┤
+#   │ Tier 1 │ Level 1              │ Off (validation only) │
+#   │ Tier 2 │ Level 1 + Level 2    │ Off (validation only) │
+#   │ Tier 3 │ Level 1              │ On                    │
+#   │ Tier 4 │ Level 1 + Level 2    │ On                    │
+#   └────────┴──────────────────────┴───────────────────────┘
 
-NON_CRITICAL_TIER_ID = "tier-non-critical"
-CRITICAL_TIER_ID = "tier-critical"
+TIER_1_ID = "tier-1"
+TIER_2_ID = "tier-2"
+TIER_3_ID = "tier-3"
+TIER_4_ID = "tier-4"
+
+# A freshly enrolled node starts on Tier 1 (Level 1, validation only).
+DEFAULT_TIER_ID = TIER_1_ID
+
+# Pre-4-tier ids → their equivalent in the two-axis model. Both legacy system
+# tiers were validation-only (enforcement used to be a global switch), so they
+# map onto the two Off tiers. Applied once at seed time, then removed.
+LEGACY_TIER_REMAP = {
+    "tier-non-critical": TIER_1_ID,   # Level 1, enforcement off
+    "tier-critical": TIER_2_ID,       # Level 1 + 2, enforcement off
+}
 
 
 @dataclass
 class Tier:
-    """A node criticality tier. Decides which CIS Levels apply to a node's scan
-    and enforcement — a control property (its CIS Level) meets a node property
-    (its tier) here. System tiers are undeletable; custom tiers (e.g. "1.5")
-    add individually-chosen Level-2 controls on top of Level 1."""
+    """A node tier — the combination of a validation scope (which CIS Levels
+    are scanned) and an enforcement decision (whether drift auto-remediates).
+    Two control/node properties meet here: the control's CIS Level against the
+    tier's ``includes_level_2``, and the tier's ``enforce`` decision against the
+    closed remediation loop. System tiers are undeletable; custom tiers (e.g.
+    "1.5") add individually-chosen Level-2 controls on top of Level 1."""
     id: str
     name: str
     description: str | None = None
+    # Axis 1 — validation scope.
     includes_level_2: bool = False
+    # Axis 2 — enforcement: True → drift auto-remediates via the Puppet closed
+    # loop; False → the node is scanned/reported but never auto-enforced.
+    enforce: bool = False
     is_system: bool = False
     created_by: str | None = None
     # For custom tiers: individually selected Level-2 control_ids added to L1.

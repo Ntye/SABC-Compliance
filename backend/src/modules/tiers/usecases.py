@@ -1,16 +1,27 @@
 """
-Tiers (Section 4) — platform criticality classification driven by CIS Level.
+Tiers (Section 4) — a node tier is the combination of two independent axes:
 
-A control carries a CIS Level (1|2). A node carries exactly one tier. The tier
-decides which levels apply to that node:
+    Axis 1 — validation scope : which CIS Levels are scanned
+              (Level 1, or Level 1 + Level 2).
+    Axis 2 — enforcement       : whether drift auto-remediates via the Puppet
+              closed loop, or the node is validation-only.
 
-    effective: level-1 always; level-2 iff the tier includes level 2 OR the
-    control is one of the tier's individually-selected extra level-2 controls.
+A control carries a CIS Level (1|2); a node carries exactly one tier. Axis 1
+decides which levels apply: level-1 always; level-2 iff the tier includes level
+2 OR the control is one of the tier's individually-selected extra controls.
+Axis 2 (``tier.enforce``) decides whether a detected change auto-remediates.
 
-System tiers (undeletable): "Non-critical" (level 1 only) and "Critical"
-(level 1 + 2). Custom tiers (e.g. "1.5") are level-1 plus a hand-picked set of
-level-2 controls — each of which MUST be a real control with CIS Level 2 (never
-invent controls). Custom-tier management is RBAC-gated (admin) and audited.
+The four system tiers (undeletable) are every combination of the two axes:
+
+    Tier 1 — Level 1            · validation only
+    Tier 2 — Level 1 + Level 2  · validation only
+    Tier 3 — Level 1            · enforcement on
+    Tier 4 — Level 1 + Level 2  · enforcement on
+
+Custom tiers (e.g. "1.5") are level-1 plus a hand-picked set of level-2 controls
+— each of which MUST be a real control with CIS Level 2 (never invent controls)
+— and their own enforcement choice. Custom-tier management is RBAC-gated (admin)
+and audited.
 """
 from __future__ import annotations
 
@@ -19,7 +30,8 @@ import uuid
 from datetime import datetime
 
 from core.domain.entities import (
-    CRITICAL_TIER_ID, NON_CRITICAL_TIER_ID, ProfileControl, Tier,
+    DEFAULT_TIER_ID, LEGACY_TIER_REMAP,
+    TIER_1_ID, TIER_2_ID, TIER_3_ID, TIER_4_ID, ProfileControl, Tier,
 )
 from core.domain.interfaces import (
     INodeRepository, IProfileRepository, ITierRepository,
@@ -57,28 +69,63 @@ def applicable_controls(controls: list[ProfileControl], tier: Tier) -> list[Prof
 # ── Seeding ───────────────────────────────────────────────────────────────────
 
 class SeedSystemTiersUseCase:
-    """Create the two undeletable system tiers on first boot (idempotent)."""
+    """Create the four undeletable system tiers on first boot (idempotent), and
+    migrate any node still on a legacy criticality tier onto its two-axis
+    equivalent before removing the legacy tier rows."""
 
-    def __init__(self, tier_repo: ITierRepository) -> None:
+    def __init__(self, tier_repo: ITierRepository, node_repo: INodeRepository | None = None) -> None:
         self._repo = tier_repo
+        self._nodes = node_repo
 
     async def execute(self) -> int:
         created = 0
         now = datetime.utcnow()
+        # (id, name, includes_level_2, enforce)
         systems = [
-            Tier(id=NON_CRITICAL_TIER_ID, name="Non-critical",
-                 description="Tier 1 — CIS Level 1 controls only.",
-                 includes_level_2=False, is_system=True, created_at=now),
-            Tier(id=CRITICAL_TIER_ID, name="Critical",
-                 description="Tier 2 — CIS Level 1 and Level 2 controls.",
-                 includes_level_2=True, is_system=True, created_at=now),
+            Tier(id=TIER_1_ID, name="Tier 1",
+                 description="Level 1 · validation only.",
+                 includes_level_2=False, enforce=False, is_system=True, created_at=now),
+            Tier(id=TIER_2_ID, name="Tier 2",
+                 description="Level 1 + Level 2 · validation only.",
+                 includes_level_2=True, enforce=False, is_system=True, created_at=now),
+            Tier(id=TIER_3_ID, name="Tier 3",
+                 description="Level 1 · enforcement on.",
+                 includes_level_2=False, enforce=True, is_system=True, created_at=now),
+            Tier(id=TIER_4_ID, name="Tier 4",
+                 description="Level 1 + Level 2 · enforcement on.",
+                 includes_level_2=True, enforce=True, is_system=True, created_at=now),
         ]
         for t in systems:
             if not await self._repo.find_by_id(t.id):
                 await self._repo.save(t)
                 created += 1
                 logger.info("Seeded system tier: %s", t.name)
+
+        await self._migrate_legacy_tiers()
         return created
+
+    async def _migrate_legacy_tiers(self) -> None:
+        """Move nodes off the pre-4-tier criticality tiers and delete those rows.
+        Best-effort: a failure here must never block startup."""
+        for legacy_id, new_id in LEGACY_TIER_REMAP.items():
+            legacy = await self._repo.find_by_id(legacy_id)
+            if legacy is None:
+                continue
+            if self._nodes is not None:
+                try:
+                    for node in await self._nodes.find_all({}):
+                        if node.tier_id == legacy_id:
+                            node.tier_id = new_id
+                            node.updated_at = datetime.utcnow()
+                            await self._nodes.update(node)
+                except Exception as exc:
+                    logger.error("Legacy tier node remap failed (%s): %s", legacy_id, exc)
+                    continue  # leave the legacy row so nodes aren't orphaned
+            try:
+                await self._repo.delete(legacy_id)
+                logger.info("Removed legacy tier '%s' (nodes remapped to %s)", legacy_id, new_id)
+            except Exception as exc:
+                logger.error("Legacy tier delete failed (%s): %s", legacy_id, exc)
 
 
 # ── Queries ───────────────────────────────────────────────────────────────────
@@ -139,6 +186,7 @@ class CreateTierUseCase(_TierValidationMixin):
         if await self._repo.find_by_name(name):
             raise ConflictError(f"A tier named '{name}' already exists.")
         includes_l2 = bool(data.get("includes_level_2"))
+        enforce = bool(data.get("enforce"))
         extra = list(data.get("extra_control_ids") or [])
         # A custom tier that already includes all of level 2 needs no extra list.
         if includes_l2 and extra:
@@ -149,14 +197,15 @@ class CreateTierUseCase(_TierValidationMixin):
             name=name,
             description=(data.get("description") or None),
             includes_level_2=includes_l2,
+            enforce=enforce,
             is_system=False,
             created_by=created_by,
             extra_control_ids=extra,
             created_at=datetime.utcnow(),
         )
         await self._repo.save(tier)
-        logger.info("Created custom tier '%s' (by=%s, +L2=%s, extras=%d)",
-                    name, created_by, includes_l2, len(extra))
+        logger.info("Created custom tier '%s' (by=%s, +L2=%s, enforce=%s, extras=%d)",
+                    name, created_by, includes_l2, enforce, len(extra))
         return tier
 
 
@@ -181,6 +230,8 @@ class UpdateTierUseCase(_TierValidationMixin):
             tier.description = data["description"] or None
         if "includes_level_2" in data:
             tier.includes_level_2 = bool(data["includes_level_2"])
+        if "enforce" in data:
+            tier.enforce = bool(data["enforce"])
         if "extra_control_ids" in data:
             extra = list(data["extra_control_ids"] or [])
             if tier.includes_level_2:
@@ -202,16 +253,16 @@ class DeleteTierUseCase:
             raise NotFoundError(f"Tier '{tier_id}' not found")
         if tier.is_system:
             raise ForbiddenError("System tiers cannot be deleted.")
-        # Re-home any node on this tier back to Non-critical so nothing is orphaned.
+        # Re-home any node on this tier back to the default tier so nothing is orphaned.
         moved = 0
         for node in await self._nodes.find_all({}):
             if node.tier_id == tier_id:
-                node.tier_id = NON_CRITICAL_TIER_ID
+                node.tier_id = DEFAULT_TIER_ID
                 node.updated_at = datetime.utcnow()
                 await self._nodes.update(node)
                 moved += 1
         await self._repo.delete(tier_id)
-        logger.info("Deleted tier '%s'; re-homed %d node(s) to Non-critical", tier.name, moved)
+        logger.info("Deleted tier '%s'; re-homed %d node(s) to the default tier", tier.name, moved)
         return {"message": f"Tier '{tier.name}' deleted", "nodes_rehomed": moved}
 
 
@@ -281,9 +332,9 @@ class AssignGroupTierUseCase:
 
 
 async def resolve_node_tier(node, tier_repo: ITierRepository) -> Tier:
-    """The node's tier, defaulting to Non-critical when unset/missing."""
-    tid = getattr(node, "tier_id", None) or NON_CRITICAL_TIER_ID
+    """The node's tier, defaulting to Tier 1 when unset/missing."""
+    tid = getattr(node, "tier_id", None) or DEFAULT_TIER_ID
     tier = await tier_repo.find_by_id(tid)
     if tier is None:
-        tier = await tier_repo.find_by_id(NON_CRITICAL_TIER_ID)
+        tier = await tier_repo.find_by_id(DEFAULT_TIER_ID)
     return tier

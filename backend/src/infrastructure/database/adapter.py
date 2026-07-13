@@ -310,7 +310,10 @@ tiers_table = Table(
     Column("id", Text, primary_key=True),
     Column("name", Text, nullable=False, unique=True),
     Column("description", Text),
+    # Axis 1 — validation scope (Level 1 vs Level 1+2).
     Column("includes_level_2", Integer, default=0),
+    # Axis 2 — enforcement (auto-remediate drift vs validation only).
+    Column("enforce", Integer, default=0),
     Column("is_system", Integer, default=0),
     Column("created_by", Text),
     Column("created_at", Text),
@@ -567,6 +570,10 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             except Exception:
                 pass
             try:
+                await conn.execute(text("ALTER TABLE tiers ADD COLUMN enforce INTEGER DEFAULT 0"))
+            except Exception:
+                pass
+            try:
                 await conn.execute(text(
                     "UPDATE profiles SET framework = 'internal' "
                     "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
@@ -643,6 +650,7 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("compliance_reports", "keyframe_id",           "TEXT"),
             ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
             ("profiles",           "framework",             "TEXT"),
+            ("tiers",              "enforce",               "INTEGER DEFAULT 0"),
             ("audit_log",          "user_id",               "TEXT"),
             ("audit_log",          "user_name",             "TEXT"),
             ("audit_log",          "user_role",             "TEXT"),
@@ -2134,6 +2142,7 @@ class TierRepository(ITierRepository):
             name=row.name,
             description=row.description,
             includes_level_2=bool(row.includes_level_2),
+            enforce=bool(getattr(row, "enforce", 0)),
             is_system=bool(row.is_system),
             created_by=getattr(row, "created_by", None),
             extra_control_ids=extra or [],
@@ -2145,6 +2154,7 @@ class TierRepository(ITierRepository):
             await s.execute(tiers_table.insert().values(
                 id=tier.id, name=tier.name, description=tier.description,
                 includes_level_2=int(tier.includes_level_2),
+                enforce=int(tier.enforce),
                 is_system=int(tier.is_system), created_by=tier.created_by,
                 created_at=_ts(tier.created_at),
             ))
@@ -2181,6 +2191,7 @@ class TierRepository(ITierRepository):
                 update(tiers_table).where(tiers_table.c.id == tier.id).values(
                     name=tier.name, description=tier.description,
                     includes_level_2=int(tier.includes_level_2),
+                    enforce=int(tier.enforce),
                 )
             )
             # Replace the extra-controls set wholesale.

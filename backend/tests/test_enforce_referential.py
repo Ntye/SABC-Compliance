@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from core.domain.entities import (
-    CRITICAL_TIER_ID, NON_CRITICAL_TIER_ID, SABC_BASELINE_PROFILE_ID,
+    TIER_2_ID, TIER_1_ID, SABC_BASELINE_PROFILE_ID,
     ComplianceGroup, Job, Node, Profile, ProfileControl, Tier,
 )
 from core.errors import ValidationError
@@ -40,8 +40,8 @@ class FakeProfileRepo:
 
 class FakeTierRepo:
     def __init__(self):
-        self.t = {NON_CRITICAL_TIER_ID: Tier(id=NON_CRITICAL_TIER_ID, name="Non-critical", is_system=True),
-                  CRITICAL_TIER_ID: Tier(id=CRITICAL_TIER_ID, name="Critical", includes_level_2=True, is_system=True)}
+        self.t = {TIER_1_ID: Tier(id=TIER_1_ID, name="Tier 1", is_system=True),
+                  TIER_2_ID: Tier(id=TIER_2_ID, name="Tier 2", includes_level_2=True, is_system=True)}
     async def find_by_id(self, i): return self.t.get(i)
 
 
@@ -75,7 +75,7 @@ class FakeGetGroup:
         return type("G", (), {"name": f"grp-{gid}"}), members
 
 
-def node(nid, family, tier=NON_CRITICAL_TIER_ID):
+def node(nid, family, tier=TIER_1_ID):
     return Node(id=nid, hostname=nid, ip="10.0.0.9", ssh_user="ansible",
                 os_family=family, tier_id=tier)
 
@@ -136,7 +136,7 @@ class TestSingleNode:
         assert _controls_of(job) == {"c1", "c2"}
 
     async def test_critical_redhat_includes_l2_redhat(self) -> None:
-        uc, start = build([node("n1", "RedHat", tier=CRITICAL_TIER_ID)])
+        uc, start = build([node("n1", "RedHat", tier=TIER_2_ID)])
         out = await uc.execute(node_id="n1")
 
         assert out["launched"] == 1
@@ -180,7 +180,7 @@ class TestControlKeyMapping:
 class TestGroup:
     async def test_group_fans_out_per_member(self) -> None:
         d = node("d", "Debian")
-        r = node("r", "RedHat", tier=CRITICAL_TIER_ID)
+        r = node("r", "RedHat", tier=TIER_2_ID)
         uc, start = build([d, r], group_members={"g": ["d", "r"]})
         out = await uc.execute(group_id="g")
 
