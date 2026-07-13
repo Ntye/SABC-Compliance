@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 110" fill="none" role="img" aria-label="CRICLO">
+  <!-- Clock face: dark fill + light bezel so the shape reads on dark and light backgrounds -->
+  <circle cx="56" cy="55" r="40" fill="#202028"/>
+  <circle cx="56" cy="55" r="40" fill="none" stroke="#6b7280" stroke-width="3"/>
+  <circle cx="56" cy="55" r="35.5" fill="none" stroke="#33333c" stroke-width="1.5"/>
+  <line x1="56.00" y1="18.00" x2="56.00" y2="25.00" stroke="#c7ccd4" stroke-width="2.4" stroke-linecap="round"/>
+  <line x1="74.50" y1="22.96" x2="72.75" y2="25.99" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="88.04" y1="36.50" x2="85.01" y2="38.25" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="93.00" y1="55.00" x2="86.00" y2="55.00" stroke="#c7ccd4" stroke-width="2.4" stroke-linecap="round"/>
+  <line x1="88.04" y1="73.50" x2="85.01" y2="71.75" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="74.50" y1="87.04" x2="72.75" y2="84.01" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="56.00" y1="92.00" x2="56.00" y2="85.00" stroke="#c7ccd4" stroke-width="2.4" stroke-linecap="round"/>
+  <line x1="37.50" y1="87.04" x2="39.25" y2="84.01" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="23.96" y1="73.50" x2="26.99" y2="71.75" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="19.00" y1="55.00" x2="26.00" y2="55.00" stroke="#c7ccd4" stroke-width="2.4" stroke-linecap="round"/>
+  <line x1="23.96" y1="36.50" x2="26.99" y2="38.25" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="37.50" y1="22.96" x2="39.25" y2="25.99" stroke="#8b909b" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- hands -->
+  <line x1="56" y1="55" x2="33.48" y2="42.00" stroke="#c7ccd4" stroke-width="4" stroke-linecap="round"/>
+  <line x1="56" y1="55" x2="45.50" y2="73.19" stroke="#e11d2a" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="56" cy="55" r="4" fill="#e6e8ec"/>
+  <circle cx="56" cy="55" r="1.6" fill="#e11d2a"/>
+  <!-- check badge (bottom-left), white ring so it separates from the clock -->
+  <circle cx="33" cy="82" r="15.5" fill="#e11d2a" stroke="#ffffff" stroke-width="3"/>
+  <path d="M25.5 82.5 l5 5 l9.5 -11.5" fill="none" stroke="#ffffff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- wordmark -->
+  <text x="112" y="71" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-weight="800" font-size="46" letter-spacing="0.5">
+    <tspan fill="#8b909b">CRI</tspan><tspan fill="#e11d2a">CLO</tspan>
+  </text>
+</svg>

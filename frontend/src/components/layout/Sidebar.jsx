@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { logout } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
-import sabcLogo from '../../assets/bdc-logo.png'
+import sabcLogo from '../../assets/criclo-logo.svg'
 
 // CRICLO-style plane-based information architecture. Every view is listed for
 // every user — visibility is NOT gated by role; individual pages gate the
@@ -109,7 +109,7 @@ export default function Sidebar() {
     <aside className="w-[220px] flex-shrink-0 bg-sidebar-bg flex flex-col h-full">
       {/* Logo */}
       <div className="px-4 pt-4">
-        <img src={sabcLogo} alt="Boissons du Cameroun" className="w-[110px] object-contain" />
+        <img src={sabcLogo} alt="CRICLO" className="w-[110px] object-contain" />
         <div className="text-[10px] text-gray-500 mt-1 uppercase tracking-wider">{t('nav.platform')}</div>
       </div>
 
