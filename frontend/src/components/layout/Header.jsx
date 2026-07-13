@@ -7,6 +7,7 @@ import { useLang } from '../../context/LangContext.jsx'
 import { usePosture } from '../../hooks/usePosture.js'
 import ThemePanel from '../settings/ThemePanel.jsx'
 import ActivateModal from '../auth/ActivateModal.jsx'
+import NotificationBell from './NotificationBell.jsx'
 
 // Human labels + accent for each role. The badge is informational — it tells
 // the user what they can do; it never hides views.
@@ -153,6 +154,9 @@ export default function Header() {
               <span className="text-[12px] font-medium text-gray-700 hidden lg:inline">{username}</span>
             )}
           </div>
+
+          {/* Platform notifications (enforcement / scan outcomes) */}
+          <NotificationBell />
 
           {/* Theme / appearance */}
           <button

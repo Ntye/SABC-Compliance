@@ -378,9 +378,13 @@ export async function runClosedLoop({ nodeId = null, groupId = null, description
 
 // Enforce the tier-applicable referential (sabc_hardening) so the internal
 // referential fully passes. Pass exactly one of nodeId / groupId. Returns the
-// launched Ansible job(s).
-export async function enforceReferential({ nodeId = null, groupId = null } = {}) {
-  return request('POST', '/compliance/enforce', { node_id: nodeId, group_id: groupId })
+// launched Ansible job(s). With notifyOnComplete (sent by the Tiers page) each
+// finished job records a platform notification, then chains a verification
+// scan whose outcome is notified too.
+export async function enforceReferential({ nodeId = null, groupId = null, notifyOnComplete = false } = {}) {
+  return request('POST', '/compliance/enforce', {
+    node_id: nodeId, group_id: groupId, notify_on_complete: notifyOnComplete,
+  })
 }
 
 export async function getAutoScanSchedule() {
@@ -431,6 +435,24 @@ export async function assignNodeTier(nodeId, tierId) {
 
 export async function assignGroupTier(groupId, tierId) {
   return request('POST', `/tiers/assign-group/${encodeURIComponent(groupId)}`, { tier_id: tierId })
+}
+
+// ── Notifications (header bell) ───────────────────────────────────────────────
+
+export async function listNotifications({ limit = 50, unreadOnly = false } = {}) {
+  return request('GET', `/notifications?limit=${limit}&unread_only=${unreadOnly}`)
+}
+
+export async function getUnreadNotificationCount() {
+  return request('GET', '/notifications/unread-count')
+}
+
+export async function markNotificationRead(id) {
+  return request('POST', `/notifications/${encodeURIComponent(id)}/read`)
+}
+
+export async function markAllNotificationsRead() {
+  return request('POST', '/notifications/read-all')
 }
 
 // ── Rules ─────────────────────────────────────────────────────────────────────

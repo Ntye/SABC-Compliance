@@ -115,6 +115,22 @@ class Job:
 
 
 @dataclass
+class Notification:
+    """In-platform notification shown in the header bell — e.g. "enforcement
+    finished on web-01" or "post-enforcement scan complete (score 94%)".
+    Persisted so operators who weren't watching the job still see the outcome."""
+    id: str
+    title: str
+    message: str | None = None
+    kind: str = "info"        # "enforcement" | "scan" | "info"
+    severity: str = "info"    # "info" | "success" | "error"
+    node_id: str | None = None
+    job_id: str | None = None
+    is_read: bool = False
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
 class ComplianceReport:
     id: str
     node_id: str

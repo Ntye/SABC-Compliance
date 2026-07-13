@@ -16,8 +16,8 @@ from core.errors import (
 from infrastructure.database.adapter import (
     ApiKeyRepository, AuditRepository, ComplianceGroupRepository, ComplianceRepository,
     DetectionRepository, JobRepository, NodeRepository, NodeGroupRepository,
-    PlatformConfigRepository, ProfileRepository, RuleRepository, TierRepository,
-    UserRepository, UserGroupRepository, create_db,
+    NotificationRepository, PlatformConfigRepository, ProfileRepository,
+    RuleRepository, TierRepository, UserRepository, UserGroupRepository, create_db,
 )
 from infrastructure.http.puppet_nc_client import PuppetNCClient
 from infrastructure.http.puppet_core_client import PuppetCoreClient
@@ -90,6 +90,7 @@ from interface.http.routes import tiers as tiers_routes
 from interface.http.routes import compliance_groups as compliance_groups_routes
 from interface.http.routes import webhooks as webhooks_routes
 from interface.http.routes import audit as audit_routes
+from interface.http.routes import notifications as notifications_routes
 from interface.http.middleware import AuditMiddleware, RateLimitMiddleware
 from interface.websocket.manager import WebSocketManager
 
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
     detection_repo = DetectionRepository(session_factory)
     tier_repo = TierRepository(session_factory)
     compliance_group_repo = ComplianceGroupRepository(session_factory)
+    notification_repo = NotificationRepository(session_factory)
 
     # -- External service clients --
     puppet_nc_client = PuppetNCClient(
@@ -410,6 +412,10 @@ async def lifespan(app: FastAPI):
         profile_repo=profile_repo,
         module_src=os.path.join(_module_base, "puppet", "modules", "sabc_hardening"),
         get_group_uc=get_node_group_uc,
+        # Tiers-page chain: notify when each enforcement job finishes, then run
+        # a verification scan and notify its outcome (header bell).
+        notification_repo=notification_repo,
+        collect_uc=collect_uc,
     )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
@@ -504,6 +510,9 @@ async def lifespan(app: FastAPI):
     # -- Attach audit repo to middleware --
     app.state.audit_repo = audit_repo
     audit_routes.set_repo(audit_repo)
+
+    # -- Platform notifications (header bell) --
+    notifications_routes.set_repo(notification_repo)
 
     # -- Bootstrap: seed default groups BEFORE init admin user --
     try:
@@ -637,6 +646,7 @@ Two methods accepted on all protected endpoints:
             {"name": "Detection", "description": "Config-change events from the detection agents"},
             {"name": "Rules", "description": "Puppet compliance rules library"},
             {"name": "Audit", "description": "HTTP audit log"},
+            {"name": "Notifications", "description": "In-platform notifications (header bell)"},
             {"name": "Webhooks", "description": "Internal webhook endpoints"},
             {"name": "Settings", "description": "Platform settings — TLS certificate management"},
             {"name": "Assistant", "description": "Offline AI assistant powered by Ollama (local LLM)"},
@@ -682,6 +692,7 @@ Two methods accepted on all protected endpoints:
     app.include_router(compliance_groups_routes.router)
     app.include_router(webhooks_routes.router)
     app.include_router(audit_routes.router)
+    app.include_router(notifications_routes.router)
 
     from fastapi import APIRouter
     health_router = APIRouter(tags=["Health"])

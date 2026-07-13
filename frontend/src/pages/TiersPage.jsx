@@ -220,8 +220,12 @@ export default function TiersPage() {
     if (!targetId) { toast(t('tiers.needTarget'), 'error'); return }
     setBusy(true)
     try {
+      // Launched from the Tiers page → the platform notifies when each job
+      // finishes, then chains a verification scan and notifies its outcome too.
       const res = await enforceReferential(
-        targetKind === 'node' ? { nodeId: targetId } : { groupId: targetId },
+        targetKind === 'node'
+          ? { nodeId: targetId, notifyOnComplete: true }
+          : { groupId: targetId, notifyOnComplete: true },
       )
       toast(t('tiers.enforceLaunched', { n: res.launched ?? (res.jobs?.length || 0) }), 'success')
     } catch (e) {
