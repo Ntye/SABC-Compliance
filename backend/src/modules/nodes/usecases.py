@@ -51,10 +51,12 @@ async def _check_dns_remote(ssh: ISSHClient, node: Node, target_hostname: str) -
 
 
 class RegisterNodeUseCase:
-    def __init__(self, node_repository: INodeRepository, ssh_client: ISSHClient, event_bus: IEventBus) -> None:
+    def __init__(self, node_repository: INodeRepository, ssh_client: ISSHClient,
+                 event_bus: IEventBus, tier_repo=None) -> None:
         self._repo = node_repository
         self._ssh = ssh_client
         self._bus = event_bus
+        self._tiers = tier_repo
 
     async def execute(self, data: dict) -> Node:
         hostname = data.get("hostname", "").strip()
@@ -65,6 +67,14 @@ class RegisterNodeUseCase:
         existing = await self._repo.find_by_hostname(hostname)
         if existing:
             raise ConflictError(f"Node '{hostname}' is already registered")
+
+        # Criticality tier picked at enrolment (defaults to Non-critical). An
+        # unknown tier is rejected before the SSH round-trips so the operator
+        # isn't left with a registered node on the wrong tier.
+        tier_id = (data.get("tier_id") or "").strip() or NON_CRITICAL_TIER_ID
+        if self._tiers is not None and tier_id != NON_CRITICAL_TIER_ID:
+            if await self._tiers.find_by_id(tier_id) is None:
+                raise ValidationError(f"Tier '{tier_id}' does not exist")
 
         ssh_port = int(data.get("ssh_port", 22))
         ssh_user = data.get("ssh_user", "ansible")
@@ -94,8 +104,9 @@ class RegisterNodeUseCase:
             description=data.get("description"),
             tags=data.get("tags", []),
             status="reachable",
-            # Every node starts Non-critical (Level 1 only); tier is audited on change.
-            tier_id=NON_CRITICAL_TIER_ID,
+            # Tier chosen at enrolment (Non-critical unless the operator picked
+            # one on the Add Server form); later changes are audited.
+            tier_id=tier_id,
             last_seen=now,
             created_at=now,
             updated_at=now,

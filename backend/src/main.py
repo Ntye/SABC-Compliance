@@ -263,7 +263,8 @@ async def lifespan(app: FastAPI):
     node_groups_routes.set_apply_repo_uc(apply_group_repo_uc)
 
     # -- Node use cases --
-    register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus)
+    # tier_repo validates the optional criticality tier picked at enrolment.
+    register_node_uc = RegisterNodeUseCase(node_repo, ssh_client, event_bus, tier_repo=tier_repo)
     get_node_uc = GetNodeUseCase(node_repo)
     list_nodes_uc = ListNodesUseCase(node_repo)
     ping_node_uc = PingNodeUseCase(node_repo, ssh_client)

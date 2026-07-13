@@ -51,6 +51,8 @@ class RegisterNodeRequest(BaseModel):
     ssh_key_path: str | None = None
     description: str | None = None
     tags: list[str] = []
+    # Criticality tier assigned at enrolment; omit for Non-critical (Level 1).
+    tier_id: str | None = None
 
 
 class UpdateNodeRequest(BaseModel):

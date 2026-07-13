@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ChevronDown, ChevronRight, Download, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
-import { downloadSetupScript, jobWsUrl, registerNode } from '../lib/api.js'
+import { CheckCircle, ChevronDown, ChevronRight, Download, Gauge, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
+import { downloadSetupScript, jobWsUrl, listTiers, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import CopyButton from '../components/common/CopyButton.jsx'
+
+const NON_CRITICAL_TIER_ID = 'tier-non-critical'
 
 const DEFAULT_FORM = {
   hostname: '',
@@ -15,12 +17,14 @@ const DEFAULT_FORM = {
   ssh_key_path: '',
   description: '',
   tags: '',
+  tier_id: NON_CRITICAL_TIER_ID,
 }
 
 export default function AddServerPage() {
   const toast = useToast()
   const t = useT()
   const [form, setForm] = useState(DEFAULT_FORM)
+  const [tiers, setTiers] = useState([])
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
@@ -36,6 +40,12 @@ export default function AddServerPage() {
   function set(field) {
     return (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }))
   }
+
+  // Tiers for the enrolment selector — the node is classified at registration
+  // time, no detour through the Tiers page needed.
+  useEffect(() => {
+    listTiers().then((ts) => setTiers(Array.isArray(ts) ? ts : [])).catch(() => {})
+  }, [])
 
   // Auto-scroll log to bottom
   useEffect(() => {
@@ -90,6 +100,7 @@ export default function AddServerPage() {
         ssh_key_path: form.ssh_key_path.trim() || null,
         description: form.description.trim() || null,
         tags: form.tags ? form.tags.split(',').map((tag) => tag.trim()).filter(Boolean) : [],
+        tier_id: form.tier_id || null,
       }
       const node = await registerNode(payload)
       setResult({ success: true, node })
@@ -154,6 +165,31 @@ export default function AddServerPage() {
                 className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all"
               />
             </div>
+          </div>
+
+          {/* Criticality tier — always visible so classification happens at
+              enrolment, not as an afterthought on the Tiers page */}
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
+              <span className="inline-flex items-center gap-1">
+                <Gauge size={11} className="text-brand" /> {t('addServer.tier')}
+              </span>
+            </label>
+            <select
+              value={form.tier_id}
+              onChange={set('tier_id')}
+              className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 transition-all bg-white text-gray-700"
+            >
+              {tiers.length === 0 && (
+                <option value={NON_CRITICAL_TIER_ID}>{t('addServer.tierDefault')}</option>
+              )}
+              {tiers.map((tier) => (
+                <option key={tier.id} value={tier.id}>
+                  {tier.name}{tier.description ? ` — ${tier.description}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-gray-400 mt-1">{t('addServer.tierHint')}</p>
           </div>
 
           {/* Advanced setup toggle */}

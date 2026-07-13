@@ -229,6 +229,9 @@ export const translations = {
       register: 'Register server', registering: 'Registering…',
       successTitle: 'Node registered successfully', failTitle: 'Registration failed',
       advancedSetup: 'Advanced setup',
+      tier: 'Criticality tier',
+      tierDefault: 'Non-critical',
+      tierHint: 'Decides which CIS levels apply to this node. Assigned at enrolment — you can change it later on the Tiers page.',
       detectTitle: 'Agent Detection',
       helper: {
         title: 'SSH Setup',
@@ -1026,6 +1029,9 @@ export const translations = {
       register: 'Enregistrer le serveur', registering: 'Enregistrement…',
       successTitle: 'Noeud enregistré avec succès', failTitle: 'Échec de l\'enregistrement',
       advancedSetup: 'Configuration avancée',
+      tier: 'Niveau de criticité',
+      tierDefault: 'Non critique',
+      tierHint: 'Détermine les niveaux CIS applicables à ce nœud. Assigné à l\'enrôlement — modifiable ensuite depuis la page Niveaux.',
       detectTitle: 'Détection des agents',
       helper: {
         title: 'Configuration SSH',
