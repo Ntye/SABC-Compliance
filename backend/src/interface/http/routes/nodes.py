@@ -498,7 +498,7 @@ def _detect_admin_user() -> str:
 # ── Setup script ──────────────────────────────────────────────────────────────
 
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
-# SABC Compliance Platform — Node Bootstrap Script
+# CRICLO — Linux Compliance Platform — Node Bootstrap Script
 #
 # Run this directly on the target server with root privileges:
 #   sudo bash setup-node.sh
@@ -525,7 +525,7 @@ PLATFORM_HTTPS_PORT="__PLATFORM_HTTPS_PORT__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  SABC Compliance — Node Bootstrap"
+echo "  CRICLO — Node Bootstrap"
 echo "  Host: $(hostname -f 2>/dev/null || hostname)"
 echo "══════════════════════════════════════════════════════"
 echo ""

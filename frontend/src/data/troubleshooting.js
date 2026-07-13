@@ -11,7 +11,7 @@
 //           'info'    → expected behaviour / good-to-know
 
 export const PLATFORMS = [
-  { key: 'sabc',    label: { en: 'SABC Compliance Platform', fr: 'Plateforme de conformité SABC' } },
+  { key: 'sabc',    label: { en: 'CRICLO', fr: 'CRICLO' } },
   { key: 'puppet',  label: { en: 'Puppet Enterprise',        fr: 'Puppet Enterprise' } },
   { key: 'detection', label: { en: 'Detection agent',        fr: 'Agent de détection' } },
   { key: 'general', label: { en: 'Cross-platform',           fr: 'Multi-plateforme' } },

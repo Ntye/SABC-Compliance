@@ -99,8 +99,8 @@ logger = logging.getLogger(__name__)
 
 _BANNER = """
 ╔══════════════════════════════════════════════════════╗
-║          SABC Compliance Platform  v1.0.0            ║
-║          Société Anonyme des Brasseries du Cameroun  ║
+║                   CRICLO   v1.0.0                    ║
+║              Linux Compliance Platform               ║
 ╠══════════════════════════════════════════════════════╣
 ║  API:     http://0.0.0.0:{port:<5}                      ║
 ║  Docs:    http://localhost:{port:<5}/docs                ║
@@ -616,10 +616,10 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="SABC Compliance Platform API",
+        title="CRICLO API",
         version="1.0.0",
         description="""
-## SABC Integrated Linux Compliance Platform
+## CRICLO — Integrated Linux Compliance Platform
 
 Manages a fleet of Linux servers (Rocky Linux 9 + Ubuntu 22.04) with automated
 compliance enforcement across two frameworks: **CIS Benchmark** (built-in hardening

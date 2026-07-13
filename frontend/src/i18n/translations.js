@@ -112,7 +112,7 @@ export const translations = {
       signingIn: 'Signing in…', signIn: 'Sign in',
       errorRequired: 'Username and password are required',
       errorFailed: 'Login failed',
-      tagline: 'Boissons du Cameroun · Linux Compliance Platform',
+      tagline: 'CRICLO · Linux Compliance Platform',
     },
     header: {
       settings: 'Appearance',
@@ -919,7 +919,7 @@ export const translations = {
       signingIn: 'Connexion…', signIn: 'Se connecter',
       errorRequired: 'Nom d\'utilisateur et mot de passe requis',
       errorFailed: 'Échec de la connexion',
-      tagline: 'Boissons du Cameroun · Plateforme de conformité Linux',
+      tagline: 'CRICLO · Plateforme de conformité Linux',
     },
     header: {
       settings: 'Apparence',

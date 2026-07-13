@@ -137,7 +137,7 @@ export function exportControlsPdf(controls, meta = {}) {
     </tr>`
   }).join('')
   const filterNote = meta.filterLabel ? ` · Filter: ${esc(meta.filterLabel)}` : ''
-  const html = `<!DOCTYPE html><html><head><title>SABC — ${esc(meta.hostname || meta.resourceName || 'Scan')}</title>
+  const html = `<!DOCTYPE html><html><head><title>CRICLO — ${esc(meta.hostname || meta.resourceName || 'Scan')}</title>
 <style>
   body{font-family:sans-serif;font-size:10px;margin:24px;color:#111}
   h2{margin:0 0 4px}.meta{color:#555;margin-bottom:14px;font-size:11px}
@@ -148,7 +148,7 @@ export function exportControlsPdf(controls, meta = {}) {
   td:nth-child(7),td:nth-child(8){color:#444;max-width:260px}
   @media print{body{margin:0}}
 </style></head><body>
-<h2>SABC Compliance Report — ${esc(meta.hostname || meta.resourceName || '')}</h2>
+<h2>CRICLO Compliance Report — ${esc(meta.hostname || meta.resourceName || '')}</h2>
 <div class="meta">
   ${meta.ip ? `IP: ${esc(meta.ip)} · ` : ''}${meta.os_family ? `OS: ${esc(meta.os_family)} · ` : ''}
   Score: <span class="score">${meta.score ?? '—'}%</span> ·
