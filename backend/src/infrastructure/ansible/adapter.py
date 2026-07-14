@@ -6,6 +6,8 @@ import os
 import tempfile
 from typing import Callable, Awaitable
 
+from infrastructure.ssh.hardening import host_key_opts
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,6 +163,9 @@ class AnsibleAdapter:
     async def _write_inventory(self, node) -> str:
         raw_key = node.ssh_key_path or self._ssh_key_path
         key = os.path.abspath(raw_key)
+        # Same TOFU host-key verification the SSH adapter uses, into the same
+        # shared known_hosts file — a swapped host key is refused here too.
+        ssh_common = " ".join(host_key_opts(self._ssh_key_path))
         with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
             if node:
                 f.write(
@@ -168,7 +173,7 @@ class AnsibleAdapter:
                     f"{node.ip} "
                     f"ansible_user={node.ssh_user} "
                     f"ansible_ssh_private_key_file={key} "
-                    f"ansible_ssh_common_args='-o StrictHostKeyChecking=no'\n"
+                    f"ansible_ssh_common_args='{ssh_common}'\n"
                 )
             else:
                 f.write("[target]\nlocalhost ansible_connection=local\n")

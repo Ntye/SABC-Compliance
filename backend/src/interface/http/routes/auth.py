@@ -8,8 +8,18 @@ from core.domain.entities import AuthPrincipal
 from core.errors import (
     ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError,
 )
+from interface.http.net import LoginThrottle, client_ip
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+# Brute-force speed bump for /auth/login. Configured from settings by main.py;
+# a permissive default keeps unit tests that don't wire it up working.
+_login_throttle: LoginThrottle = LoginThrottle()
+
+
+def configure_login_throttle(throttle: LoginThrottle) -> None:
+    global _login_throttle
+    _login_throttle = throttle
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
@@ -207,12 +217,27 @@ async def require_admin(principal: AuthPrincipal = Depends(get_current_principal
     response_model=LoginResponse,
     summary="Login with username and password",
 )
-async def login(body: LoginRequest):
-    """Authenticate with username and password. Returns a JWT Bearer token."""
+async def login(body: LoginRequest, request: Request):
+    """Authenticate with username and password. Returns a JWT Bearer token.
+
+    Repeated failures for the same (client-IP, username) are locked out to blunt
+    online brute-force attacks.
+    """
+    ip = client_ip(request)
+    locked = _login_throttle.seconds_locked(ip, body.username)
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed login attempts. Try again in {locked}s.",
+            headers={"Retry-After": str(locked)},
+        )
     try:
-        return await _login_uc.execute(body.username, body.password)
+        result = await _login_uc.execute(body.username, body.password)
     except UnauthorizedError as exc:
+        _login_throttle.record_failure(ip, body.username)
         raise HTTPException(status_code=401, detail=str(exc))
+    _login_throttle.record_success(ip, body.username)
+    return result
 
 
 @router.post(

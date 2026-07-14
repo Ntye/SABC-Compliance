@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.x509.oid import NameOID
 
 from core.errors import ValidationError
+from infrastructure.ssh.hardening import host_key_opts
 
 logger = logging.getLogger(__name__)
 
@@ -322,7 +323,7 @@ rm -f /tmp/sabc-platform.crt
         cmd = [
             "ssh",
             "-i", ssh_key,
-            "-o", "StrictHostKeyChecking=no",
+            *host_key_opts(self._ssh_key_path),
             "-o", "ConnectTimeout=15",
             "-o", "BatchMode=yes",
             "-p", str(node.ssh_port),

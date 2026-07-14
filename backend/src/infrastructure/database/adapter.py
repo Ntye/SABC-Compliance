@@ -1866,18 +1866,33 @@ class ProfileRepository(IProfileRepository):
 
 # ── Platform Config Repository ────────────────────────────────────────────────
 
+# Config keys whose values are secrets and must be encrypted at rest when a
+# SecretBox is configured. Reads decrypt transparently (and legacy plaintext
+# passes through), so enabling encryption is backward-compatible.
+SECRET_CONFIG_KEYS = {
+    "pe_console_password",          # Puppet Enterprise console password
+    "detection_webhook_api_key",    # shared detection-agent webhook key
+    "jwt_secret_auto",              # auto-generated JWT signing secret
+}
+
+
 class PlatformConfigRepository(IPlatformConfigRepository):
-    def __init__(self, session: async_sessionmaker) -> None:
+    def __init__(self, session: async_sessionmaker, secret_box=None) -> None:
         self._session = session
+        self._box = secret_box  # infrastructure.security.crypto.SecretBox | None
 
     async def get(self, key: str) -> str | None:
         async with self._session() as s:
             row = (await s.execute(
                 select(platform_config_table).where(platform_config_table.c.key == key)
             )).first()
-            return row.value if row else None
+            value = row.value if row else None
+        return self._box.decrypt(value) if self._box else value
 
     async def set(self, key: str, value: str) -> None:
+        stored = value
+        if self._box is not None and key in SECRET_CONFIG_KEYS:
+            stored = self._box.encrypt(value)
         async with self._session() as s:
             existing = (await s.execute(
                 select(platform_config_table).where(platform_config_table.c.key == key)
@@ -1887,18 +1902,20 @@ class PlatformConfigRepository(IPlatformConfigRepository):
                 await s.execute(
                     update(platform_config_table)
                     .where(platform_config_table.c.key == key)
-                    .values(value=value, updated_at=ts)
+                    .values(value=stored, updated_at=ts)
                 )
             else:
                 await s.execute(
-                    platform_config_table.insert().values(key=key, value=value, updated_at=ts)
+                    platform_config_table.insert().values(key=key, value=stored, updated_at=ts)
                 )
             await s.commit()
 
     async def get_all(self) -> dict[str, str]:
         async with self._session() as s:
             rows = (await s.execute(select(platform_config_table))).all()
+        if self._box is None:
             return {r.key: r.value for r in rows}
+        return {r.key: self._box.decrypt(r.value) for r in rows}
 
 
 # ── UserGroup Repository ──────────────────────────────────────────────────────

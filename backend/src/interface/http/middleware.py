@@ -8,6 +8,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from interface.http.net import client_ip
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +75,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleaner_started = True
             asyncio.create_task(self._clear_loop())
 
-        ip = request.client.host if request.client else "unknown"
+        ip = client_ip(request)
         async with self._lock:
             self._counts[ip] = self._counts.get(ip, 0) + 1
             count = self._counts[ip]

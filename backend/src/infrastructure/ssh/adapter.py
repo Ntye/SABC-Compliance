@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from core.domain.interfaces import ISSHClient
+from infrastructure.ssh.hardening import host_key_opts
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,9 @@ class SshClientAdapter(ISSHClient):
         key = key_path or self._default_key
         return [
             "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            # Trust-on-first-use host-key verification into a shared known_hosts
+            # file — a changed host key is refused (MITM protection).
+            *host_key_opts(self._default_key),
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
             "-p", str(port),

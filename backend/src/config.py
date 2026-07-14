@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 24
 
+    # Master key for encrypting secrets at rest (Puppet console password,
+    # detection-webhook key, auto-generated JWT secret). When blank, a random
+    # key is generated and persisted (0600) next to the database so secrets are
+    # still encrypted; set MASTER_KEY explicitly to keep them portable and to
+    # keep the key off the DB host. Any passphrase works — it is hashed to a key.
+    master_key: str = ""
+
+    # Login brute-force protection: lock (username, client-IP) after this many
+    # failed attempts within the window, for the lockout duration.
+    login_max_failures: int = 5
+    login_window_seconds: int = 300
+    login_lockout_seconds: int = 900
+
     # Puppet
     # Which Puppet edition the platform integrates with:
     #   "enterprise" — Puppet Enterprise (PE Advanced). Uses the commercial

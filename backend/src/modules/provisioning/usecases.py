@@ -10,6 +10,7 @@ from core.domain.interfaces import (
 )
 from config import get_settings
 from core.errors import ConflictError, NotFoundError, ValidationError
+from infrastructure.ssh.hardening import host_key_opts
 
 logger = logging.getLogger(__name__)
 
@@ -555,8 +556,7 @@ class ScanEngineUseCase:
         key = node.ssh_key_path or self._default_key
         args = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *host_key_opts(self._default_key),
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-i", key,

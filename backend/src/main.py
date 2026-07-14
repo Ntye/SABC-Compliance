@@ -30,7 +30,7 @@ from modules.auth.usecases import (
     CreateUserGroupUseCase, ListUserGroupsUseCase, GetUserGroupUseCase,
     UpdateUserGroupUseCase, DeleteUserGroupUseCase,
     AddUserToGroupUseCase, RemoveUserFromGroupUseCase,
-    SeedDefaultGroupsUseCase,
+    SeedDefaultGroupsUseCase, resolve_jwt_secret,
 )
 from modules.node_groups.usecases import (
     CreateNodeGroupUseCase, UpdateNodeGroupUseCase, DeleteNodeGroupUseCase,
@@ -42,6 +42,8 @@ from modules.node_groups.usecases import (
 from core.events import EventBus
 from infrastructure.ssh.adapter import SshClientAdapter
 from infrastructure.ansible.adapter import AnsibleAdapter
+from infrastructure.security.crypto import SecretBox, resolve_master_key
+from interface.http.net import LoginThrottle
 from modules.nodes.usecases import (
     ChangeNodeIdentityUseCase, CheckNodeDnsUseCase, DeleteNodeUseCase,
     FixNodeDnsUseCase, GetNodeUseCase, ListNodesUseCase,
@@ -114,8 +116,15 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     # -- Database --
-    os.makedirs(os.path.dirname(settings.db_path) if os.path.dirname(settings.db_path) else "data", exist_ok=True)
+    db_dir = os.path.dirname(settings.db_path) or "data"
+    os.makedirs(db_dir, exist_ok=True)
     engine, session_factory = await create_db(settings.db_path, settings.database_url)
+
+    # -- Secrets-at-rest encryption --
+    # Master key comes from MASTER_KEY (env) or a 0600 key file next to the DB,
+    # never from the DB itself, so a leaked database dump does not expose the
+    # Puppet password / webhook key / JWT secret it protects.
+    secret_box = SecretBox(resolve_master_key(settings.master_key, os.path.join(db_dir, "secret.key")))
 
     # -- Repositories --
     node_repo = NodeRepository(session_factory)
@@ -126,7 +135,7 @@ async def lifespan(app: FastAPI):
     audit_repo = AuditRepository(session_factory)
     rule_repo = RuleRepository(session_factory)
     profile_repo = ProfileRepository(session_factory)
-    platform_config_repo = PlatformConfigRepository(session_factory)
+    platform_config_repo = PlatformConfigRepository(session_factory, secret_box=secret_box)
     group_repo = UserGroupRepository(session_factory)
     node_group_repo = NodeGroupRepository(session_factory)
     detection_repo = DetectionRepository(session_factory)
@@ -155,15 +164,18 @@ async def lifespan(app: FastAPI):
     event_bus = EventBus()
 
     # -- Auth use cases --
+    # Never sign tokens with the insecure default: resolve (and persist) a strong
+    # secret when the operator hasn't set one.
+    jwt_secret = await resolve_jwt_secret(settings.jwt_secret, platform_config_repo)
     authenticate_uc = AuthenticateUseCase(api_key_repo)
-    decode_jwt_uc = DecodeJwtUseCase(settings.jwt_secret, settings.jwt_algorithm, user_repo)
+    decode_jwt_uc = DecodeJwtUseCase(jwt_secret, settings.jwt_algorithm, user_repo)
     init_api_key_uc = InitApiKeyUseCase(api_key_repo)
     create_api_key_uc = CreateApiKeyUseCase(api_key_repo)
     list_api_keys_uc = ListApiKeysUseCase(api_key_repo)
     revoke_api_key_uc = RevokeApiKeyUseCase(api_key_repo)
     login_uc = LoginUseCase(
         user_repo, api_key_repo, group_repo,
-        settings.jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours,
+        jwt_secret, settings.jwt_algorithm, settings.jwt_expire_hours,
     )
     init_admin_user_uc = InitAdminUserUseCase(user_repo, group_repo)
     create_user_uc = CreateUserUseCase(user_repo)
@@ -201,6 +213,11 @@ async def lifespan(app: FastAPI):
         add_member_uc=add_member_uc,
         remove_member_uc=remove_member_uc,
     )
+    auth_routes.configure_login_throttle(LoginThrottle(
+        max_failures=settings.login_max_failures,
+        window_seconds=settings.login_window_seconds,
+        lockout_seconds=settings.login_lockout_seconds,
+    ))
 
     # -- SSH client (needed by the Puppet Core ENC classifier below) --
     ssh_client = SshClientAdapter(settings.ssh_key_path)

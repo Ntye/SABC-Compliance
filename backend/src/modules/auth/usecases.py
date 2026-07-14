@@ -1,11 +1,43 @@
 from __future__ import annotations
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jose import jwt, JWTError
+
+logger = logging.getLogger(__name__)
+
+# The placeholder shipped in config defaults / .env.example. Treated as "unset".
+DEFAULT_JWT_SECRET = "change-me-in-production-use-random-32-chars"
+
+
+async def resolve_jwt_secret(configured: str | None, config_repo) -> str:
+    """Return a strong JWT signing secret, never the insecure default.
+
+    If the operator set a safe secret (>= 32 chars, not the placeholder) it is
+    used as-is. Otherwise a random secret is generated once and persisted in
+    platform_config, so tokens cannot be forged with a known key and stay valid
+    across restarts. A warning is logged so production operators set their own.
+    """
+    value = (configured or "").strip()
+    if value and value != DEFAULT_JWT_SECRET and len(value) >= 32:
+        return value
+
+    stored = await config_repo.get("jwt_secret_auto")
+    if stored:
+        return stored
+
+    generated = secrets.token_urlsafe(48)
+    await config_repo.set("jwt_secret_auto", generated)
+    logger.warning(
+        "JWT_SECRET is unset or insecure; generated and persisted a random "
+        "signing secret. Set a strong JWT_SECRET (>= 32 chars) in the "
+        "environment for production deployments."
+    )
+    return generated
 
 from core.domain.entities import ApiKey, User, UserGroup, AuthPrincipal
 from core.domain.interfaces import IApiKeyRepository, IUserRepository, IUserGroupRepository
