@@ -129,8 +129,10 @@ export async function listApiKeys() {
   return request('GET', '/auth/keys')
 }
 
-export async function createApiKey(name, role) {
-  return request('POST', '/auth/keys', { name, role })
+export async function createApiKey(name, role, { startsAt = null, expiresAt = null } = {}) {
+  return request('POST', '/auth/keys', {
+    name, role, starts_at: startsAt, expires_at: expiresAt,
+  })
 }
 
 export async function revokeApiKey(id) {

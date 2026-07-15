@@ -181,17 +181,48 @@ class ApiKey:
     last_used: datetime | None = None
     active: bool = True
     user_id: str | None = None
+    # Temporal validity window. A key authenticates only between starts_at and
+    # expires_at (inclusive of start, exclusive of end). None means unbounded on
+    # that side, so a key with both None never expires (used for the bootstrap
+    # and per-user personal keys). Expiry is enforced at authentication time, so
+    # revocation is automatic — no sweep required.
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
 
     ROLES: ClassVar[list[str]] = ["readonly", "operator", "admin"]
 
+    def is_within_window(self, now: datetime | None = None) -> bool:
+        """True when *now* falls inside the key's validity window."""
+        now = now or datetime.utcnow()
+        if self.starts_at is not None and now < self.starts_at:
+            return False
+        if self.expires_at is not None and now >= self.expires_at:
+            return False
+        return True
+
+    def effective_status(self, now: datetime | None = None) -> str:
+        """Display status: revoked (manual) > expired > pending > active."""
+        if not self.active:
+            return "revoked"
+        now = now or datetime.utcnow()
+        if self.expires_at is not None and now >= self.expires_at:
+            return "expired"
+        if self.starts_at is not None and now < self.starts_at:
+            return "pending"
+        return "active"
+
+    def is_usable(self, now: datetime | None = None) -> bool:
+        """Manually active AND inside its validity window."""
+        return self.active and self.is_within_window(now)
+
     def can_read(self) -> bool:
-        return self.active
+        return self.is_usable()
 
     def can_operate(self) -> bool:
-        return self.active and self.role in ("operator", "admin")
+        return self.is_usable() and self.role in ("operator", "admin")
 
     def can_admin(self) -> bool:
-        return self.active and self.role == "admin"
+        return self.is_usable() and self.role == "admin"
 
 
 @dataclass

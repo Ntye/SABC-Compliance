@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ChevronRight, RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, ChevronRight, PlusCircle, RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
 import { deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -154,6 +154,10 @@ export default function NodesPage() {
           <button onClick={refetch} className={btnSm(false)}>
             <RefreshCw size={11} />
             {t('common.refresh')}
+          </button>
+          <button onClick={() => navigate('/add-server')} className={btnSm(true)}>
+            <PlusCircle size={12} />
+            {t('nodes.addServer')}
           </button>
         </div>
       </div>

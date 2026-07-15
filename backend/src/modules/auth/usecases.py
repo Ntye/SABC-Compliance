@@ -99,6 +99,13 @@ class AuthenticateUseCase:
         found = await self._repo.find_by_hash(_hash_key(raw_key))
         if not found or not found.active:
             raise UnauthorizedError("Invalid or inactive API key")
+        # Temporal validity: a key outside its start/end window is rejected, so
+        # revocation at the end date is automatic (no background sweep needed).
+        now = datetime.utcnow()
+        if found.expires_at is not None and now >= found.expires_at:
+            raise UnauthorizedError("API key expired")
+        if found.starts_at is not None and now < found.starts_at:
+            raise UnauthorizedError("API key is not yet valid")
         await self._repo.touch_last_used(found.id)
         return found
 
@@ -107,6 +114,17 @@ class CreateApiKeyUseCase:
     def __init__(self, repo: IApiKeyRepository) -> None:
         self._repo = repo
 
+    @staticmethod
+    def _parse_dt(value) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            raise ValidationError(f"Invalid date/time: {value!r}")
+
     async def execute(self, data: dict) -> dict:
         name = data.get("name", "").strip()
         role = data.get("role", "")
@@ -114,6 +132,10 @@ class CreateApiKeyUseCase:
             raise ValidationError("name is required")
         if role not in ApiKey.ROLES:
             raise ValidationError(f"role must be one of {ApiKey.ROLES}")
+        starts_at = self._parse_dt(data.get("starts_at"))
+        expires_at = self._parse_dt(data.get("expires_at"))
+        if starts_at and expires_at and expires_at <= starts_at:
+            raise ValidationError("expires_at must be after starts_at")
         raw = _gen_key()
         key = ApiKey(
             id=str(uuid.uuid4()),
@@ -121,9 +143,16 @@ class CreateApiKeyUseCase:
             key_hash=_hash_key(raw),
             role=role,
             created_at=datetime.utcnow(),
+            starts_at=starts_at,
+            expires_at=expires_at,
         )
         await self._repo.save(key)
-        return {"id": key.id, "name": key.name, "role": key.role, "api_key": raw, "message": "Store this key securely — it will not be shown again."}
+        return {
+            "id": key.id, "name": key.name, "role": key.role, "api_key": raw,
+            "starts_at": key.starts_at.isoformat() if key.starts_at else None,
+            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+            "message": "Store this key securely — it will not be shown again.",
+        }
 
 
 class ListApiKeysUseCase:

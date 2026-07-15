@@ -191,6 +191,9 @@ api_keys_table = Table(
     Column("last_used", Text),
     Column("active", Integer, default=1),
     Column("user_id", Text),
+    # Temporal validity window (ISO-8601 strings). NULL = unbounded on that side.
+    Column("starts_at", Text),
+    Column("expires_at", Text),
 )
 
 users_table = Table(
@@ -477,6 +480,14 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 except Exception:
                     pass
             try:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN starts_at TEXT"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN expires_at TEXT"))
+            except Exception:
+                pass
+            try:
                 await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
             except Exception:
                 pass
@@ -617,6 +628,8 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("nodes",              "dns_resolves",          "BOOLEAN"),
             ("nodes",              "scan_ready",            "BOOLEAN DEFAULT false"),
             ("api_keys",           "user_id",               "TEXT"),
+            ("api_keys",           "starts_at",             "TEXT"),
+            ("api_keys",           "expires_at",            "TEXT"),
             ("nodes",              "tier_id",               "TEXT"),
             ("profiles",           "is_system",             "INTEGER DEFAULT 0"),
             ("profile_controls",   "check_command",         "TEXT"),
@@ -1418,6 +1431,8 @@ class ApiKeyRepository(IApiKeyRepository):
             last_used=_dt(row.last_used),
             active=bool(row.active),
             user_id=getattr(row, 'user_id', None),
+            starts_at=_dt(getattr(row, 'starts_at', None)),
+            expires_at=_dt(getattr(row, 'expires_at', None)),
         )
 
     async def save(self, key: ApiKey) -> None:
@@ -1426,6 +1441,7 @@ class ApiKeyRepository(IApiKeyRepository):
                 id=key.id, name=key.name, key_hash=key.key_hash, role=key.role,
                 created_at=_ts(key.created_at), last_used=_ts(key.last_used),
                 active=int(key.active), user_id=key.user_id,
+                starts_at=_ts(key.starts_at), expires_at=_ts(key.expires_at),
             ))
             await s.commit()
 

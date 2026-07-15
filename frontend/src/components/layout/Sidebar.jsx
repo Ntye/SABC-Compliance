@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Activity, Cpu, Download, FileCode, FileKey, Gauge, Key, LayoutDashboard, Layers,
-  LifeBuoy, Lock, LogOut, PlusCircle, Server, ShieldCheck, Sliders, Terminal,
-  User, UsersRound,
+  Activity, Cpu, Download, FileCode, FileKey, Gauge, LayoutDashboard, Layers,
+  LifeBuoy, Lock, LogOut, Server, ShieldCheck, Terminal,
 } from 'lucide-react'
 import { logout } from '../../lib/api.js'
 import { useT } from '../../context/LangContext.jsx'
@@ -39,12 +38,8 @@ function usePlanes(t) {
       { path: '/audit', label: t('nav.reportsEvidence'), icon: Download },
     ]},
     { key: 'admin', label: t('nav.planeAdmin'), items: [
-      { path: '/add-server',      label: t('nav.nodeEnrolment'),  icon: PlusCircle },
       { path: '/infrastructure',  label: t('nav.systemHealth'),   icon: Cpu },
-      { path: '/iam/users',       label: t('nav.accessControl'),  icon: User },
-      { path: '/iam/groups',      label: t('nav.iamGroups'),      icon: UsersRound },
-      { path: '/iam/keys',        label: t('nav.iamKeys'),        icon: Key },
-      { path: '/iam/permissions', label: t('nav.iamPermissions'), icon: Lock },
+      { path: '/iam',             label: t('nav.accessControl'),  icon: Lock },
       { path: '/settings/tls',    label: t('nav.tlsCertificate'), icon: FileKey },
     ]},
   ]

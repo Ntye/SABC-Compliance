@@ -42,10 +42,15 @@ class ApiKeyResponse(BaseModel):
     active: bool
     created_at: datetime
     last_used: datetime | None = None
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    status: str = "active"   # active | pending | expired | revoked
 
 class CreateApiKeyRequest(BaseModel):
     name: str
     role: str
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
 
 class CreateUserRequest(BaseModel):
     username: str
@@ -265,6 +270,8 @@ async def list_api_keys(principal: AuthPrincipal = Depends(require_admin)):
         ApiKeyResponse(
             id=k.id, name=k.name, role=k.role, active=k.active,
             created_at=k.created_at, last_used=k.last_used,
+            starts_at=k.starts_at, expires_at=k.expires_at,
+            status=k.effective_status(),
         )
         for k in keys
     ]
@@ -279,9 +286,14 @@ async def create_api_key(
     body: CreateApiKeyRequest,
     principal: AuthPrincipal = Depends(require_admin),
 ):
-    """Create a new API key with the specified role (admin only)."""
+    """Create a new API key with the specified role (admin only). Optional
+    starts_at/expires_at bound the key's validity window; an expired key is
+    rejected at authentication time, so revocation is automatic."""
     try:
-        return await _create_api_key_uc.execute({"name": body.name, "role": body.role})
+        return await _create_api_key_uc.execute({
+            "name": body.name, "role": body.role,
+            "starts_at": body.starts_at, "expires_at": body.expires_at,
+        })
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

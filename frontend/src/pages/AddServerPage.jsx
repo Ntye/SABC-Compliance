@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ChevronDown, ChevronRight, Download, Gauge, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Download, Gauge, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
 import { downloadSetupScript, jobWsUrl, listTiers, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
@@ -133,7 +134,12 @@ export default function AddServerPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
-      <h2 className="text-[18px] font-semibold text-gray-900">{t('addServer.title')}</h2>
+      <div>
+        <Link to="/nodes" className="inline-flex items-center gap-1 text-[12px] text-gray-400 hover:text-gray-600 mb-1">
+          <ArrowLeft size={13} /> {t('addServer.backToNodes')}
+        </Link>
+        <h2 className="text-[18px] font-semibold text-gray-900">{t('addServer.title')}</h2>
+      </div>
 
       {/* ── Zone 1: Registration form ── */}
       <div className="bg-white rounded-xl border border-gray-100 p-6 max-w-2xl">

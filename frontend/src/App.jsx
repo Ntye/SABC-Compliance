@@ -18,6 +18,7 @@ import InfrastructurePage from './pages/InfrastructurePage.jsx'
 import UsersPage from './pages/UsersPage.jsx'
 import UserGroupsPage from './pages/UserGroupsPage.jsx'
 import PermissionsPage from './pages/PermissionsPage.jsx'
+import AccessControlPage from './pages/AccessControlPage.jsx'
 import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
 import NodeGroupDetailPage from './pages/NodeGroupDetailPage.jsx'
 import TiersPage from './pages/TiersPage.jsx'
@@ -45,13 +46,17 @@ export default function App() {
             <Route path="/profiles/:id" element={<ProfileDetailPage />} />
             <Route path="/tiers" element={<TiersPage />} />
             <Route path="/rules" element={<Navigate to="/profiles" replace />} />
-            <Route path="/keys" element={<ApiKeysPage />} />
             <Route path="/audit" element={<AuditLogPage />} />
-            {/* IAM routes */}
-            <Route path="/iam/users" element={<UsersPage />} />
-            <Route path="/iam/groups" element={<UserGroupsPage />} />
-            <Route path="/iam/keys" element={<ApiKeysPage />} />
-            <Route path="/iam/permissions" element={<PermissionsPage />} />
+            {/* Access Control — one page, four tabs */}
+            <Route path="/iam" element={<AccessControlPage />}>
+              <Route index element={<Navigate to="users" replace />} />
+              <Route path="users" element={<UsersPage />} />
+              <Route path="groups" element={<UserGroupsPage />} />
+              <Route path="keys" element={<ApiKeysPage />} />
+              <Route path="permissions" element={<PermissionsPage />} />
+            </Route>
+            {/* Back-compat redirects for the old standalone key route */}
+            <Route path="/keys" element={<Navigate to="/iam/keys" replace />} />
             <Route path="/settings/tls" element={<TlsCertificatePage />} />
             {/* Node Groups */}
             <Route path="/node-groups" element={<NodeGroupsPage />} />
