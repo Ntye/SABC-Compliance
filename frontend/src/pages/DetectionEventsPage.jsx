@@ -43,8 +43,11 @@ function StatusBadge({ event, t }) {
     failed:      ['danger',  t('detection.statusFailed')],
     remediating: ['warning', t('detection.statusRemediating')],
     resolved:    ['success', t('detection.statusResolved')],
+    benign:      ['gray',    t('detection.statusBenign')],
   }[status] || ['gray', status]
-  return <span className={badge(meta[0])}>{meta[1]}</span>
+  return (
+    <span className={badge(meta[0])} title={event.violation_detail || ''}>{meta[1]}</span>
+  )
 }
 
 function EventTypeBadge({ type }) {
@@ -153,7 +156,7 @@ export default function DetectionEventsPage() {
 
   // Count by lifecycle status. "Active" excludes changes already corrected.
   const counts = useMemo(() => {
-    const c = { active: 0, resolved: 0, remediating: 0, failed: 0, suppressed: 0 }
+    const c = { active: 0, resolved: 0, remediating: 0, failed: 0, suppressed: 0, benign: 0 }
     for (const e of events) c[eventStatus(e)] = (c[eventStatus(e)] || 0) + 1
     return c
   }, [events])
@@ -206,6 +209,7 @@ export default function DetectionEventsPage() {
             >
               <option value="">{t('detection.statusAll')}</option>
               <option value="active">{t('detection.statusActive')}</option>
+              <option value="benign">{t('detection.statusBenign')}</option>
               <option value="remediating">{t('detection.statusRemediating')}</option>
               <option value="resolved">{t('detection.statusResolved')}</option>
               <option value="suppressed">{t('detection.statusSuppressed')}</option>

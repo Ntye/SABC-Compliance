@@ -353,6 +353,12 @@ class ConfigChangeEvent:
     suppressed: bool = False
     suppress_reason: str | None = None    # remediation_pending|puppet_run|baseline|heartbeat
     remediation_event_id: str | None = None
+    # Compliance impact, set after the change is re-scanned:
+    #   None  → not yet assessed (scan pending/failed)
+    #   True  → the change made a previously-passing control fail (a real alert)
+    #   False → benign: no control regressed (evidence only, not an alert)
+    violation: bool | None = None
+    violation_detail: str | None = None   # e.g. "2 control(s) now failing: 5.2.x, 5.3.y"
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 

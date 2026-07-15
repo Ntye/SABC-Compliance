@@ -664,6 +664,7 @@ export const translations = {
       // Event lifecycle status + filter
       statusAll: 'All statuses',
       statusActive: 'Active',
+      statusBenign: 'Benign change',
       statusResolved: 'Resolved',
       statusRemediating: 'Remediating',
       statusFailed: 'Failed',
@@ -1475,6 +1476,7 @@ export const translations = {
       viewDiff: 'voir le diff',
       statusAll: 'Tous les statuts',
       statusActive: 'Actif',
+      statusBenign: 'Changement bénin',
       statusResolved: 'Résolu',
       statusRemediating: 'En remédiation',
       statusFailed: 'Échec',

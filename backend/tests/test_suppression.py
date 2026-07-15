@@ -50,6 +50,11 @@ class FakeDetectionRepo:
     async def save_event(self, event: ConfigChangeEvent) -> None:
         self.events.append(event)
 
+    async def update_violation(self, event_id, violation, detail) -> None:
+        for e in self.events:
+            if e.id == event_id:
+                e.violation, e.violation_detail = violation, detail
+
     async def save_heartbeat(self, event: ConfigChangeEvent) -> None:
         self.heartbeats.append(event)
 
@@ -85,6 +90,11 @@ class FakeComplianceRepo:
         if self.pending and self.pending.node_id == node_id:
             return self.pending
         return None
+
+    async def find_by_node(self, node_id: str) -> list:
+        # No prior scan in these suppression tests → the change is left
+        # unassessed (violation None), so the closed loop still remediates.
+        return []
 
 
 class FakeRemediateUC:
@@ -331,7 +341,7 @@ async def test_global_closed_loop_enables_remediation() -> None:
     result = await run_and_settle(uc, payload())
 
     assert result["closed_loop"] is True
-    assert result["action"] == "compliance scan scheduled + puppet remediation scheduled"
+    assert result["action"] == "compliance scan scheduled + remediation gated on violation"
     assert collect.calls == ["node-1"]
     assert len(remediate.calls) == 1
     assert remediate.calls[0]["detection_event_id"] == repo.events[0].id

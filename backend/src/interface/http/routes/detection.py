@@ -36,6 +36,9 @@ class DetectionEventResponse(BaseModel):
     suppressed: bool = False
     suppress_reason: str | None = None
     remediation_event_id: str | None = None
+    remediation_outcome: str | None = None
+    violation: bool | None = None            # None=unassessed, False=benign, True=alert
+    violation_detail: str | None = None
     created_at: datetime
 
 

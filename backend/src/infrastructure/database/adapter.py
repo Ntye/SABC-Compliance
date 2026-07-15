@@ -166,6 +166,8 @@ config_change_events_table = Table(
     Column("suppressed", Integer, default=0),
     Column("suppress_reason", Text),
     Column("remediation_event_id", Text),      # FK → remediation_events.id (nullable)
+    Column("violation", Integer),              # NULL=unassessed, 0=benign, 1=violation
+    Column("violation_detail", Text),          # short summary of the controls that regressed
     Column("created_at", Text, index=True),
 )
 
@@ -580,6 +582,11 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 ))
             except Exception:
                 pass
+            for col, typ in [("violation", "INTEGER"), ("violation_detail", "TEXT")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE config_change_events ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
 
     if not is_sqlite:
         # ── PostgreSQL idempotent column migrations ───────────────────────────
@@ -651,6 +658,8 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
             ("profiles",           "framework",             "TEXT"),
             ("tiers",              "enforce",               "INTEGER DEFAULT 0"),
+            ("config_change_events", "violation",           "INTEGER"),
+            ("config_change_events", "violation_detail",    "TEXT"),
             ("audit_log",          "user_id",               "TEXT"),
             ("audit_log",          "user_name",             "TEXT"),
             ("audit_log",          "user_role",             "TEXT"),
@@ -1231,6 +1240,8 @@ class DetectionRepository(IDetectionRepository):
             suppressed=bool(row.suppressed),
             suppress_reason=row.suppress_reason,
             remediation_event_id=row.remediation_event_id,
+            violation=(None if getattr(row, "violation", None) is None else bool(row.violation)),
+            violation_detail=getattr(row, "violation_detail", None),
             created_at=_dt(row.created_at) or datetime.utcnow(),
         )
 
@@ -1249,12 +1260,26 @@ class DetectionRepository(IDetectionRepository):
             "suppressed": int(e.suppressed),
             "suppress_reason": e.suppress_reason,
             "remediation_event_id": e.remediation_event_id,
+            "violation": (None if e.violation is None else int(e.violation)),
+            "violation_detail": e.violation_detail,
             "created_at": _ts(e.created_at),
         }
 
     async def save_event(self, event: ConfigChangeEvent) -> None:
         async with self._session() as s:
             await s.execute(config_change_events_table.insert().values(**self._to_dict(event)))
+            await s.commit()
+
+    async def update_violation(self, event_id: str, violation: bool | None, detail: str | None) -> None:
+        """Record the compliance impact of a change once it has been re-scanned."""
+        c = config_change_events_table.c
+        async with self._session() as s:
+            await s.execute(
+                update(config_change_events_table)
+                .where(c.id == event_id)
+                .values(violation=(None if violation is None else int(violation)),
+                        violation_detail=detail)
+            )
             await s.commit()
 
     async def save_heartbeat(self, event: ConfigChangeEvent) -> None:

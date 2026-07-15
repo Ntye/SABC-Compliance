@@ -9,6 +9,9 @@ import { getComplianceSummary, listDetectionEvents } from '../lib/api.js'
 // counts against the "active alerts" figure.
 export function eventStatus(e) {
   if (e.suppressed) return 'suppressed'
+  // A change that was re-scanned and broke no control is benign evidence — not
+  // an alert. Only a change that made a control regress (violation) can be one.
+  if (e.violation === false) return 'benign'
   const o = e.remediation_outcome
   if (o === 'success' || o === 'skipped') return 'resolved'
   if (o === 'pending') return 'remediating'

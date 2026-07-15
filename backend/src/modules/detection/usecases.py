@@ -153,28 +153,37 @@ class ReceiveDetectionEventUseCase:
                 "new_hash": event.new_hash,
             })
 
-            # Every genuine change re-assesses compliance: launch a scan so the
-            # dashboard reflects the node's true posture after the drift. This
-            # happens regardless of whether remediation is enabled.
-            actions: list[str] = []
-            if self._collect is not None:
-                asyncio.create_task(self._run_scan(node, event))
-                actions.append("compliance scan scheduled")
-
-            # Remediation is decoupled: only enforce when the closed loop is
-            # explicitly enabled (globally or for one of the node's groups).
+            # Every genuine change re-assesses compliance so the dashboard shows
+            # the node's true posture. The re-scan also decides whether this
+            # change is an ALERT: only a change that makes a previously-passing
+            # control fail is a compliance violation; a change that breaks
+            # nothing is recorded as benign evidence, not an alert. Remediation
+            # (closed loop) fires only for a real violation.
             closed_loop = await self._closed_loop_enabled(node)
             result["closed_loop"] = closed_loop
-            if closed_loop:
-                # inflight guard closes the race with the pending-RemediationEvent
-                # row so the Puppet run's own writes don't re-trigger.
+            actions: list[str] = []
+            if self._collect is not None:
+                asyncio.create_task(self._assess_and_maybe_remediate(node, event, closed_loop))
+                actions.append("compliance scan scheduled")
+                if closed_loop:
+                    actions.append("remediation gated on violation")
+            elif closed_loop:
+                # No scanner wired → keep the previous always-remediate fallback.
                 self._inflight.add(node.id)
-                asyncio.create_task(self._run_remediation(node, event))
+                asyncio.create_task(self._remediate_now(node, event))
                 actions.append("puppet remediation scheduled")
 
             result["action"] = " + ".join(actions) if actions else "recorded"
 
         return result
+
+    @staticmethod
+    def _failing_ids(report) -> set[str]:
+        return {
+            d.get("control_id")
+            for d in (getattr(report, "details", None) or [])
+            if d.get("status") == "fail" and d.get("control_id")
+        }
 
     # ── Validation / resolution ───────────────────────────────────────────────
 
@@ -325,30 +334,78 @@ class ReceiveDetectionEventUseCase:
 
         return False
 
-    # ── Background scan (always, on genuine drift) ────────────────────────────
+    # ── Background: re-scan, classify the alert, then remediate if warranted ──
 
-    async def _run_scan(self, node: Node, event: ConfigChangeEvent) -> None:
+    async def _assess_and_maybe_remediate(
+        self, node: Node, event: ConfigChangeEvent, closed_loop: bool,
+    ) -> None:
+        """Re-scan the node, decide whether this change is a real compliance
+        violation (a control that regressed pass→fail) or benign, record that on
+        the event, and remediate only when it is a genuine violation on a
+        loop-active node."""
+        # Failing controls BEFORE this change's scan (empty when no prior scan).
+        prev_reports: list = []
+        try:
+            prev_reports = await self._compliance.find_by_node(node.id)
+        except Exception as exc:
+            logger.error("pre-scan report read failed for %s: %s", node.id, exc)
+        prev_fail = self._failing_ids(prev_reports[0]) if prev_reports else set()
+
+        # Re-scan.
+        scanned = False
         try:
             self._publish(Events.SCAN_STARTED, {
-                "node_id": node.id,
-                "detection_event_id": event.id,
-                "trigger": "detection",
+                "node_id": node.id, "detection_event_id": event.id, "trigger": "detection",
             })
-            result = await self._collect.execute(node.id)
+            scan_result = await self._collect.execute(node.id)
+            scanned = True
             self._publish(Events.SCAN_COMPLETED, {
-                "node_id": node.id,
-                "detection_event_id": event.id,
-                "collected": result.get("collected"),
+                "node_id": node.id, "detection_event_id": event.id,
+                "collected": scan_result.get("collected"),
             })
-            await self._broadcast(node, event, phase="scan_completed", extra=result)
         except Exception as exc:
             logger.error("Detection-triggered scan failed for %s: %s", node.id, exc)
-            await self._broadcast(node, event, phase="scan_failed",
-                                  extra={"error": str(exc)})
+            await self._broadcast(node, event, phase="scan_failed", extra={"error": str(exc)})
+
+        # Classify: newly-failing controls => violation; none => benign. Without
+        # a prior scan we can't prove a regression, so leave it unassessed (None).
+        violation: bool | None = None
+        detail: str | None = None
+        if scanned:
+            new_fail: set[str] = set()
+            try:
+                cur = await self._compliance.find_by_node(node.id)
+                new_fail = self._failing_ids(cur[0]) if cur else set()
+            except Exception as exc:
+                logger.error("post-scan report read failed for %s: %s", node.id, exc)
+            if prev_reports:
+                newly = sorted(new_fail - prev_fail)
+                if newly:
+                    violation = True
+                    head = ", ".join(newly[:3])
+                    more = "" if len(newly) <= 3 else f" (+{len(newly) - 3} more)"
+                    detail = f"{len(newly)} control(s) now failing: {head}{more}"
+                else:
+                    violation = False
+                    detail = "No control regressed — recorded as evidence, not an alert."
+
+        try:
+            await self._repo.update_violation(event.id, violation, detail)
+        except Exception as exc:
+            logger.error("violation update failed for %s: %s", event.id, exc)
+        event.violation, event.violation_detail = violation, detail
+        await self._broadcast(node, event, phase="assessed",
+                              extra={"violation": violation, "violation_detail": detail})
+
+        # Remediate only a genuine violation (or an unassessed change, to stay
+        # safe when we lack a baseline) on a loop-active node.
+        if closed_loop and violation is not False:
+            self._inflight.add(node.id)
+            await self._remediate_now(node, event)
 
     # ── Background remediation (only when closed loop is enabled) ──────────────
 
-    async def _run_remediation(self, node: Node, event: ConfigChangeEvent) -> None:
+    async def _remediate_now(self, node: Node, event: ConfigChangeEvent) -> None:
         try:
             self._publish(Events.REMEDIATION_TRIGGERED, {
                 "node_id": node.id,
@@ -464,6 +521,8 @@ class ListDetectionEventsUseCase:
                 "suppress_reason": e.suppress_reason,
                 "remediation_event_id": e.remediation_event_id,
                 "remediation_outcome": outcome_by_event.get(e.id),
+                "violation": e.violation,
+                "violation_detail": e.violation_detail,
                 "created_at": e.created_at.isoformat(),
             }
             for e in events
