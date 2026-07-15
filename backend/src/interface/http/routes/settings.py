@@ -24,16 +24,29 @@ class CertificateInfo(BaseModel):
     propagation_job_id: str | None = None
 
 
+class SshKeyScheduleRequest(BaseModel):
+    enabled: bool = False
+    days: int = 90
+
+
 # ── Dependency injection ──────────────────────────────────────────────────────
 
 _tls_cert_uc = None
 _distribute_cert_uc = None
+_ssh_key_status_uc = None
+_rotate_ssh_key_uc = None
+_config_repo = None
 
 
-def set_use_cases(tls_cert_uc=None, distribute_cert_uc=None) -> None:
+def set_use_cases(tls_cert_uc=None, distribute_cert_uc=None,
+                  ssh_key_status_uc=None, rotate_ssh_key_uc=None, config_repo=None) -> None:
     global _tls_cert_uc, _distribute_cert_uc
+    global _ssh_key_status_uc, _rotate_ssh_key_uc, _config_repo
     _tls_cert_uc = tls_cert_uc
     _distribute_cert_uc = distribute_cert_uc
+    _ssh_key_status_uc = ssh_key_status_uc
+    _rotate_ssh_key_uc = rotate_ssh_key_uc
+    _config_repo = config_repo
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -84,3 +97,39 @@ async def propagate_tls_certificate(principal: AuthPrincipal = Depends(require_a
         raise HTTPException(status_code=503, detail="Certificate distribution not available")
     job = await _distribute_cert_uc.execute()
     return {"job_id": job.id}
+
+
+# ── SSH key rotation ──────────────────────────────────────────────────────────
+
+@router.get("/ssh-key", summary="Current Ansible SSH key: fingerprint and rotation status")
+async def get_ssh_key(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Fingerprint, type and rotation schedule of the platform's Ansible SSH key
+    (the credential used to manage every node)."""
+    if _ssh_key_status_uc is None:
+        raise HTTPException(status_code=503, detail="SSH key management not available")
+    return await _ssh_key_status_uc.execute()
+
+
+@router.post("/ssh-key/rotate", summary="Rotate the Ansible SSH key now (admin)")
+async def rotate_ssh_key(principal: AuthPrincipal = Depends(require_admin)):
+    """Generate a new keypair and roll it out with add-before-remove: the new
+    public key is installed and verified on every node before the old one is
+    removed, so the platform never loses access. Returns a per-node report."""
+    if _rotate_ssh_key_uc is None:
+        raise HTTPException(status_code=503, detail="SSH key rotation not available")
+    return await _rotate_ssh_key_uc.execute(actor=getattr(principal, "name", None))
+
+
+@router.put("/ssh-key/schedule", summary="Enable/disable and set automatic SSH key rotation (admin)")
+async def set_ssh_key_schedule(body: SshKeyScheduleRequest,
+                               principal: AuthPrincipal = Depends(require_admin)):
+    """Turn periodic rotation on/off and set its interval in days. Rotation is
+    off by default because it touches every managed node."""
+    if _config_repo is None:
+        raise HTTPException(status_code=503, detail="SSH key management not available")
+    if body.days < 1:
+        raise HTTPException(status_code=422, detail="days must be >= 1")
+    from modules.settings.ssh_key import ROTATE_DAYS_KEY, ROTATE_ENABLED_KEY
+    await _config_repo.set(ROTATE_ENABLED_KEY, "true" if body.enabled else "false")
+    await _config_repo.set(ROTATE_DAYS_KEY, str(body.days))
+    return {"enabled": body.enabled, "days": body.days}

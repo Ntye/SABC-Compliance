@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChevronDown, ChevronRight,
-  Activity, Cpu, Download, FileCode, FileKey, Gauge, LayoutDashboard, Layers,
+  Activity, Cpu, Download, FileCode, FileKey, Gauge, KeyRound, LayoutDashboard, Layers,
   LifeBuoy, Lock, LogOut, Server, ShieldCheck, Terminal,
 } from 'lucide-react'
 import { logout } from '../../lib/api.js'
@@ -40,6 +40,7 @@ function usePlanes(t) {
     { key: 'admin', label: t('nav.planeAdmin'), items: [
       { path: '/infrastructure',  label: t('nav.systemHealth'),   icon: Cpu },
       { path: '/iam',             label: t('nav.accessControl'),  icon: Lock },
+      { path: '/settings/ssh-key', label: t('nav.sshKey'),        icon: KeyRound },
       { path: '/settings/tls',    label: t('nav.tlsCertificate'), icon: FileKey },
     ]},
   ]

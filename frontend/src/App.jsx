@@ -23,6 +23,7 @@ import NodeGroupsPage from './pages/NodeGroupsPage.jsx'
 import NodeGroupDetailPage from './pages/NodeGroupDetailPage.jsx'
 import TiersPage from './pages/TiersPage.jsx'
 import TlsCertificatePage from './pages/TlsCertificatePage.jsx'
+import SshKeyPage from './pages/SshKeyPage.jsx'
 import HelpPage from './pages/HelpPage.jsx'
 
 export default function App() {
@@ -58,6 +59,7 @@ export default function App() {
             {/* Back-compat redirects for the old standalone key route */}
             <Route path="/keys" element={<Navigate to="/iam/keys" replace />} />
             <Route path="/settings/tls" element={<TlsCertificatePage />} />
+            <Route path="/settings/ssh-key" element={<SshKeyPage />} />
             {/* Node Groups */}
             <Route path="/node-groups" element={<NodeGroupsPage />} />
             <Route path="/node-groups/:id" element={<NodeGroupDetailPage />} />

@@ -78,6 +78,10 @@ from modules.compliance_groups.usecases import (
     UpdateComplianceGroupUseCase,
 )
 from modules.settings.usecases import DistributeCertificateUseCase, TlsCertificateUseCase
+from modules.settings.ssh_key import (
+    GetSshKeyStatusUseCase, RotateSshKeyUseCase, SshKeyRotationScheduler,
+)
+from infrastructure.ssh.key_manager import SshKeyManager
 from interface.http.routes import auth as auth_routes
 from interface.http.routes import nodes as nodes_routes
 from interface.http.routes import infrastructure as infrastructure_routes
@@ -497,7 +501,23 @@ async def lifespan(app: FastAPI):
         certs_dir=settings.tls_certs_dir,
         ssh_key_path=settings.ssh_key_path,
     )
-    settings_routes.set_use_cases(tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc)
+    # SSH key rotation — the platform's Ansible key rolled over safely
+    # (add-before-remove across every node). Scheduler is opt-in (config).
+    ssh_key_manager = SshKeyManager(settings.ssh_key_path)
+    rotate_ssh_key_uc = RotateSshKeyUseCase(
+        node_repo=node_repo, ssh_client=ssh_client, key_manager=ssh_key_manager,
+        config_repo=platform_config_repo, event_bus=event_bus,
+    )
+    ssh_key_status_uc = GetSshKeyStatusUseCase(
+        node_repo=node_repo, key_manager=ssh_key_manager, config_repo=platform_config_repo,
+    )
+    settings_routes.set_use_cases(
+        tls_cert_uc=tls_cert_uc, distribute_cert_uc=distribute_cert_uc,
+        ssh_key_status_uc=ssh_key_status_uc, rotate_ssh_key_uc=rotate_ssh_key_uc,
+        config_repo=platform_config_repo,
+    )
+    ssh_key_rotation = SshKeyRotationScheduler(rotate_ssh_key_uc, platform_config_repo)
+    ssh_key_rotation.start()
 
     # -- Tiers (criticality classification; CIS Level → node scope) --
     seed_tiers_uc = SeedSystemTiersUseCase(tier_repo, node_repo)
@@ -626,6 +646,7 @@ async def lifespan(app: FastAPI):
     yield
 
     auto_scan.stop()
+    ssh_key_rotation.stop()
     await engine.dispose()
     logger.info("Shutdown complete")
 

@@ -685,6 +685,20 @@ export async function uploadTlsCertificate(certFile, keyFile) {
   return data
 }
 
+// ── Settings: SSH key rotation ──────────────────────────────────────────────
+
+export async function getSshKey() {
+  return request('GET', '/settings/ssh-key')
+}
+
+export async function rotateSshKey() {
+  return request('POST', '/settings/ssh-key/rotate')
+}
+
+export async function setSshKeySchedule({ enabled, days }) {
+  return request('PUT', '/settings/ssh-key/schedule', { enabled, days })
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 export async function getHealth() {
