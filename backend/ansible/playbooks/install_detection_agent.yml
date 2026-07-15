@@ -181,14 +181,19 @@
         group: root
       notify: Restart detection agent
 
-    # The config carries the shared API key — root-only.
+    # The config carries the shared API key — root-only. The platform renders
+    # the whole file (including the operator-configured watch list) and passes
+    # it as detection_config_yaml, so the dynamic path list can never corrupt
+    # the YAML here. A default keeps the playbook runnable stand-alone.
     - name: Write /etc/compliance-agent/config.yaml
       copy:
         dest: "{{ conf_dir }}/config.yaml"
         mode: "0600"
         owner: root
         group: root
-        content: |
+        content: "{{ detection_config_yaml | default(_default_agent_config) }}"
+      vars:
+        _default_agent_config: |
           # Managed by the SABC compliance platform (install_detection_agent.yml).
           node_hostname: {{ detection_node_hostname }}
 

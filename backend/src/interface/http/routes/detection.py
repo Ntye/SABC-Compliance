@@ -14,7 +14,8 @@ from pydantic import BaseModel
 
 from core.domain.entities import AuthPrincipal
 from core.errors import NotFoundError
-from interface.http.routes.auth import get_current_principal
+from interface.http.routes.auth import get_current_principal, require_admin, require_operator
+from core.errors import ValidationError
 
 router = APIRouter(prefix="/detection", tags=["Detection"])
 
@@ -69,18 +70,37 @@ class ConfigBlobResponse(BaseModel):
     truncated: bool = False
 
 
+class WatchConfigResponse(BaseModel):
+    paths: list[str]
+    hash_only: list[str] = []
+    is_default: bool = False
+
+
+class WatchConfigRequest(BaseModel):
+    paths: list[str]
+    hash_only: list[str] = []
+
+
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
 _list_events_uc = None
 _node_status_uc = None
 _blob_uc = None
+_get_watch_uc = None
+_update_watch_uc = None
+_apply_watch_uc = None
 
 
-def set_use_cases(list_events_uc=None, node_status_uc=None, blob_uc=None) -> None:
+def set_use_cases(list_events_uc=None, node_status_uc=None, blob_uc=None,
+                  get_watch_uc=None, update_watch_uc=None, apply_watch_uc=None) -> None:
     global _list_events_uc, _node_status_uc, _blob_uc
+    global _get_watch_uc, _update_watch_uc, _apply_watch_uc
     _list_events_uc = list_events_uc
     _node_status_uc = node_status_uc
     _blob_uc = blob_uc
+    _get_watch_uc = get_watch_uc
+    _update_watch_uc = update_watch_uc
+    _apply_watch_uc = apply_watch_uc
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -132,3 +152,44 @@ async def get_config_blob(
         return await _blob_uc.execute(sha256)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ── Watch configuration (folders/files monitored by the agents) ───────────────
+
+@router.get("/watch-config", response_model=WatchConfigResponse,
+            summary="Get the folders/files the detection agents monitor")
+async def get_watch_config(principal: AuthPrincipal = Depends(get_current_principal)):
+    """The platform-managed watch list applied to detection agents (falls back
+    to the built-in default set when the operator hasn't customised it)."""
+    if _get_watch_uc is None:
+        raise HTTPException(status_code=503, detail="Detection module not initialised")
+    return await _get_watch_uc.execute()
+
+
+@router.put("/watch-config", response_model=WatchConfigResponse,
+            summary="Update the monitored folders/files (operator)")
+async def update_watch_config(body: WatchConfigRequest,
+                              principal: AuthPrincipal = Depends(require_operator)):
+    """Set the folders/files the agents monitor. Takes effect on newly enrolled
+    agents immediately; use /watch-config/apply to push it to existing nodes."""
+    if _update_watch_uc is None:
+        raise HTTPException(status_code=503, detail="Detection module not initialised")
+    try:
+        return await _update_watch_uc.execute(
+            {"paths": body.paths, "hash_only": body.hash_only},
+            actor=getattr(principal, "name", None),
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/watch-config/apply",
+             summary="Push the current watch config to enrolled nodes (operator)")
+async def apply_watch_config(node_id: str | None = Query(None),
+                             principal: AuthPrincipal = Depends(require_operator)):
+    """Re-run the (idempotent) agent install on every detection-enrolled node —
+    or one node — so it picks up the current watch config and restarts. Returns
+    the launched job(s)."""
+    if _apply_watch_uc is None:
+        raise HTTPException(status_code=503, detail="Detection module not initialised")
+    return await _apply_watch_uc.execute(node_id=node_id, actor=getattr(principal, "name", None))

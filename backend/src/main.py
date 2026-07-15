@@ -475,10 +475,16 @@ async def lifespan(app: FastAPI):
         webhook_api_key=settings.detection_webhook_api_key,
         allowed_source_ips=settings.detection_webhook_source_ip,
     )
+    from modules.detection.watch_config import (
+        GetWatchConfigUseCase, UpdateWatchConfigUseCase, ApplyWatchConfigUseCase,
+    )
     detection_routes.set_use_cases(
         list_events_uc=ListDetectionEventsUseCase(detection_repo, node_repo, compliance_repo),
         node_status_uc=GetNodeDetectionStatusUseCase(detection_repo, node_repo),
         blob_uc=GetConfigBlobUseCase(detection_repo),
+        get_watch_uc=GetWatchConfigUseCase(platform_config_repo),
+        update_watch_uc=UpdateWatchConfigUseCase(platform_config_repo),
+        apply_watch_uc=ApplyWatchConfigUseCase(node_repo, install_detection_agent_uc),
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --

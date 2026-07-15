@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Activity, ChevronDown, FileDiff, FileWarning, RefreshCw, ShieldOff } from 'lucide-react'
+import { Activity, ChevronDown, FileDiff, FileWarning, FolderCog, RefreshCw, ShieldOff } from 'lucide-react'
 import { jobWsUrl, listDetectionEvents, listNodes } from '../lib/api.js'
 import { eventStatus } from '../hooks/usePosture.js'
 import { useT } from '../context/LangContext.jsx'
@@ -8,6 +8,7 @@ import { badge, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import DiffModal from '../components/detection/DiffModal.jsx'
+import WatchConfigPanel from '../components/detection/WatchConfigPanel.jsx'
 import Pagination from '../components/Pagination.jsx'
 import { usePagination } from '../hooks/usePagination.js'
 
@@ -87,6 +88,7 @@ export default function DetectionEventsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(false)
   const [diffEvent, setDiffEvent] = useState(null)
+  const [showWatchConfig, setShowWatchConfig] = useState(false)
   const wsRef = useRef(null)
 
   async function load(filter = nodeFilter) {
@@ -240,8 +242,14 @@ export default function DetectionEventsPage() {
             {refreshing ? <Spinner size={11} /> : <RefreshCw size={11} />}
             {t('common.refresh')}
           </button>
+          <button onClick={() => setShowWatchConfig((v) => !v)} className={btnSm(showWatchConfig)}>
+            <FolderCog size={12} />
+            {t('watchConfig.button')}
+          </button>
         </div>
       </div>
+
+      {showWatchConfig && <WatchConfigPanel onClose={() => setShowWatchConfig(false)} />}
 
       {/* Counters — clickable chips double as the status filter */}
       <div className="flex items-center gap-2.5 mb-4">

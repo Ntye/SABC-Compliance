@@ -354,11 +354,27 @@ class InstallServiceUseCase:
         ]
         src = next((c for c in candidates if os.path.isdir(c)), candidates[-1])
 
+        # Watched folders/files come from the platform-managed watch config so a
+        # freshly installed agent monitors exactly what the operator configured
+        # in the detection plane (falling back to the built-in default set). The
+        # whole agent config is rendered here (not templated in the playbook) so
+        # the dynamic path list can never corrupt the file's YAML.
+        from modules.detection.watch_config import GetWatchConfigUseCase, render_agent_config
+        watch = await GetWatchConfigUseCase(self._config).execute()
+        gateway_url = f"https://{public_host}:{https_port}/api/webhooks/detection"
+        agent_config = render_agent_config(
+            node_hostname=node.hostname, gateway_url=gateway_url, api_key=api_key,
+            paths=watch["paths"], hash_only=watch["hash_only"],
+        )
+
         return {
-            "detection_gateway_url": f"https://{public_host}:{https_port}/api/webhooks/detection",
+            "detection_gateway_url": gateway_url,
             "detection_api_key": api_key,
             "detection_node_hostname": node.hostname,
             "detection_agent_src": src,
+            "detection_watch_paths": watch["paths"],
+            "detection_hash_only_paths": watch["hash_only"],
+            "detection_config_yaml": agent_config,
         }
 
 

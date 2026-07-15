@@ -611,6 +611,20 @@ export async function getNodeDetectionStatus(id) {
   return request('GET', `/detection/nodes/${encodeURIComponent(id)}/status`)
 }
 
+// Watch configuration — the folders/files the detection agents monitor.
+export async function getWatchConfig() {
+  return request('GET', '/detection/watch-config')
+}
+
+export async function updateWatchConfig({ paths, hashOnly }) {
+  return request('PUT', '/detection/watch-config', { paths, hash_only: hashOnly })
+}
+
+export async function applyWatchConfig(nodeId = null) {
+  const qs = nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ''
+  return request('POST', `/detection/watch-config/apply${qs}`)
+}
+
 // Fetch a content-addressed file snapshot by hash for the detection diff modal.
 export async function getConfigBlob(sha256) {
   return request('GET', `/detection/blobs/${encodeURIComponent(sha256)}`)
