@@ -57,7 +57,8 @@ function ActiveResponseCard({ group, onToggled }) {
             <h3 className="text-[13px] font-semibold text-gray-900">Active response</h3>
             <p className="text-[11px] text-gray-500 mt-0.5 max-w-md">
               When on, a detection event for any member server drives the closed remediation
-              loop (Puppet enforce → re-scan) across the whole group automatically.
+              loop automatically: the platform enforces only the control(s) that regressed
+              (Puppet), then re-scans to confirm.
             </p>
           </div>
         </div>
