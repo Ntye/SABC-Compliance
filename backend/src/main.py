@@ -466,6 +466,9 @@ async def lifespan(app: FastAPI):
         config_repo=platform_config_repo,
         node_group_repo=node_group_repo,
         tier_repo=tier_repo,
+        # Active response corrects only the control(s) that drifted (scoped
+        # `puppet apply`), falling back to remediate_uc's full agent pull.
+        enforce_uc=enforce_uc,
         event_bus=event_bus,
         ws_manager=ws_manager,
     )

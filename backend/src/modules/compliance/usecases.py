@@ -955,7 +955,18 @@ class EnforceReferentialUseCase:
         node_id: str | None = None,
         group_id: str | None = None,
         notify_on_complete: bool = False,
+        control_ids: list[str] | None = None,
+        on_complete=None,
     ) -> dict:
+        """Enforce the referential on a node or group.
+
+        ``control_ids`` restricts the applied subset to those referential
+        controls (intersected with the node's tier-and-family scope) instead of
+        the whole tier-applicable set — this is what the closed loop uses to
+        remediate *only* the control(s) that drifted. ``on_complete`` is an
+        ``async (job, node)`` callback invoked per launched job; the closed loop
+        passes one to close its remediation window when the scoped run finishes.
+        """
         if bool(node_id) == bool(group_id):
             raise ValidationError("Provide exactly one of node_id or group_id.")
 
@@ -981,11 +992,14 @@ class EnforceReferentialUseCase:
                 skipped += 1
                 continue
 
-            keys = await self._resolve_keys(node)
+            keys = await self._resolve_keys(node, only=control_ids)
             if not keys:
                 jobs.append({"node_id": nid, "hostname": node.hostname,
                              "status": "skipped",
-                             "reason": "no tier-applicable controls resolved"})
+                             "reason": ("none of the requested controls are in "
+                                        "this node's tier-and-family scope"
+                                        if control_ids else
+                                        "no tier-applicable controls resolved")})
                 skipped += 1
                 continue
 
@@ -997,7 +1011,7 @@ class EnforceReferentialUseCase:
                     "sabc_module_src": self._module_src,
                     "sabc_controls": keys,
                 },
-                "on_complete": self._on_complete if notify_on_complete else None,
+                "on_complete": on_complete or (self._on_complete if notify_on_complete else None),
             })
             jobs.append({"node_id": nid, "hostname": node.hostname,
                          "status": "launched", "job_id": job.id,
@@ -1077,14 +1091,22 @@ class EnforceReferentialUseCase:
         except Exception as exc:  # a notification failure must never break the chain
             logger.error("Failed to record notification '%s': %s", title, exc)
 
-    async def _resolve_keys(self, node: Node) -> list[str]:
-        """The sabc_hardening class keys applicable to *node* (tier × family)."""
+    async def _resolve_keys(self, node: Node, only: list[str] | None = None) -> list[str]:
+        """The sabc_hardening class keys applicable to *node* (tier × family).
+
+        When *only* is given, restrict to those referential control ids
+        (intersected with the tier-and-family scope), so the closed loop can
+        apply just the control(s) that drifted rather than the whole set.
+        """
         plan = await self._resolver.for_node(node)
+        only_set = set(only) if only else None
         keys: list[str] = []
         seen: set[str] = set()
         for spec in plan.specs:
             key_map = await self._key_map(spec.profile_id)
             for cid in spec.applicable_control_ids:
+                if only_set is not None and cid not in only_set:
+                    continue
                 key = key_map.get(cid)
                 if key and key not in seen:
                     seen.add(key)

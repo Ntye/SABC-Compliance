@@ -19,7 +19,10 @@ detection agents, records them as evidence, and re-assesses compliance.
        override: the global switch (``detection_closed_loop_enabled``) or a
        Puppet node group's ``active_response_enabled``. On a validation-only
        tier with no override the platform observes and reports; it never
-       auto-enforces behind the operator's back.
+       auto-enforces behind the operator's back. When it does enforce, it
+       corrects ONLY the control(s) the re-scan found regressed — a tier-scoped
+       ``puppet apply`` of just those classes — falling back to a full agent
+       convergence when no specific control can be pinpointed.
     ⑥ every stored event is broadcast over WebSocket so the dashboard
        updates live (node-<id> channel + the global detection-events feed)
 
@@ -38,7 +41,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from core.domain.entities import ConfigChangeEvent, Node
+from core.domain.entities import ConfigChangeEvent, Node, RemediationEvent
 from core.domain.interfaces import (
     IComplianceRepository, IDetectionRepository, INodeRepository,
 )
@@ -82,11 +85,12 @@ class ReceiveDetectionEventUseCase:
         node_repo: INodeRepository,
         detection_repo: IDetectionRepository,
         compliance_repo: IComplianceRepository,
-        remediate_uc: Any,               # TriggerRemediationUseCase
+        remediate_uc: Any,               # TriggerRemediationUseCase (full agent pull)
         collect_uc: Any = None,          # CollectNodeComplianceUseCase
         config_repo: Any = None,         # IPlatformConfigRepository
         node_group_repo: Any = None,     # INodeGroupRepository
         tier_repo: Any = None,           # ITierRepository
+        enforce_uc: Any = None,          # EnforceReferentialUseCase (scoped puppet apply)
         event_bus: Any = None,
         ws_manager: Any = None,
     ) -> None:
@@ -94,6 +98,7 @@ class ReceiveDetectionEventUseCase:
         self._repo = detection_repo
         self._compliance = compliance_repo
         self._remediate = remediate_uc
+        self._enforce = enforce_uc
         self._collect = collect_uc
         self._config = config_repo
         self._node_groups = node_group_repo
@@ -371,6 +376,7 @@ class ReceiveDetectionEventUseCase:
         # a prior scan we can't prove a regression, so leave it unassessed (None).
         violation: bool | None = None
         detail: str | None = None
+        affected: list[str] = []          # the control(s) that regressed pass→fail
         if scanned:
             new_fail: set[str] = set()
             try:
@@ -379,12 +385,12 @@ class ReceiveDetectionEventUseCase:
             except Exception as exc:
                 logger.error("post-scan report read failed for %s: %s", node.id, exc)
             if prev_reports:
-                newly = sorted(new_fail - prev_fail)
-                if newly:
+                affected = sorted(new_fail - prev_fail)
+                if affected:
                     violation = True
-                    head = ", ".join(newly[:3])
-                    more = "" if len(newly) <= 3 else f" (+{len(newly) - 3} more)"
-                    detail = f"{len(newly)} control(s) now failing: {head}{more}"
+                    head = ", ".join(affected[:3])
+                    more = "" if len(affected) <= 3 else f" (+{len(affected) - 3} more)"
+                    detail = f"{len(affected)} control(s) now failing: {head}{more}"
                 else:
                     violation = False
                     detail = "No control regressed — recorded as evidence, not an alert."
@@ -398,10 +404,16 @@ class ReceiveDetectionEventUseCase:
                               extra={"violation": violation, "violation_detail": detail})
 
         # Remediate only a genuine violation (or an unassessed change, to stay
-        # safe when we lack a baseline) on a loop-active node.
+        # safe when we lack a baseline) on a loop-active node. When the re-scan
+        # pinpointed which control(s) regressed, correct *only* those with a
+        # tier-scoped ``puppet apply``; otherwise fall back to a full agent
+        # convergence (no scoped-enforce wired, or no specific control known).
         if closed_loop and violation is not False:
             self._inflight.add(node.id)
-            await self._remediate_now(node, event)
+            if self._enforce is not None and affected:
+                await self._remediate_scoped(node, event, affected)
+            else:
+                await self._remediate_now(node, event)
 
     # ── Background remediation (only when closed loop is enabled) ──────────────
 
@@ -430,6 +442,74 @@ class ReceiveDetectionEventUseCase:
                                   extra={"error": str(exc)})
         finally:
             self._inflight.discard(node.id)
+
+    # ── Scoped remediation: correct only the control(s) that drifted ───────────
+
+    async def _remediate_scoped(
+        self, node: Node, event: ConfigChangeEvent, control_ids: list[str],
+    ) -> None:
+        """Correct only the control(s) the re-scan found regressed, via a
+        tier-scoped ``puppet apply`` (EnforceReferentialUseCase with
+        ``control_ids``), rather than a full catalogue convergence.
+
+        A pending RemediationEvent is opened *before* the job writes anything and
+        closed when it finishes, so the corrective's own writes fall inside the
+        active-remediation window and are suppressed by the feedback-storm guard
+        (rule (a)) instead of re-entering the loop. The window must always be
+        closed — including when no job launches — or it would suppress the node's
+        future events forever.
+        """
+        rem = RemediationEvent(
+            id=str(uuid.uuid4()),
+            node_id=node.id,
+            puppet_job_id="scoped-enforce",
+            triggered_at=datetime.utcnow(),
+            detection_event_id=event.id,
+        )
+        await self._compliance.save_remediation(rem)  # outcome=pending → window open
+        self._publish(Events.REMEDIATION_TRIGGERED, {
+            "node_id": node.id, "detection_event_id": event.id,
+            "path": event.path, "controls": control_ids,
+        })
+
+        async def _close(outcome: str) -> None:
+            rem.outcome = outcome
+            rem.resources_fixed = len(control_ids) if outcome == "success" else 0
+            rem.completed_at = datetime.utcnow()
+            try:
+                await self._compliance.update_remediation(rem)
+            except Exception as exc:
+                logger.error("scoped remediation close failed for %s: %s", node.id, exc)
+            finally:
+                self._inflight.discard(node.id)
+
+        async def _on_done(job: Any, _node: Any) -> None:
+            outcome = "success" if getattr(job, "status", None) == "success" else "failed"
+            await _close(outcome)
+            self._publish(Events.REMEDIATION_COMPLETED, {
+                "node_id": node.id, "detection_event_id": event.id,
+                "outcome": outcome, "resources_fixed": rem.resources_fixed,
+            })
+            await self._broadcast(node, event, phase="remediation_completed",
+                                  extra={"outcome": outcome,
+                                         "resources_fixed": rem.resources_fixed,
+                                         "controls": control_ids})
+
+        try:
+            result = await self._enforce.execute(
+                node_id=node.id, control_ids=control_ids, on_complete=_on_done,
+            )
+        except Exception as exc:
+            logger.error("Scoped remediation failed to launch for %s: %s", node.id, exc)
+            await _close("failed")
+            await self._broadcast(node, event, phase="remediation_failed",
+                                  extra={"error": str(exc)})
+            return
+
+        # No job launched (e.g. none of the regressed controls fall in this
+        # node's tier scope) → close the window now; _on_done will not fire.
+        if not result or result.get("launched", 0) == 0:
+            await _close("skipped")
 
     # ── Plumbing ──────────────────────────────────────────────────────────────
 
