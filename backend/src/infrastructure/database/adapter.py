@@ -905,7 +905,12 @@ class ComplianceRepository(IComplianceRepository):
             (str(d.get("control_id")), str(d.get("status")))
             for d in (details or [])
         )
-        blob = json.dumps(norm, separators=(",", ":"))
+        # The leading token versions the details *schema* (not the pass/fail
+        # state). Bump it when the stored detail dict gains fields — e.g. the
+        # referential section grouping — so the next scan refreshes each node's
+        # keyframe and persists the enriched details instead of de-duplicating
+        # against a pre-schema keyframe.
+        blob = json.dumps(["v2-sections", norm], separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     @staticmethod

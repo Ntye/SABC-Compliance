@@ -7,7 +7,8 @@ from core.domain.entities import (
     TIER_1_ID, TIER_2_ID, SABC_BASELINE_PROFILE_ID,
     ComplianceGroup, Node, Profile, ProfileControl, Tier,
 )
-from modules.compliance.scan_resolver import ScanPlanResolver
+from modules.compliance.scan_resolver import ScanPlanResolver, numeric_key
+from modules.compliance.usecases import CollectNodeComplianceUseCase
 
 
 # A control matrix spanning both levels and both family scopes.
@@ -146,3 +147,72 @@ class TestGroups:
         by_node = {p.node_id: p for p in plans}
         assert set(by_node["d"].specs[0].applicable_control_ids) == {"c1", "c2"}
         assert set(by_node["r"].specs[0].applicable_control_ids) == {"c1", "c3", "c4"}
+
+
+# ── Section naming (referential grouping, not "Other") ────────────────────────
+
+def _sec(cid, title):
+    return ProfileControl(
+        id=cid, profile_id="std", section_id=cid, section=title, title=title,
+        kind="section", control_id=cid,
+    )
+
+
+def test_numeric_key_drops_trailing_section_zero() -> None:
+    assert numeric_key("JR2.C.1.1.0") == "1.1"          # section heading
+    assert numeric_key("JR2.C.1.1.1.0") == "1.1.1"      # deeper heading
+    assert numeric_key("JR2.C.1.1.1.4") == "1.1.1.4"    # leaf control (no drop)
+    assert numeric_key("JR2.C.2.0") == "2"
+
+
+class TestSectionTitles:
+    def _repo_with_sections(self):
+        controls = [
+            _sec("JR2.C.1.1.0", "Filesystem Configuration"),
+            _sec("JR2.C.1.1.1.0", "Disable unused filesystems"),
+            _c("JR2.C.1.1.1.4", 1, "debian;redhat"),
+        ]
+        repo = FakeProfileRepo()
+        repo.p["std"] = Profile(id="std", name="Standard X", version="2.1.0", controls=controls)
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_spec_maps_section_numbers_to_titles(self) -> None:
+        repo = self._repo_with_sections()
+        n = node("n", "Debian")
+        g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n"])
+        res = ScanPlanResolver(FakeNodeRepo([n]), FakeGroupRepo([g]),
+                               FakeTierRepo(), repo, inspec_dir_for=lambda p: None)
+        spec = (await res.for_node(n)).specs[0]
+        assert spec.section_titles["1.1"] == "Filesystem Configuration"
+        assert spec.section_titles["1.1.1"] == "Disable unused filesystems"
+        # section rows are not themselves scanned
+        assert "JR2.C.1.1.0" not in spec.applicable_control_ids
+
+    def test_scan_detail_groups_under_named_sections_not_other(self) -> None:
+        data = {
+            "profiles": [{
+                "name": "sabc-baseline",
+                "controls": [{
+                    "id": "JR2.C.1.1.1.4",
+                    "title": "Ensure mounting of hfs filesystems is disabled.",
+                    "impact": 0.5, "tags": {"cis_level": 1},
+                    "results": [{"status": "passed"}],
+                }],
+            }],
+            "statistics": {"duration": 1.0},
+        }
+
+        class Spec:
+            section_titles = {"1.1": "Filesystem Configuration",
+                              "1.1.1": "Disable unused filesystems"}
+            inspec_dir = None
+
+        uc = CollectNodeComplianceUseCase(None, None, None)
+        report = uc._scan_to_report(node("n", "Debian"), data, spec=Spec())
+        d = report.details[0]
+        assert d["section"] == "1 · Initial Setup"          # top named, never "Other"
+        assert d["section_titles"] == {
+            "1.1": "Filesystem Configuration",
+            "1.1.1": "Disable unused filesystems",
+        }

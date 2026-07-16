@@ -33,6 +33,16 @@ from modules.tiers.usecases import applicable_controls, resolve_node_tier
 logger = logging.getLogger(__name__)
 
 
+def numeric_key(control_id: Optional[str]) -> str:
+    """Numeric hierarchy key of a referential id, with a trailing section zero
+    dropped: ``JR2.C.1.1.0`` → ``1.1``; ``JR2.C.1.1.1.4`` → ``1.1.1.4``;
+    ``JR2.C.1.0`` → ``1``. Non-numeric segments (``JR2``, ``C``) are ignored."""
+    parts = [p for p in (control_id or "").split(".") if p.isdigit()]
+    while len(parts) > 1 and parts[-1] == "0":
+        parts.pop()
+    return ".".join(parts)
+
+
 @dataclass
 class ProfileScanSpec:
     """One profile to scan a node against, already narrowed to the tier- and
@@ -44,6 +54,10 @@ class ProfileScanSpec:
     compliance_group_name: Optional[str]
     applicable_control_ids: list[str]
     inspec_dir: Optional[str] = None
+    # numeric section key ("1", "1.1", "1.1.1") → section heading title, built
+    # from the profile's section rows so scan results can be grouped under the
+    # referential's own named sections instead of a generic "Other" bucket.
+    section_titles: dict[str, str] = field(default_factory=dict)
 
     @property
     def control_count(self) -> int:
@@ -128,6 +142,16 @@ class ScanPlanResolver:
             for c in tier_ok
             if c.control_id and (family is None or family in c.families())
         ]
+        # Section headings (kind="section") name each level of the hierarchy, so
+        # the scan can label "1.1" with "Filesystem Configuration" and group
+        # under the referential's own top sections rather than "Other".
+        section_titles: dict[str, str] = {}
+        for c in profile.controls:
+            if c.kind == "section":
+                key = numeric_key(c.control_id or c.section_id)
+                title = (c.title or c.section or "").strip()
+                if key and title:
+                    section_titles[key] = title
         return ProfileScanSpec(
             profile_id=profile.id,
             profile_name=profile.name,
@@ -136,6 +160,7 @@ class ScanPlanResolver:
             compliance_group_name=group_name,
             applicable_control_ids=applicable,
             inspec_dir=self._inspec_dir_for(profile),
+            section_titles=section_titles,
         )
 
     # ── Per-group ─────────────────────────────────────────────────────────────

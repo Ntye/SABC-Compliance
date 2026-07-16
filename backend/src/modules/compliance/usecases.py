@@ -395,7 +395,7 @@ class CollectNodeComplianceUseCase:
             snippet = (err or raw or "no output")[-400:]
             return None, f"Scan produced no parseable output: {snippet}"
 
-        report = self._scan_to_report(node, data)
+        report = self._scan_to_report(node, data, spec=spec)
         if not report:
             return None, "Compliance scan returned no controls."
         # Section 6: stamp the scan context so "which servers scanned against
@@ -474,9 +474,12 @@ class CollectNodeComplianceUseCase:
             return "low"
         return "info"
 
-    def _scan_to_report(self, node: Node, data: dict) -> ComplianceReport | None:
+    def _scan_to_report(self, node: Node, data: dict, spec=None) -> ComplianceReport | None:
         details: list[dict] = []
         passed = failed = skipped = 0
+
+        # numeric section key → heading title, from the resolved spec's profile.
+        sec_titles: dict[str, str] = getattr(spec, "section_titles", None) or {}
 
         profile_name: str | None = None
         for prof in data.get("profiles") or []:
@@ -525,15 +528,31 @@ class CollectNodeComplianceUseCase:
                 else:
                     skipped += 1
 
+                # Group under the referential's own named sections. The control
+                # id's numeric ancestors ("1", "1.1", "1.1.1") name each folder
+                # level from the section-title map; the top level names the
+                # section group (never "Other" when the referential has it).
+                cid = ctrl.get("id")
+                num = [p for p in str(cid or "").split(".") if p.isdigit()]
+                ancestors = [".".join(num[:i]) for i in range(1, len(num))]
+                ctrl_sections = {k: sec_titles[k] for k in ancestors if k in sec_titles}
+                top_key = num[0] if num else ""
+                # Top-level group name: the referential's own top section row if it
+                # has one, else the CIS section name (the referential's top-level
+                # numbering is CIS-aligned), so it never collapses to "Other".
+                top_name = sec_titles.get(top_key) or _CIS_SECTIONS.get(top_key)
+                section = f"{top_key} · {top_name}" if top_name else _cis_section(frameworks.get("cis"))
+
                 details.append({
-                    "control_id": ctrl.get("id"),
-                    "title": (ctrl.get("title") or ctrl.get("id") or "").strip(),
+                    "control_id": cid,
+                    "title": (ctrl.get("title") or cid or "").strip(),
                     "status": status,
                     "severity": severity,
                     "impact": impact,
                     "cis_level": cis_level,
                     "frameworks": frameworks,
-                    "section": _cis_section(frameworks.get("cis")),
+                    "section": section,
+                    "section_titles": ctrl_sections,
                     "desc": (ctrl.get("desc") or "").strip()[:600],
                     "message": message[:600],
                 })

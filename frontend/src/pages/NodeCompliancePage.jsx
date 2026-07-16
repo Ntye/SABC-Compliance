@@ -138,15 +138,21 @@ function buildComplianceTree(controls) {
     if (!topMap.has(topName)) topMap.set(topName, { name: topName, secMap: new Map() })
     const top = topMap.get(topName)
 
+    // Folder labels carry the referential's section names ("1.1 · Filesystem
+    // Configuration"), from the section_titles the scan attaches per control,
+    // falling back to the bare number when a heading has no name.
+    const st = ctrl.section_titles || {}
+    const folderLabel = (key) => (key === '__flat' ? '' : (st[key] ? `${key} · ${st[key]}` : key))
+
     const parts = numParts(ctrl.control_id)
     const secKey = parts.length >= 3 ? parts.slice(0, 2).join('.') : '__flat'
     if (!top.secMap.has(secKey))
-      top.secMap.set(secKey, { key: secKey, label: secKey === '__flat' ? '' : secKey, ssMap: new Map() })
+      top.secMap.set(secKey, { key: secKey, label: folderLabel(secKey), ssMap: new Map() })
     const sec = top.secMap.get(secKey)
 
     const ssKey = parts.length >= 4 ? parts.slice(0, 3).join('.') : '__flat'
     if (!sec.ssMap.has(ssKey))
-      sec.ssMap.set(ssKey, { key: ssKey, label: ssKey === '__flat' ? '' : ssKey, controls: [] })
+      sec.ssMap.set(ssKey, { key: ssKey, label: folderLabel(ssKey), controls: [] })
     sec.ssMap.get(ssKey).controls.push(ctrl)
   }
 
