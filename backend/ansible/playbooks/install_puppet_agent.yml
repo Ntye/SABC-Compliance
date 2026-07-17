@@ -463,14 +463,14 @@
           → https://{{ puppet_master }}:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
       when: packages_probe is not skipped
 
-    - name: Restart pe-puppetserver to reload static packages route (probe returned 404)
+    - name: Restart pe-puppetserver to reload static packages route (probe not 200)
       service:
         name: pe-puppetserver
         state: restarted
       delegate_to: pe_master_dynamic
       when: >-
         packages_probe is not skipped
-        and (packages_probe.stdout | default('')) == '404'
+        and (packages_probe.stdout | default('')) != '200'
 
     - name: Wait for pe-puppetserver to be ready after restart
       wait_for:
@@ -482,7 +482,7 @@
       become: no
       when: >-
         packages_probe is not skipped
-        and (packages_probe.stdout | default('')) == '404'
+        and (packages_probe.stdout | default('')) != '200'
 
     # ── Final gate: the repo metadata MUST exist before install.bash runs ─────
     # If it still doesn't, install.bash will 404 on repomd.xml — fail here with a
@@ -535,6 +535,44 @@
         delay: 5
       delegate_to: localhost
       become: no
+
+    # ── Final readiness gate: the packages HTTP ROUTE must serve 200 ──────────
+    # TCP port 8140 opening does NOT mean the static /packages route is ready:
+    # pe-puppetserver accepts connections before it finishes loading its
+    # webserver handlers, so install.bash can still 404 on repomd.xml right
+    # after a restart even though the repodata is already on disk (this is the
+    # "pe_repo 404" enrollment failure). The disk re-check above has already
+    # proven the metadata EXISTS, so a non-200 here is purely a route-not-ready
+    # condition — poll the ACTUAL metadata URL from the primary until it serves
+    # 200 before downloading install.bash.
+    - name: Wait until the pe_repo metadata endpoint serves 200 (el- platforms)
+      shell: >-
+        curl -sk -o /dev/null -w "%{http_code}"
+        https://localhost:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: packages_ready
+      retries: 30
+      delay: 10
+      until: packages_ready.stdout == '200'
+      changed_when: false
+      failed_when: false
+      when: pe_version is defined and (pe_platform | trim | regex_search('^el-')) is not none
+
+    - name: Fail if the pe_repo metadata endpoint never became ready
+      fail:
+        msg: >-
+          The pe_repo metadata endpoint for '{{ pe_platform | trim }}' never
+          returned 200 from the primary ({{ puppet_master }}) after ~5 minutes
+          (last HTTP {{ packages_ready.stdout | default('n/a') }}):
+          https://{{ puppet_master }}:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+          The repodata exists on disk but pe-puppetserver is not serving it.
+          Check `systemctl status pe-puppetserver` and the logs under
+          /var/log/puppetlabs/puppetserver/ on the primary, then re-run.
+      when: >-
+        packages_ready is not skipped
+        and (packages_ready.stdout | default('')) != '200'
 
     # ── Install agent via the PE master's install script ─────────────────────
     # install.bash uses the PE master's FQDN (its certname) in all URLs.
