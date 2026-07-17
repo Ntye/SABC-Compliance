@@ -30,6 +30,15 @@ backup_file() {
   fi
 }
 
+# Record a reverse command so 20_restore.sh can undo a non-file change
+# (directory mode, a newly-created drop-in, a stopped service). File-content and
+# file-mode changes are already reverted from the backup tree; use this only for
+# things a file copy cannot restore.
+undo_add() {
+  mkdir -p "$CRICLO_STATE_DIR"
+  printf '%s\n' "$*" >> "$CRICLO_STATE_DIR/undo.sh"
+}
+
 # Never reload a broken sshd config — that is the one way to lose the box.
 reload_sshd_safe() {
   if sshd -t 2>/tmp/criclo_sshd_test; then

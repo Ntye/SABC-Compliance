@@ -20,8 +20,21 @@ else
   c_warn "No backup set found in $CRICLO_BACKUP_DIR — restoring known drop-ins only"
 fi
 
+c_step "Running recorded undo commands (directory modes, new files, services)"
+if [ -f "$CRICLO_STATE_DIR/undo.sh" ]; then
+  # Reverse order, so nested changes unwind cleanly. Never abort the restore.
+  tac "$CRICLO_STATE_DIR/undo.sh" | while IFS= read -r cmd; do
+    [ -n "$cmd" ] && { eval "$cmd" 2>/dev/null || c_warn "undo step failed: $cmd"; }
+  done
+  rm -f "$CRICLO_STATE_DIR/undo.sh"
+  c_ok "undo log applied"
+else
+  c_info "no undo log present"
+fi
+
 c_step "Removing demo drop-ins"
-rm -f /etc/sysctl.d/99-criclo-demo.conf && sysctl --system >/dev/null 2>&1 || true
+rm -f /etc/sysctl.d/99-criclo-demo.conf /etc/sysctl.d/99-zzz-criclo-demo.conf && sysctl --system >/dev/null 2>&1 || true
+rm -f /etc/ssh/sshd_config.d/00-criclo-demo.conf 2>/dev/null || true
 rm -f /etc/audit/rules.d/criclo-demo.rules && { augenrules --load 2>/dev/null || true; }
 c_ok "drop-ins removed"
 
