@@ -68,7 +68,14 @@
             if [ "$v" -ge 308 ]; then command -v "$p"; exit 0; fi
           fi
         done
-        if command -v dnf  >/dev/null 2>&1; then dnf  install -y python3.11 >/dev/null 2>&1 && command -v python3.11 && exit 0; fi
+        # None >=3.8 present. On EL the module package names vary by minor
+        # version (python3.11/python3.12 vs python39/python38), so cascade.
+        if command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3.11 >/dev/null 2>&1 && command -v python3.11 && exit 0
+          dnf install -y python3.12 >/dev/null 2>&1 && command -v python3.12 && exit 0
+          dnf install -y python39   >/dev/null 2>&1 && command -v python3.9  && exit 0
+          dnf install -y python38   >/dev/null 2>&1 && command -v python3.8  && exit 0
+        fi
         if command -v apt-get >/dev/null 2>&1; then apt-get install -y python3 >/dev/null 2>&1 && command -v python3 && exit 0; fi
         exit 1
       register: agent_py_probe
