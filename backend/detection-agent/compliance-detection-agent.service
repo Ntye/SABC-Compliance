@@ -6,6 +6,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Requires Python 3.7+ (agent.py uses `from __future__ import annotations`).
+# On RHEL/Alma/Rocky 8 the system python3 is 3.6 and will crash the agent with
+# "SyntaxError: future feature annotations is not defined" — point this at
+# python3.11 (or newer) there. Ansible enrolment renders this line dynamically
+# with the interpreter it resolves on the node; this static default suits
+# distros whose /usr/bin/python3 is already 3.7+.
 ExecStart=/usr/bin/python3 /usr/local/lib/compliance-agent/agent.py --config /etc/compliance-agent/config.yaml
 Restart=always
 RestartSec=5
