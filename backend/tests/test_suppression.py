@@ -528,3 +528,50 @@ async def test_get_blob_missing_raises_not_found() -> None:
 async def test_get_blob_empty_hash_rejected() -> None:
     with pytest.raises(ValidationError):
         await GetConfigBlobUseCase(FakeDetectionRepo()).execute("   ")
+
+
+# ── Rule (c): sanctioned write by the platform's own management account ────────
+
+@pytest.mark.asyncio
+async def test_management_actor_write_is_suppressed_not_alert() -> None:
+    # Puppet enforcement runs over SSH as the node's management user (ansible),
+    # so a change attributed to that account is a sanctioned platform action.
+    collect = FakeCollectUC()
+    uc, repo, remediate, _, _ = make_uc(collect=collect)
+
+    result = await run_and_settle(
+        uc, payload(actor={"auid": 1002, "uid": 0, "username": "ansible",
+                           "exe": "/opt/puppetlabs/puppet/bin/puppet", "comm": "puppet"}))
+
+    assert result["status"] == "suppressed"
+    assert result["suppress_reason"] == "platform_actor"
+    assert repo.events[0].suppressed is True
+    # No scan or remediation for our own sanctioned write.
+    assert collect.calls == []
+    assert remediate.calls == []
+
+
+@pytest.mark.asyncio
+async def test_human_actor_write_is_genuine_drift() -> None:
+    # A change by a real user (not the management account) is genuine drift.
+    collect = FakeCollectUC()
+    uc, repo, _, _, _ = make_uc(collect=collect)
+
+    result = await run_and_settle(
+        uc, payload(actor={"auid": 1000, "uid": 1000, "username": "alice",
+                           "exe": "/usr/bin/vim", "comm": "vim"}))
+
+    assert result["status"] == "accepted"
+    assert repo.events[0].suppressed is False
+
+
+@pytest.mark.asyncio
+async def test_missing_actor_is_not_treated_as_platform() -> None:
+    # No attributable actor → cannot claim it was us; stays genuine drift.
+    collect = FakeCollectUC()
+    uc, repo, _, _, _ = make_uc(collect=collect)
+
+    result = await run_and_settle(uc, payload(actor=None))
+
+    assert result["status"] == "accepted"
+    assert repo.events[0].suppressed is False

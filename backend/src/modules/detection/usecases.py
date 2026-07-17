@@ -10,7 +10,9 @@ detection agents, records them as evidence, and re-assesses compliance.
          a. active remediation window (a RemediationEvent with outcome=pending
             exists for the node)      → store suppressed, link, do nothing
          b. puppet_running flag set   → store suppressed (scheduled converge)
-         c. otherwise                 → store live, publish
+         c. actor is the platform's own management account (node ssh_user) →
+            store suppressed (sanctioned enforce/provision write, not drift)
+         d. otherwise                 → store live, publish
             compliance.violation_detected, and ALWAYS launch a compliance
             SCAN so the dashboard reflects the node's true posture
     ⑤ remediation is decoupled from detection: a genuine change re-scans, but
@@ -63,6 +65,23 @@ DETECTION_CLOSED_LOOP_CONFIG_KEY = "detection_closed_loop_enabled"
 
 def _as_bool(raw: Any) -> bool:
     return isinstance(raw, str) and raw.strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _is_management_actor(node: Node, event: ConfigChangeEvent) -> bool:
+    """True when the change was made by the platform's own management account —
+    the node's SSH/automation user (default ``ansible``). Puppet enforcement and
+    provisioning run over SSH as that identity, so a write attributed to it is a
+    sanctioned platform action, not adversarial drift. Matches the resolved
+    login name (``username``, from the audit trail) against the node's ssh_user;
+    degrades to False when no actor could be attributed."""
+    actor = event.actor if isinstance(event.actor, dict) else None
+    if not actor:
+        return False
+    name = str(actor.get("username") or "").strip().lower()
+    if not name:
+        return False
+    mgmt = str(getattr(node, "ssh_user", None) or "ansible").strip().lower()
+    return name == mgmt
 
 
 def _parse_timestamp(raw: Any) -> datetime:
@@ -262,7 +281,14 @@ class ReceiveDetectionEventUseCase:
            never re-trigger — this breaks the detect→fix→detect loop.
         b. puppet_running flag → a scheduled converge is writing: same story,
            minus the link (no platform-driven run to point at).
-        c. otherwise → genuine drift: store live and let the caller trigger.
+        c. management actor → the write was made by the platform's own
+           automation account (the node's SSH/management user, e.g. ``ansible``):
+           a manual "Enforce referential", the initial hardening apply, or a
+           scheduled sweep runs ``puppet apply`` as that account with neither
+           (a) nor (b) active, so without this rule its own corrective writes
+           surface as adversarial drift. A change by our management identity is
+           a sanctioned platform action, recorded as evidence but never an alert.
+        d. otherwise → genuine drift: store live and let the caller trigger.
 
         Baseline snapshots are always stored suppressed — they describe the
         starting state, not a change.
@@ -287,7 +313,11 @@ class ReceiveDetectionEventUseCase:
         if event.puppet_running:
             return {"suppressed": True, "reason": "puppet_run"}
 
-        # (c) genuine drift.
+        # (c) write by the platform's own management/automation account?
+        if _is_management_actor(node, event):
+            return {"suppressed": True, "reason": "platform_actor"}
+
+        # (d) genuine drift.
         return {"suppressed": False, "reason": None}
 
     # ── Closed-loop gate ──────────────────────────────────────────────────────

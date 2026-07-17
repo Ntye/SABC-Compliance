@@ -30,6 +30,7 @@ function StatusBadge({ event, t }) {
     const labels = {
       remediation_pending: t('detection.suppressedRemediation'),
       puppet_run: t('detection.suppressedPuppetRun'),
+      platform_actor: t('detection.suppressedPlatformActor'),
       baseline: t('detection.baseline'),
     }
     return (
