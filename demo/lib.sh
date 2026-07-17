@@ -39,15 +39,27 @@ undo_add() {
   printf '%s\n' "$*" >> "$CRICLO_STATE_DIR/undo.sh"
 }
 
-# Never reload a broken sshd config — that is the one way to lose the box.
+# Apply an sshd config change to the RUNNING daemon safely — or not at all.
+#
+# NEVER restarts sshd. A reload (SIGHUP) makes sshd re-read its config for new
+# connections without ever dropping the listener, so the box stays reachable
+# even if the new config is wrong. A *restart* tears down the listener, and a
+# config that passes `sshd -t` but misbehaves at runtime (or a socket-activated
+# unit that doesn't come back) then leaves the port closed — the one way to lose
+# a remote box, and exactly the lockout this demo must never cause. If the
+# config is invalid we do not touch the daemon at all.
 reload_sshd_safe() {
-  if sshd -t 2>/tmp/criclo_sshd_test; then
-    systemctl reload "$(ssh_service)" 2>/dev/null || systemctl restart "$(ssh_service)"
-    c_ok "sshd configuration valid — reloaded"
-  else
-    c_warn "sshd -t reported an INVALID config; NOT reloading. Details:"
+  if ! sshd -t 2>/tmp/criclo_sshd_test; then
+    c_warn "sshd -t reported an INVALID config; NOT touching the running daemon. Details:"
     cat /tmp/criclo_sshd_test
     return 1
+  fi
+  # Reload only — never restart. A missing/failed reload verb is harmless: the
+  # running daemon keeps serving and the scan reads the on-disk config anyway.
+  if systemctl reload "$(ssh_service)" 2>/dev/null; then
+    c_ok "sshd configuration valid — reloaded (listener never dropped)"
+  else
+    c_warn "could not reload sshd — left the running daemon untouched (on-disk config is what the scan reads)"
   fi
 }
 

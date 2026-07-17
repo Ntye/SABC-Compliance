@@ -3,9 +3,10 @@
 #
 # Applies a curated set of CIS-flagged-but-SAFE weakenings so the "before" score
 # is stable across takes. It deliberately does NOT touch anything that would
-# affect the key aspects of the server: your SSH session stays up (sshd is only
-# reloaded after `sshd -t` passes, and the demo drop-in is auto-removed if it
-# would ever make the config invalid), sudo keeps working, networking and the
+# affect the key aspects of the server: your SSH session stays up because the
+# running sshd is NEVER reloaded or restarted — the weak SSH config is written
+# to disk (which is what the scan reads via `sshd -T`), while the live daemon
+# keeps its current, working config. sudo keeps working, networking and the
 # hostname/IP are untouched, no service is removed. Every file is backed up
 # first; demo/20_restore.sh undoes ALL of it (files, directory modes, new
 # drop-ins) via the backup tree and the recorded undo log.
@@ -72,11 +73,21 @@ KexAlgorithms +diffie-hellman-group14-sha1
 EOF
   fi
 
-  if ! reload_sshd_safe; then
-    c_warn "sshd config invalid with the demo weakenings — reverting SSH group to keep the box reachable"
+  # We DELIBERATELY do NOT reload or restart sshd here. The compliance scan
+  # reads the ON-DISK config (via `sshd -T` / file grep), so the weakened
+  # drop-in above already makes the SSH controls fail — while the running daemon
+  # keeps its current, working config, so this step can never drop your session
+  # or the platform's SSH access. (Reloading is unnecessary for the demo and a
+  # restart is the one way to lose a remote box.) We only make sure the on-disk
+  # config stays PARSEABLE so the scan's `sshd -T` reads it cleanly; if the
+  # weakenings ever made it invalid, we remove them.
+  if sshd -t 2>/tmp/criclo_sshd_test; then
+    c_ok "SSH weakened on disk (running daemon left untouched — session guaranteed safe)"
+  else
+    c_warn "demo SSH weakenings made sshd_config invalid — removing them so the config stays parseable"
     rm -f "${dropd:-/tmp}/00-criclo-demo.conf" 2>/dev/null || true
     [ -e "$CRICLO_BACKUP_DIR/$CRICLO_RUN_TS$f" ] && cp -a "$CRICLO_BACKUP_DIR/$CRICLO_RUN_TS$f" "$f"
-    reload_sshd_safe || c_warn "check sshd manually"
+    sshd -t >/dev/null 2>&1 || c_warn "sshd_config still invalid — check manually (daemon was NOT touched)"
   fi
 fi
 
