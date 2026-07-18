@@ -3,7 +3,7 @@ title: SABC Baseline (generated, multi-OS)
 maintainer: CRICLO
 license: proprietary
 summary: Generated from the unified SABC referential; controls guarded by os.family.
-version: 1.3.0
+version: 1.3.3
 supports:
   - platform-family: debian
   - platform-family: redhat

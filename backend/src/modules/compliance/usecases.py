@@ -243,7 +243,13 @@ class CollectNodeComplianceUseCase:
             if not collected:
                 raise ValidationError(
                     last_reason
-                    or "No applicable controls resolved for this node's tier/groups."
+                    or (
+                        "No applicable controls resolved for this node "
+                        f"(tier '{plan.tier_name}', OS family "
+                        f"'{plan.os_family or node.os_family or 'unknown'}', "
+                        f"{len(plan.specs)} bound profile(s)). Check the node's "
+                        "tier and compliance-group profile bindings."
+                    )
                 )
         else:
             # Legacy single-profile path (back-compat).

@@ -266,6 +266,35 @@ def _script_body(text: str) -> str:
     return _SCRIPT_PRELUDE + text.rstrip() + "\n"
 
 
+def _pkg_guard_script(pkgs: list[str], negate: bool) -> str:
+    """Polarity-correct Puppet `unless` guard for a bare package-query validate.
+
+    The raw query is the wrong guard in both directions: `rpm -q pkg` exits 0
+    exactly when the forbidden package IS installed (so an "…is not installed"
+    control would skip its remediation precisely when it must run), and
+    `dpkg-query -W pkg` exits 0 even for a known-but-removed package (so an
+    "…is installed" control would never install it). This guard checks the real
+    install state and exits 0 = compliant, matching the exec's unless contract.
+    """
+    body = "exit 1" if negate else "continue"
+    tail = "exit 0" if negate else "exit 1"
+    return (
+        "#!/usr/bin/env bash\n"
+        "# Package-state guard (generated): exit 0 = compliant.\n"
+        "pkg_installed() {\n"
+        "  if command -v rpm >/dev/null 2>&1 && rpm -q \"$1\" >/dev/null 2>&1; then return 0; fi\n"
+        "  if command -v dpkg-query >/dev/null 2>&1 \\\n"
+        "     && [ \"$(dpkg-query -W -f='${db:Status-Status}' \"$1\" 2>/dev/null)\" = installed ]; then return 0; fi\n"
+        "  return 1\n"
+        "}\n"
+        f"for p in {' '.join(pkgs)}; do\n"
+        f"  if pkg_installed \"$p\"; then {body}; fi\n"
+        + ("" if negate else f"  {tail}\n")
+        + "done\n"
+        + (f"{tail}\n" if negate else "exit 0\n")
+    )
+
+
 def _puppet_class(control: ProfileControl) -> tuple[str, dict[str, str], list[str]]:
     """Render one Puppet class. Returns (manifest_text, script_files, pending[]).
 
@@ -294,7 +323,12 @@ def _puppet_class(control: ProfileControl) -> tuple[str, dict[str, str], list[st
         guard = ""
         if validate:
             chk_name = f"{key}_{fam}_chk.sh"
-            scripts[chk_name] = _script_body(validate)
+            # A bare package query needs the polarity-correct install-state
+            # guard (see _pkg_guard_script); any other validate runs verbatim.
+            pkg_audit = _package_audit(validate, control.title)
+            scripts[chk_name] = (
+                _pkg_guard_script(*pkg_audit) if pkg_audit else _script_body(validate)
+            )
             guard = (
                 f"    $chk_{fam} = find_file('sabc_hardening/{chk_name}')\n"
             )
@@ -520,8 +554,11 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
 
 
 def _ruby_heredoc(script: str) -> str:
-    indent = "      "
-    return "".join(f"{indent}{ln}\n" for ln in (script.splitlines() or [""]))
+    # Content at column 0, verbatim: Ruby's <<- heredoc only strips indentation
+    # from the TERMINATOR, so indenting the body would prefix every script line
+    # with whitespace — which breaks indentation-sensitive shell (a `<<EOF`
+    # terminator inside a validate script, for instance) on the node.
+    return "".join(f"{ln}\n" for ln in (script.splitlines() or [""]))
 
 
 def generate_inspec_profile(profile: Profile, target_dir: str,

@@ -5,7 +5,7 @@ control 'JR2.C.3.4.2.1' do
   tag control_key: 'jr2_c_3_4_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      dpkg-query -s nftables | grep 'Status: install ok installed'
+dpkg-query -s nftables | grep 'Status: install ok installed'
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -18,8 +18,21 @@ control 'JR2.C.3.4.2.1' do
     end
   end
   if os.redhat?
-    describe package('firewalld') do
-      it { should be_installed }
+    v_redhat = command(<<-'SABC_V'.chomp)
+#!/usr/bin/env bash
+for p in nftables; do
+  rpm -q "$p" >/dev/null 2>&1 || exit 1
+done
+exit 0
+    SABC_V
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

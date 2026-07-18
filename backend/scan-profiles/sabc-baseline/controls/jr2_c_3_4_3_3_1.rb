@@ -5,7 +5,7 @@ control 'JR2.C.3.4.3.3.1' do
   tag control_key: 'jr2_c_3_4_3_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      ip6tables -L -n
+ip6tables -L -n
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,8 +19,7 @@ control 'JR2.C.3.4.3.3.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+ip6tables -L -n
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

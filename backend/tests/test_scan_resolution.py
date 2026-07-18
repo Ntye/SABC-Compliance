@@ -95,6 +95,25 @@ class TestFamily:
         plan = await resolver([n], [g]).for_node(n)
         assert plan.os_family == "redhat"
 
+    async def test_unknown_family_scans_all_controls_not_none(self) -> None:
+        # A node whose enrolment-time OS detection failed carries
+        # os_family='Unknown'. Filtering with that token matches NOTHING and the
+        # node 422s on every scan — the resolver must fall back to family=None
+        # (all controls; the generated artifacts self-guard by family at
+        # runtime on the node).
+        n = node("n1", "Unknown")
+        g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
+        plan = await resolver([n], [g]).for_node(n)
+        assert plan.os_family is None
+        assert set(plan.specs[0].applicable_control_ids) == {"c1", "c2"}  # all L1
+
+    async def test_unknown_family_in_group_plan_also_falls_back(self) -> None:
+        n = node("n1", "el8")   # unrecognised raw token, same failure shape
+        g = ComplianceGroup(id="g", name="G", profile_ids=["std"], node_ids=["n1"])
+        plans = await resolver([n], [g]).for_group(g)
+        assert plans[0].os_family is None
+        assert set(plans[0].specs[0].applicable_control_ids) == {"c1", "c2"}
+
 
 # ── Tier narrowing ────────────────────────────────────────────────────────────
 

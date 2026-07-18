@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-
-{
-     grep -Pq -- '^daemon\b' /etc/group && l_group="daemon" || l_group="root"
-     [ ! -e "/etc/at.allow" ] && touch /etc/at.allow
-     chown root:"$l_group" /etc/at.allow
-     chmod u-x,g-wx,o-rwx /etc/at.allow
-     [ -e "/etc/at.deny" ] && chown root:"$l_group" /etc/at.deny
-     [ -e "/etc/at.deny" ] && chmod u-x,g-wx,o-rwx /etc/at.deny
-}
+rpm -q at >/dev/null 2>&1 || exit 0
+touch /etc/at.allow
+chown root:root /etc/at.allow
+chmod 640 /etc/at.allow
+if [ -f /etc/at.deny ]; then chown root:root /etc/at.deny; chmod 640 /etc/at.deny; fi
+exit 0

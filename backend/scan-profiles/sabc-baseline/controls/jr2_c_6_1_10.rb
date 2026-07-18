@@ -5,12 +5,12 @@ control 'JR2.C.6.1.10' do
   tag control_key: 'jr2_c_6_1_10'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      for f in /etc/security/opasswd /etc/security/opasswd.old; do
-        [ -e "$f" ] || continue
-        [ "$(stat -c '%a %U %G' "$f")" = "600 root root" ] || exit 1
-      done
-      exit 0
+#!/bin/bash
+for f in /etc/security/opasswd /etc/security/opasswd.old; do
+  [ -e "$f" ] || continue
+  [ "$(stat -c '%a %U %G' "$f")" = "600 root root" ] || exit 1
+done
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -24,12 +24,15 @@ control 'JR2.C.6.1.10' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      for f in /etc/security/opasswd /etc/security/opasswd.old; do
-        [ -e "$f" ] || continue
-        [ "$(stat -c '%a %U %G' "$f")" = "600 root root" ] || exit 1
-      done
-      exit 0
+#!/usr/bin/env bash
+for f in /etc/security/opasswd /etc/security/opasswd.old; do
+  [ -e "$f" ] || continue
+  set -- $(stat -Lc '%a %U %G' "$f")
+m=$1 o=$2 g=$3
+  [ "$o" = root ] && [ "$g" = root ] || exit 1
+  [ $(( 8#$m & 8#0177 )) -eq 0 ] || exit 1
+done
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

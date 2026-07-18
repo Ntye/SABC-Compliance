@@ -5,8 +5,8 @@ control 'JR2.C.6.2.4' do
   tag control_key: 'jr2_c_6_2_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      awk -F: '($1=="shadow") {print $NF}' /etc/group
-      awk -F: -v GID="$(awk -F: '($1=="shadow") {print $3}' /etc/group)" '($4==GID) {print $1}' /etc/passwd
+awk -F: '($1=="shadow") {print $NF}' /etc/group
+awk -F: -v GID="$(awk -F: '($1=="shadow") {print $3}' /etc/group)" '($4==GID) {print $1}' /etc/passwd
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -20,8 +20,11 @@ control 'JR2.C.6.2.4' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      awk -F: '($1=="shadow") {print $NF}' /etc/group
-      awk -F: -v GID="$(awk -F: '($1=="shadow") {print $3}' /etc/group)" '($4==GID) {print $1}' /etc/passwd
+#!/usr/bin/env bash
+getent group shadow >/dev/null 2>&1 || exit 101
+[ -z "$(getent group shadow | cut -d: -f4)" ] || exit 1
+awk -F: -v g="$(getent group shadow | cut -d: -f3)" '($4 == g) {print $1}' /etc/passwd | grep -q . && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

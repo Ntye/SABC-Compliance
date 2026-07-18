@@ -5,7 +5,7 @@ control 'JR2.C.3.4.2.3' do
   tag control_key: 'jr2_c_3_4_2_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      nft list tables
+nft list tables
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,8 +19,11 @@ control 'JR2.C.3.4.2.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+#!/usr/bin/env bash
+# N/A when another firewall (firewalld) is the active choice on this node.
+systemctl is-active firewalld.service 2>/dev/null | grep -q '^active' && exit 101
+rpm -q nftables >/dev/null 2>&1 || exit 101
+[ -n "$(nft list tables 2>/dev/null)" ]
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

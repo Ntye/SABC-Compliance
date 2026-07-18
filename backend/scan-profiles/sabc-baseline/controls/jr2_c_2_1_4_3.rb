@@ -5,14 +5,14 @@ control 'JR2.C.2.1.4.3' do
   tag control_key: 'jr2_c_2_1_4_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      dpkg-query -W ntp >/dev/null 2>&1 || dpkg-query -W ntpsec >/dev/null 2>&1 || exit 101
-      for u in ntp ntpsec; do
-        if systemctl is-enabled "$u" 2>/dev/null | grep -q '^enabled'; then
-          systemctl is-active "$u" 2>/dev/null | grep -qx active && exit 0
-        fi
-      done
-      exit 1
+#!/bin/bash
+dpkg-query -W ntp >/dev/null 2>&1 || dpkg-query -W ntpsec >/dev/null 2>&1 || exit 101
+for u in ntp ntpsec; do
+  if systemctl is-enabled "$u" 2>/dev/null | grep -q '^enabled'; then
+    systemctl is-active "$u" 2>/dev/null | grep -qx active && exit 0
+  fi
+done
+exit 1
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -26,8 +26,11 @@ control 'JR2.C.2.1.4.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+#!/usr/bin/env bash
+rpm -q ntp >/dev/null 2>&1 || exit 101
+systemctl is-enabled ntpd.service 2>/dev/null | grep -q enabled || exit 1
+systemctl is-active ntpd.service 2>/dev/null | grep -q '^active' || exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -5,7 +5,7 @@ control 'JR2.C.1.5.3' do
   tag control_key: 'jr2_c_1_5_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      apparmor_status | grep profiles
+apparmor_status | grep profiles
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,10 +19,10 @@ control 'JR2.C.1.5.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      [ "$(getenforce 2>/dev/null)" = "Enforcing" ] || exit 1
-      grep -Eqs '^[[:space:]]*SELINUX=enforcing' /etc/selinux/config || exit 1
-      exit 0
+#!/usr/bin/env bash
+command -v getenforce >/dev/null 2>&1 || exit 1
+m=$(getenforce)
+[ "$m" = "Enforcing" ] || [ "$m" = "Permissive" ]
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

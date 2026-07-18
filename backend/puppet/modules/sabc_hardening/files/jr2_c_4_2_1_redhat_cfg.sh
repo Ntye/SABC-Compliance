@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-
-{
- chmod u-x,og-rwx /etc/ssh/sshd_config
- chown root:root /etc/ssh/sshd_config
- while IFS= read -r -d $'\0' l_file; do
- if [ -e "$l_file" ]; then
- chmod u-x,og-rwx "$l_file"
- chown root:root "$l_file"
- fi
- done < <(find /etc/ssh/sshd_config.d -type f -print0)
-}
+f=/etc/ssh/sshd_config
+[ -e "$f" ] || exit 0
+chown root:root "$f"
+chmod 600 "$f"

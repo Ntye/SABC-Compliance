@@ -5,9 +5,9 @@ control 'JR2.C.4.3.3' do
   tag control_key: 'jr2_c_4_3_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      grep -rEqs '^[[:space:]]*Defaults[[:space:]]+([^#]*,[[:space:]]*)?logfile[[:space:]]*=' /etc/sudoers /etc/sudoers.d 2>/dev/null && exit 0
-      exit 1
+#!/bin/bash
+grep -rEqs '^[[:space:]]*Defaults[[:space:]]+([^#]*,[[:space:]]*)?logfile[[:space:]]*=' /etc/sudoers /etc/sudoers.d 2>/dev/null && exit 0
+exit 1
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -21,9 +21,8 @@ control 'JR2.C.4.3.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      grep -rEqs '^[[:space:]]*Defaults[[:space:]]+([^#]*,[[:space:]]*)?logfile[[:space:]]*=' /etc/sudoers /etc/sudoers.d 2>/dev/null && exit 0
-      exit 1
+#!/usr/bin/env bash
+grep -Ersq '^\s*Defaults\s+([^#]*,\s*)?logfile\s*=' /etc/sudoers /etc/sudoers.d 2>/dev/null
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

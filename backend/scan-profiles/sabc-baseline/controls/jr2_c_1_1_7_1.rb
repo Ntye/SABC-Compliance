@@ -5,7 +5,7 @@ control 'JR2.C.1.1.7.1' do
   tag control_key: 'jr2_c_1_1_7_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      findmnt -kn /home | grep -v 'nodev'
+findmnt -kn /home | grep -v 'nodev'
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,10 @@ control 'JR2.C.1.1.7.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      findmnt -kn /home | grep -v 'nodev'
+#!/usr/bin/env bash
+# N/A when /home is not a separate mount point on this node.
+findmnt -kn /home >/dev/null 2>&1 || exit 101
+findmnt -kn /home | grep -qw nodev
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

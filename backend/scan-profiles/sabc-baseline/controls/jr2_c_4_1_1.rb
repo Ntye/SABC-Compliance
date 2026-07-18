@@ -5,7 +5,7 @@ control 'JR2.C.4.1.1' do
   tag control_key: 'jr2_c_4_1_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      systemctl is-enabled cron
+systemctl is-enabled cron
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,11 @@ control 'JR2.C.4.1.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      systemctl is-enabled cron
+#!/usr/bin/env bash
+rpm -q cronie >/dev/null 2>&1 || exit 101
+systemctl is-enabled crond.service 2>/dev/null | grep -q enabled || exit 1
+systemctl is-active crond.service 2>/dev/null | grep -q '^active' || exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

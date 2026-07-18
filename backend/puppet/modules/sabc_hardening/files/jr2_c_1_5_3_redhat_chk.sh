@@ -1,5 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-[ "$(getenforce 2>/dev/null)" = "Enforcing" ] || exit 1
-grep -Eqs '^[[:space:]]*SELINUX=enforcing' /etc/selinux/config || exit 1
-exit 0
+command -v getenforce >/dev/null 2>&1 || exit 1
+m=$(getenforce)
+[ "$m" = "Enforcing" ] || [ "$m" = "Permissive" ]

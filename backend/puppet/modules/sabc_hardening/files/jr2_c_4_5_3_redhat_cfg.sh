@@ -1,5 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-printf 'TMOUT=900\nreadonly TMOUT\nexport TMOUT\n' > /etc/profile.d/50-sabc-tmout.sh
-chmod 644 /etc/profile.d/50-sabc-tmout.sh
+printf 'typeset -xr TMOUT=900\n' > /etc/profile.d/60-criclo-tmout.sh
 exit 0

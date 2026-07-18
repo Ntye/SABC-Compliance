@@ -5,7 +5,7 @@ control 'JR2.C.1.1.3.2' do
   tag control_key: 'jr2_c_1_1_3_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      findmnt -kn /var | grep -v 'nosuid'
+findmnt -kn /var | grep -v 'nosuid'
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,10 @@ control 'JR2.C.1.1.3.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      findmnt -kn /var | grep -v 'nosuid'
+#!/usr/bin/env bash
+# N/A when /var is not a separate mount point on this node.
+findmnt -kn /var >/dev/null 2>&1 || exit 101
+findmnt -kn /var | grep -qw nosuid
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

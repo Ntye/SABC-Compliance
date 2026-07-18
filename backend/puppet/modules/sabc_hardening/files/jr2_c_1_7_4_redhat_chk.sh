@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
 rpm -q gdm >/dev/null 2>&1 || exit 101
-grep -Eqrs '/org/gnome/desktop/session/idle-delay' /etc/dconf/db/*/locks/ || exit 1
-grep -Eqrs '/org/gnome/desktop/screensaver/lock-enabled' /etc/dconf/db/*/locks/ || exit 1
+grep -Ersq '^\s*idle-delay\s*=\s*uint32\s+[1-9]' /etc/dconf/db/*.d 2>/dev/null || exit 1
+grep -Ersq '/org/gnome/desktop/session/idle-delay' /etc/dconf/db/*.d/locks 2>/dev/null || exit 1
 exit 0

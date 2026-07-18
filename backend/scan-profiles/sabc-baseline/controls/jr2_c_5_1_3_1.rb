@@ -5,17 +5,17 @@ control 'JR2.C.5.1.3.1' do
   tag control_key: 'jr2_c_5_1_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      if [ -d /etc/aide/aide.conf.d ]; then
-        conf_glob='/etc/aide/aide.conf /etc/aide/aide.conf.d/*'
-      else
-        conf_glob='/etc/aide.conf'
-      fi
-      for t in auditctl auditd ausearch aureport autrace augenrules; do
-        p=$(command -v "$t" 2>/dev/null || echo "/usr/sbin/$t")
-        grep -Ehs "^$p[[:space:]]" $conf_glob 2>/dev/null | grep -q 'sha512' || exit 1
-      done
-      exit 0
+#!/bin/bash
+if [ -d /etc/aide/aide.conf.d ]; then
+  conf_glob='/etc/aide/aide.conf /etc/aide/aide.conf.d/*'
+else
+  conf_glob='/etc/aide.conf'
+fi
+for t in auditctl auditd ausearch aureport autrace augenrules; do
+  p=$(command -v "$t" 2>/dev/null || echo "/usr/sbin/$t")
+  grep -Ehs "^$p[[:space:]]" $conf_glob 2>/dev/null | grep -q 'sha512' || exit 1
+done
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -29,17 +29,12 @@ control 'JR2.C.5.1.3.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      if [ -d /etc/aide/aide.conf.d ]; then
-        conf_glob='/etc/aide/aide.conf /etc/aide/aide.conf.d/*'
-      else
-        conf_glob='/etc/aide.conf'
-      fi
-      for t in auditctl auditd ausearch aureport autrace augenrules; do
-        p=$(command -v "$t" 2>/dev/null || echo "/usr/sbin/$t")
-        grep -Ehs "^$p[[:space:]]" $conf_glob 2>/dev/null | grep -q 'sha512' || exit 1
-      done
-      exit 0
+#!/usr/bin/env bash
+rpm -q aide >/dev/null 2>&1 || exit 101
+for t in /usr/sbin/auditctl /usr/sbin/auditd /usr/sbin/ausearch /usr/sbin/aureport /usr/sbin/autrace /usr/sbin/augenrules; do
+  grep -Eq "^\s*${t}\s+.*(sha512|sha256)" /etc/aide.conf /etc/aide.conf.d/*.conf 2>/dev/null || exit 1
+done
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

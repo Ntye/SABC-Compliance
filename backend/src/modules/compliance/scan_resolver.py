@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from core.domain.entities import (
-    SABC_BASELINE_PROFILE_ID, Node, Profile, Tier, normalize_family,
+    OS_FAMILIES, SABC_BASELINE_PROFILE_ID, Node, Profile, Tier, normalize_family,
 )
 from core.domain.interfaces import (
     IComplianceGroupRepository, INodeRepository, IProfileRepository, ITierRepository,
@@ -31,6 +31,21 @@ from core.domain.interfaces import (
 from modules.tiers.usecases import applicable_controls, resolve_node_tier
 
 logger = logging.getLogger(__name__)
+
+
+def _plan_family(os_family: Optional[str]) -> Optional[str]:
+    """The family used to narrow a node's scan plan: 'debian' | 'redhat' | None.
+
+    A node whose enrolment-time OS detection failed carries os_family='Unknown'
+    (or an unrecognised token). ``normalize_family`` passes such tokens through
+    verbatim, and filtering controls with ``'unknown' in c.families()`` matches
+    NOTHING — the node resolves an empty plan and every scan 422s. Since all
+    generated artifacts self-guard by family at runtime (InSpec ``os.debian?`` /
+    ``os.redhat?``, Puppet ``$facts['os']['family']``), the safe behaviour is to
+    keep every control in the plan (family=None) and let the runtime guards on
+    the node decide which branch applies."""
+    fam = normalize_family(os_family)
+    return fam if fam in OS_FAMILIES else None
 
 
 def numeric_key(control_id: Optional[str]) -> str:
@@ -105,7 +120,7 @@ class ScanPlanResolver:
         SABC Baseline so it still scans.
         """
         tier = await resolve_node_tier(node, self._tiers)
-        family = normalize_family(node.os_family)
+        family = _plan_family(node.os_family)
 
         groups = await self._groups.find_for_node(node.id)
         # profile_id → group provenance (first group that binds it).
@@ -174,7 +189,7 @@ class ScanPlanResolver:
             if node is None:
                 continue
             tier = await resolve_node_tier(node, self._tiers)
-            family = normalize_family(node.os_family)
+            family = _plan_family(node.os_family)
             plan = NodeScanPlan(
                 node_id=node.id, hostname=node.hostname, os_family=family,
                 tier_id=tier.id, tier_name=tier.name,

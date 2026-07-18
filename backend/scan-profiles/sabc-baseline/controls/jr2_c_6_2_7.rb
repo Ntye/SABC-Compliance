@@ -5,11 +5,11 @@ control 'JR2.C.6.2.7' do
   tag control_key: 'jr2_c_6_2_7'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      
-      cut -d: -f1 /etc/passwd | sort | uniq -d | while read -r x; do
-       echo "Duplicate login name $x in /etc/passwd"
-      done
+#!/bin/bash
+
+cut -d: -f1 /etc/passwd | sort | uniq -d | while read -r x; do
+ echo "Duplicate login name $x in /etc/passwd"
+done
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -23,11 +23,9 @@ control 'JR2.C.6.2.7' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      
-      cut -d: -f1 /etc/passwd | sort | uniq -d | while read -r x; do
-       echo "Duplicate login name $x in /etc/passwd"
-      done
+#!/usr/bin/env bash
+cut -d: -f1 /etc/passwd | sort | uniq -d | grep -q . && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -31,17 +31,23 @@ logger = logging.getLogger(__name__)
 #        as-is, and Debian-only controls (prelink/AppArmor/ufw/apport) marked
 #        N/A on RHEL — replacing the earlier mechanical apt→dnf derivation.
 # 1.3.1: complete Red Hat authoring from CIS AlmaLinux 8 — 53 controls
-#        authored (rpm/dnf/firewalld/GDM/chrony/sysctl), 119 family-neutral
-#        copied as-is, 34 Debian-only marked N/A; zero apt/dpkg on RHEL.
-# 1.3.2: repair pass over the Red Hat authoring — fixed 24 controls whose
-#        generated RHEL scripts failed `bash -n` (unbalanced parens/tokens in the
-#        verbose CIS-derived audit scripts would have errored at scan/enforce),
-#        and authored SELinux (installed / enforcing, replacing AppArmor) and
-#        firewalld (installed / enabled / default-deny) which were marked N/A —
-#        those are RHEL's primary MAC and firewall mechanisms and must be
-#        enforced, not skipped. All generated RHEL scripts now pass bash -n; the
-#        defensible ufw/standalone-nftables/iptables/ntp N/A calls are unchanged.
-SEED_VERSION = "1.3.2"
+#        authored, 119 family-neutral copied as-is, 34 Debian-only marked N/A.
+# 1.3.2: repair pass over that authoring (bash -n fixes; SELinux/firewalld
+#        authored instead of skipped).
+# 1.3.3: Red Hat cells fully authored as script-form checks from the CIS
+#        AlmaLinux OS 8 Benchmark v4.0.0 workbook via
+#        backend/tools/gen_redhat_cells.py — every cell is one bash script with
+#        exit 0 = compliant / 1 = non-compliant / 101 = not applicable, real EL
+#        package/service/unit names, the authselect/faillock/pwquality PAM
+#        stack, per-control § provenance, and the referential's agreed values
+#        (password reuse 5, sudo timeout 15, TMOUT 900, …). Supersedes the
+#        1.3.0–1.3.2 staged translation: that pass still left 12 Red Hat
+#        scripts referencing apt/dpkg/ufw and kept most cells as prompt-style
+#        text whose combined exit status did not express compliance. ufw and
+#        apport controls are now honestly Applies To = debian (the technology
+#        does not exist on the Red Hat family); AppArmor controls map to their
+#        SELinux equivalents.
+SEED_VERSION = "1.3.3"
 _SEED_MARKER_KEY = "sabc_baseline_seed_version"
 
 _SEED_FILENAME = "sabc_baseline.csv"

@@ -167,6 +167,42 @@ class TestPuppet:
         assert (tmp_path / "manifests" / "l1.pp").exists()
         assert (tmp_path / "manifests" / "l2.pp").exists()
 
+    def test_not_installed_guard_polarity_is_corrected(self, tmp_path) -> None:
+        # `dpkg-query -W pkg` / `rpm -q pkg` exit 0 exactly when the FORBIDDEN
+        # package is installed — used raw as the exec's `unless`, remediation
+        # would be skipped precisely when it must run. The generator must ship
+        # a polarity-correct install-state guard instead.
+        c = control(
+            "JR2.C.9", vdeb="```\n# dpkg-query -W avahi-daemon\n```",
+            cdeb="```\n# apt purge avahi-daemon\n```",
+            vrh="```\n# rpm -q avahi\n```", crh="```\n# dnf remove -y avahi\n```",
+        )
+        c.title = "Ensure Avahi Server is not installed."
+        generate_puppet_module(profile([c]), str(tmp_path))
+        deb = (tmp_path / "files" / "jr2_c_9_debian_chk.sh").read_text()
+        rh = (tmp_path / "files" / "jr2_c_9_redhat_chk.sh").read_text()
+        for chk in (deb, rh):
+            # installed → exit 1 (non-compliant, run configure); absent → exit 0
+            assert "pkg_installed" in chk and "exit 1" in chk and "exit 0" in chk
+            # the raw query must NOT be the whole guard body
+            assert not chk.rstrip().endswith("rpm -q avahi")
+            assert not chk.rstrip().endswith("dpkg-query -W avahi-daemon")
+        # dpkg's exit code lies for known-but-removed packages: the guard must
+        # check the real install state, not the query's exit code.
+        assert "Status-Status" in deb
+
+    def test_installed_required_guard_checks_real_state(self, tmp_path) -> None:
+        c = control(
+            "JR2.C.10", vdeb="```\n# dpkg-query -W sudo\n```",
+            cdeb="```\n# apt install sudo\n```",
+            vrh="```\n# rpm -q sudo\n```", crh="```\n# dnf install -y sudo\n```",
+        )
+        c.title = "Ensure sudo is installed."
+        generate_puppet_module(profile([c]), str(tmp_path))
+        chk = (tmp_path / "files" / "jr2_c_10_debian_chk.sh").read_text()
+        # absent → exit 1 (run configure); installed → exit 0 (skip)
+        assert "pkg_installed" in chk and "Status-Status" in chk
+
     def test_unless_treats_na_exit_code_as_satisfied(self, tmp_path) -> None:
         # A Validate that exits 101 (control not applicable on this node) must
         # NOT trigger Configure — enforcing a GDM fix on a headless server or

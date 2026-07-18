@@ -5,7 +5,7 @@ control 'JR2.C.3.4.3.1.1' do
   tag control_key: 'jr2_c_3_4_3_1_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      apt list iptables iptables-persistent | grep installed
+apt list iptables iptables-persistent | grep installed
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,8 +19,11 @@ control 'JR2.C.3.4.3.1.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+#!/usr/bin/env bash
+# N/A when another firewall (firewalld) is the active choice on this node.
+systemctl is-active firewalld.service 2>/dev/null | grep -q '^active' && exit 101
+systemctl is-enabled nftables.service 2>/dev/null | grep -q enabled && exit 101
+rpm -q iptables iptables-services >/dev/null 2>&1
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

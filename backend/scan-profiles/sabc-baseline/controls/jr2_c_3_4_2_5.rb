@@ -5,13 +5,13 @@ control 'JR2.C.3.4.2.5' do
   tag control_key: 'jr2_c_3_4_2_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
-      dpkg-query -W nftables >/dev/null 2>&1 || exit 101
-      r=$(nft list ruleset 2>/dev/null) || exit 1
-      printf '%s' "$r" | grep -q 'iif "lo" accept' || exit 1
-      printf '%s' "$r" | grep -Eq 'ip saddr 127\.0\.0\.0/8.*drop' || exit 1
-      exit 0
+#!/bin/bash
+systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
+dpkg-query -W nftables >/dev/null 2>&1 || exit 101
+r=$(nft list ruleset 2>/dev/null) || exit 1
+printf '%s' "$r" | grep -q 'iif "lo" accept' || exit 1
+printf '%s' "$r" | grep -Eq 'ip saddr 127\.0\.0\.0/8.*drop' || exit 1
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -25,8 +25,13 @@ control 'JR2.C.3.4.2.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      exit 101
+#!/usr/bin/env bash
+# N/A when another firewall (firewalld) is the active choice on this node.
+systemctl is-active firewalld.service 2>/dev/null | grep -q '^active' && exit 101
+rpm -q nftables >/dev/null 2>&1 || exit 101
+nft list ruleset 2>/dev/null | grep -Eq 'iif "lo" accept' || exit 1
+nft list ruleset 2>/dev/null | grep -Eq 'ip saddr 127\.0\.0\.0/8' || exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

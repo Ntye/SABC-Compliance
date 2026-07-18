@@ -5,9 +5,9 @@ control 'JR2.C.5.1.2.4' do
   tag control_key: 'jr2_c_5_1_2_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
-      exit 0
+#!/bin/bash
+grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -21,9 +21,11 @@ control 'JR2.C.5.1.2.4' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      grep -Ehs '^[[:space:]]*(module\(load="im(tcp|udp)"\)|input\(type="im(tcp|udp)"|\$ModLoad[[:space:]]+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | grep -q . && exit 1
-      exit 0
+#!/usr/bin/env bash
+rpm -q rsyslog >/dev/null 2>&1 || exit 101
+grep -Ersq '^\s*(module\(load="imtcp"\)|module\(load="imudp"\)|\$ModLoad\s+(imtcp|imudp))' /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null && exit 1
+grep -Ersq '^\s*(input\(type="imtcp"|input\(type="imudp"|\$(InputTCPServerRun|UDPServerRun))' /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

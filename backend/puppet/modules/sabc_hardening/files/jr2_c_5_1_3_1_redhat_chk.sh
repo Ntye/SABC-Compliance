@@ -1,12 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-if [ -d /etc/aide/aide.conf.d ]; then
-  conf_glob='/etc/aide/aide.conf /etc/aide/aide.conf.d/*'
-else
-  conf_glob='/etc/aide.conf'
-fi
-for t in auditctl auditd ausearch aureport autrace augenrules; do
-  p=$(command -v "$t" 2>/dev/null || echo "/usr/sbin/$t")
-  grep -Ehs "^$p[[:space:]]" $conf_glob 2>/dev/null | grep -q 'sha512' || exit 1
+rpm -q aide >/dev/null 2>&1 || exit 101
+for t in /usr/sbin/auditctl /usr/sbin/auditd /usr/sbin/ausearch /usr/sbin/aureport /usr/sbin/autrace /usr/sbin/augenrules; do
+  grep -Eq "^\s*${t}\s+.*(sha512|sha256)" /etc/aide.conf /etc/aide.conf.d/*.conf 2>/dev/null || exit 1
 done
 exit 0

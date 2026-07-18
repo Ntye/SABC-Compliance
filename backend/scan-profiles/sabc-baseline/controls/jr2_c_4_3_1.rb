@@ -5,10 +5,10 @@ control 'JR2.C.4.3.1' do
   tag control_key: 'jr2_c_4_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      dpkg-query -W sudo >/dev/null 2>&1 && exit 0
-      dpkg-query -W sudo-ldap >/dev/null 2>&1 && exit 0
-      exit 1
+#!/bin/bash
+dpkg-query -W sudo >/dev/null 2>&1 && exit 0
+dpkg-query -W sudo-ldap >/dev/null 2>&1 && exit 0
+exit 1
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -22,7 +22,11 @@ control 'JR2.C.4.3.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      dnf list sudo
+#!/usr/bin/env bash
+for p in sudo; do
+  rpm -q "$p" >/dev/null 2>&1 || exit 1
+done
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

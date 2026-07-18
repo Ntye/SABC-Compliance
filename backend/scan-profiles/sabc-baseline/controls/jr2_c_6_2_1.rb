@@ -5,7 +5,7 @@ control 'JR2.C.6.2.1' do
   tag control_key: 'jr2_c_6_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      awk -F: '($2 != "x" ) { print $1 " is not set to shadowed passwords "}' /etc/passwd
+awk -F: '($2 != "x" ) { print $1 " is not set to shadowed passwords "}' /etc/passwd
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,9 @@ control 'JR2.C.6.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      awk -F: '($2 != "x" ) { print $1 " is not set to shadowed passwords "}' /etc/passwd
+#!/usr/bin/env bash
+awk -F: '($2 != "x") {print $1}' /etc/passwd | grep -q . && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

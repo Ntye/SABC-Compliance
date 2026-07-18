@@ -10,9 +10,14 @@ control 'JR2.C.2.2.7' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      rpm -q vsftpd
-      systemctl is-enabled vsftpd.service 2>/dev/null | grep 'enabled'
-      systemctl is-active vsftpd.service 2>/dev/null | grep '^active'
+#!/usr/bin/env bash
+installed=0
+for p in vsftpd; do rpm -q "$p" >/dev/null 2>&1 && installed=1; done
+[ "$installed" -eq 0 ] && exit 0
+# Package present (may be a dependency): its units must be neither enabled nor active.
+systemctl is-enabled vsftpd.service 2>/dev/null | grep -q '^enabled' && exit 1
+systemctl is-active vsftpd.service 2>/dev/null | grep -q '^active' && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -5,14 +5,14 @@ control 'JR2.C.3.4.3.3.2' do
   tag control_key: 'jr2_c_3_4_3_3_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
-      systemctl is-enabled nftables 2>/dev/null | grep -q '^enabled' && exit 101
-      command -v ip6tables >/dev/null 2>&1 || exit 1
-      ip6tables -C INPUT -i lo -j ACCEPT >/dev/null 2>&1 || exit 1
-      ip6tables -C OUTPUT -o lo -j ACCEPT >/dev/null 2>&1 || exit 1
-      ip6tables -C INPUT -s ::1 -j DROP >/dev/null 2>&1 || exit 1
-      exit 0
+#!/bin/bash
+systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
+systemctl is-enabled nftables 2>/dev/null | grep -q '^enabled' && exit 101
+command -v ip6tables >/dev/null 2>&1 || exit 1
+ip6tables -C INPUT -i lo -j ACCEPT >/dev/null 2>&1 || exit 1
+ip6tables -C OUTPUT -o lo -j ACCEPT >/dev/null 2>&1 || exit 1
+ip6tables -C INPUT -s ::1 -j DROP >/dev/null 2>&1 || exit 1
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -26,8 +26,14 @@ control 'JR2.C.3.4.3.3.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      exit 101
+#!/bin/bash
+systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101
+systemctl is-enabled nftables 2>/dev/null | grep -q '^enabled' && exit 101
+command -v ip6tables >/dev/null 2>&1 || exit 1
+ip6tables -C INPUT -i lo -j ACCEPT >/dev/null 2>&1 || exit 1
+ip6tables -C OUTPUT -o lo -j ACCEPT >/dev/null 2>&1 || exit 1
+ip6tables -C INPUT -s ::1 -j DROP >/dev/null 2>&1 || exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

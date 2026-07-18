@@ -1,5 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-v=$(grep -Ehs 'TMOUT=' /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc 2>/dev/null | grep -oE 'TMOUT=[0-9]+' | tail -1 | cut -d= -f2)
-[ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 900 ] && exit 0
-exit 1
+t=$(grep -Ersho 'TMOUT=[0-9]+' /etc/profile /etc/profile.d /etc/bashrc 2>/dev/null | grep -Eo '[0-9]+' | tail -n1)
+[ -n "$t" ] && [ "$t" -ge 1 ] && [ "$t" -le 900 ]

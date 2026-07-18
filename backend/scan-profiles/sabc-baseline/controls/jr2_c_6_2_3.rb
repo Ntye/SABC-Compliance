@@ -5,14 +5,14 @@ control 'JR2.C.6.2.3' do
   tag control_key: 'jr2_c_6_2_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      
-      for i in $(cut -s -d: -f4 /etc/passwd | sort -u ); do
-       grep -q -P "^.*?:[^:]*:$i:" /etc/group
-       if [ $? -ne 0 ]; then
-       echo "Group $i is referenced by /etc/passwd but does not exist in /etc/group"
-       fi
-      done
+#!/bin/bash
+
+for i in $(cut -s -d: -f4 /etc/passwd | sort -u ); do
+ grep -q -P "^.*?:[^:]*:$i:" /etc/group
+ if [ $? -ne 0 ]; then
+ echo "Group $i is referenced by /etc/passwd but does not exist in /etc/group"
+ fi
+done
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -26,14 +26,11 @@ control 'JR2.C.6.2.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      
-      for i in $(cut -s -d: -f4 /etc/passwd | sort -u ); do
-       grep -q -P "^.*?:[^:]*:$i:" /etc/group
-       if [ $? -ne 0 ]; then
-       echo "Group $i is referenced by /etc/passwd but does not exist in /etc/group"
-       fi
-      done
+#!/usr/bin/env bash
+for g in $(cut -d: -f4 /etc/passwd | sort -u); do
+  getent group "$g" >/dev/null || exit 1
+done
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

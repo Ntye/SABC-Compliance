@@ -5,11 +5,11 @@ control 'JR2.C.5.1.1.1.2' do
   tag control_key: 'jr2_c_5_1_1_1_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl list-unit-files 2>/dev/null | grep -q '^systemd-journal-remote\.socket' || exit 0
-      [ "$(systemctl is-enabled systemd-journal-remote.socket 2>/dev/null)" = "masked" ] || exit 1
-      systemctl is-active systemd-journal-remote.socket 2>/dev/null | grep -qx active && exit 1
-      exit 0
+#!/bin/bash
+systemctl list-unit-files 2>/dev/null | grep -q '^systemd-journal-remote\.socket' || exit 0
+[ "$(systemctl is-enabled systemd-journal-remote.socket 2>/dev/null)" = "masked" ] || exit 1
+systemctl is-active systemd-journal-remote.socket 2>/dev/null | grep -qx active && exit 1
+exit 0
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -23,11 +23,10 @@ control 'JR2.C.5.1.1.1.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl list-unit-files 2>/dev/null | grep -q '^systemd-journal-remote\.socket' || exit 0
-      [ "$(systemctl is-enabled systemd-journal-remote.socket 2>/dev/null)" = "masked" ] || exit 1
-      systemctl is-active systemd-journal-remote.socket 2>/dev/null | grep -qx active && exit 1
-      exit 0
+#!/usr/bin/env bash
+systemctl is-enabled systemd-journal-remote.socket systemd-journal-remote.service 2>/dev/null | grep -q '^enabled' && exit 1
+systemctl is-active systemd-journal-remote.socket systemd-journal-remote.service 2>/dev/null | grep -q '^active' && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

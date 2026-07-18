@@ -5,7 +5,7 @@ control 'JR2.C.1.5.2' do
   tag control_key: 'jr2_c_1_5_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      grep "^\s*linux" /boot/grub/grub.cfg | grep -v "apparmor=1"
+grep "^\s*linux" /boot/grub/grub.cfg | grep -v "apparmor=1"
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,11 +19,10 @@ control 'JR2.C.1.5.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      # Fail if any current kernel arg disables SELinux (selinux=0 / enforcing=0).
-      if grubby --info=ALL 2>/dev/null | grep -Eq 'selinux=0|enforcing=0'; then exit 1; fi
-      grep -Eqs 'selinux=0|enforcing=0' /etc/default/grub && exit 1
-      exit 0
+#!/usr/bin/env bash
+command -v grubby >/dev/null 2>&1 || exit 101
+grubby --info=ALL 2>/dev/null | grep -Eq '(selinux=0|enforcing=0)' && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -1,4 +1,3 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-grep -Ehs '^[[:space:]]*Compress[[:space:]]*=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf 2>/dev/null | tail -1 | grep -qi 'yes' && exit 0
-exit 1
+grep -Ersq '^\s*Compress=yes' /etc/systemd/journald.conf /etc/systemd/journald.conf.d 2>/dev/null

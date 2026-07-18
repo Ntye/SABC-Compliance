@@ -1,35 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-set_kv() {
-  k="$1"; v="$2"; f="$3"
-  if grep -Eq "^[[:space:]]*#?[[:space:]]*$k[[:space:]]*=" "$f" 2>/dev/null; then
-    sed -ri "s|^[[:space:]]*#?[[:space:]]*($k)[[:space:]]*=.*|\1 = $v|" "$f"
-  else
-    printf '%s = %s\n' "$k" "$v" >> "$f"
-  fi
-}
-
-            f=/etc/security/faillock.conf
-            [ -e "$f" ] || touch "$f"
-            set_kv deny 5 "$f"
-            set_kv unlock_time 900 "$f"
-            cat > /usr/share/pam-configs/sabc-faillock <<'PAMEOF'
-Name: Enforce failed login attempt counter (faillock)
-Default: yes
-Priority: 0
-Auth-Type: Primary
-Auth:
-	[default=die] pam_faillock.so authfail
-Auth-Initial:
-	requisite pam_faillock.so preauth
-PAMEOF
-            cat > /usr/share/pam-configs/sabc-faillock-notify <<'PAMEOF'
-Name: Notify on failed login attempts (faillock)
-Default: yes
-Priority: 1024
-Account-Type: Primary
-Account:
-	required pam_faillock.so
-PAMEOF
-            pam-auth-update --package >/dev/null 2>&1
-            exit 0
+grep -Eq '^\s*deny\s*=' /etc/security/faillock.conf 2>/dev/null \
+  && sed -ri 's/^\s*(#\s*)?deny\s*=.*/deny = 5/' /etc/security/faillock.conf \
+  || printf 'deny = 5\n' >> /etc/security/faillock.conf
+grep -Eq '^\s*unlock_time\s*=' /etc/security/faillock.conf 2>/dev/null \
+  && sed -ri 's/^\s*(#\s*)?unlock_time\s*=.*/unlock_time = 900/' /etc/security/faillock.conf \
+  || printf 'unlock_time = 900\n' >> /etc/security/faillock.conf
+if command -v authselect >/dev/null 2>&1 && authselect current >/dev/null 2>&1; then
+  authselect enable-feature with-faillock 2>/dev/null || true
+  authselect apply-changes 2>/dev/null || true
+fi
+exit 0

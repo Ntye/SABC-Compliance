@@ -1,6 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-[ -e /etc/motd ] || exit 0
-os_id=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-grep -Eqis "(\\\\v|\\\\r|\\\\m|\\\\s|$os_id)" /etc/motd && exit 1
+f=/etc/motd
+[ -e "$f" ] || exit 0
+grep -Eiq '(\\v|\\r|\\m|\\s)' "$f" && exit 1
+for tok in $(. /etc/os-release; echo "$ID"); do
+  grep -iq "$tok" "$f" && exit 1
+done
 exit 0

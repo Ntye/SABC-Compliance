@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-[ -e /etc/motd ] || exit 0
-chown root:root /etc/motd
-chmod 644 /etc/motd
-exit 0
+f=/etc/motd
+[ -e "$f" ] || exit 0
+chown root:root "$f"
+chmod 644 "$f"

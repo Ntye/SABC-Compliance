@@ -10,8 +10,14 @@ control 'JR2.C.2.3.6' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+#!/usr/bin/env bash
+installed=0
+for p in rpcbind; do rpm -q "$p" >/dev/null 2>&1 && installed=1; done
+[ "$installed" -eq 0 ] && exit 0
+# Package present (may be a dependency): its units must be neither enabled nor active.
+systemctl is-enabled rpcbind.socket rpcbind.service 2>/dev/null | grep -q '^enabled' && exit 1
+systemctl is-active rpcbind.socket rpcbind.service 2>/dev/null | grep -q '^active' && exit 1
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

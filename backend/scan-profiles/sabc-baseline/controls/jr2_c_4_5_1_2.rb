@@ -5,7 +5,7 @@ control 'JR2.C.4.5.1.2' do
   tag control_key: 'jr2_c_4_5_1_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      grep PASS_MAX_DAYS /etc/login.defs
+grep PASS_MAX_DAYS /etc/login.defs
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,12 @@ control 'JR2.C.4.5.1.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      grep PASS_MAX_DAYS /etc/login.defs
+#!/usr/bin/env bash
+v=$(awk '/^\s*PASS_MAX_DAYS\b/ {print $2}' /etc/login.defs)
+[ -n "$v" ] || exit 1
+[ "$v" -ge 1 ] && [ "$v" -le 365 ] || exit 1
+bad=$(awk -F: '($2!~/^[!*]/ && ($5>365 || $5 == "" || $5 == -1)) {print $1}' /etc/shadow)
+[ -z "$bad" ]
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

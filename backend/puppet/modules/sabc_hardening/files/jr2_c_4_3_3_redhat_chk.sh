@@ -1,4 +1,3 @@
-#!/bin/bash
+#!/usr/bin/env bash
 shopt -s globstar 2>/dev/null || true
-grep -rEqs '^[[:space:]]*Defaults[[:space:]]+([^#]*,[[:space:]]*)?logfile[[:space:]]*=' /etc/sudoers /etc/sudoers.d 2>/dev/null && exit 0
-exit 1
+grep -Ersq '^\s*Defaults\s+([^#]*,\s*)?logfile\s*=' /etc/sudoers /etc/sudoers.d 2>/dev/null

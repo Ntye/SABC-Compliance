@@ -5,7 +5,7 @@ control 'JR2.C.1.6.2' do
   tag control_key: 'jr2_c_1_6_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-      cat /etc/issue
+cat /etc/issue
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,7 +19,14 @@ control 'JR2.C.1.6.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      cat /etc/issue
+#!/usr/bin/env bash
+f=/etc/issue
+[ -e "$f" ] || exit 0
+grep -Eiq '(\\v|\\r|\\m|\\s)' "$f" && exit 1
+for tok in $(. /etc/os-release; echo "$ID"); do
+  grep -iq "$tok" "$f" && exit 1
+done
+exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do
