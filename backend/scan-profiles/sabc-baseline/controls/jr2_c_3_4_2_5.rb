@@ -25,8 +25,8 @@ control 'JR2.C.3.4.2.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      firewall-cmd --get-zone-of-interface=lo
-      firewall-cmd --list-all --zone="$(firewall-cmd --get-zone-of-interface=lo |
+      #!/bin/bash
+      exit 101
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

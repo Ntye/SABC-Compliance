@@ -3136,114 +3136,89 @@ Run the following command to set the active kernel parameter:
 # sysctl -w kernel.randomize_va_space=2
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.5.8 — Ensure kernel.randomize_va_space is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `kernel.randomize_va_space` is set to `2`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence. 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""kernel.randomize_va_space""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-      l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-      if [ -n ""$l_option_value"" ]; then
-         [ ""$l_file"" = ""$(readlink -e ""$l_ufw_file"")"" ] && \
-         a_output+=("" ** \""$l_file\"" is UFW's IPT_SYSCTL file **"")
-         a_output+=("" - \""$l_parameter_name\"" is set to: \""$l_option_value\""
-in: \""$l_file\"""")
-      fi
-   done
-   [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(kernel.randomize_va_space=2)
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""kernel.randomize_va_space"" is set to: ""2"" in: ""/etc/sysctl.d/60-
-kernel_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `kernel.randomize_va_space = 2`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.5.8 — Ensure kernel.randomize_va_space is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""kernel.randomize_va_space"" l_value=""2""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*([01]|[3-9]|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .conf and edit or
-       add the following line:
+# printf ""
 kernel.randomize_va_space = 2
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""kernel.randomize_va_space = 2"" >> /etc/sysctl.d/60-
-kernel_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+"" >> /etc/sysctl.d/60-kernel_sysctl.conf
+```
 
-    3. Run the following command to load all system configuration filles:
+Run the following command to set the active kernel parameter:
 
-# sysctl --system
-```"
+```
+# sysctl -w kernel.randomize_va_space=2
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten"
 JR2.C.1.4.3,jr2_c_1_4_3,control,Additional Process Hardening,Ensure ptrace_scope is restricted.,debian;redhat,1,CIS-U22:1.5.3,ptrace_scope must be restricted.,"The `ptrace()` system call provides a means by which one process (the ""tracer"") may observe and control the execution of another process (the ""tracee""), and examine and change the tracee's memory and registers.","If one application is compromised, it would be possible for an attacker to attach to other running processes (e.g. Bash, Firefox, SSH sessions, GPG agent, etc) to extract additional credentials and continue to expand the scope of their attack.
 
 Enabling restricted mode will limit the ability of a compromised process to PTRACE_ATTACH on other processes running under the same user. With restricted mode, ptrace will continue to work with root user.","Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
@@ -3326,110 +3301,89 @@ Run the following command to set the active kernel parameter:
 # sysctl -w kernel.yama.ptrace_scope=1
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.5.7 — Ensure kernel.yama.ptrace_scope is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `kernel.yama.ptrace_scope` is set to `1`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence. 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""kernel.yama.ptrace_scope""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""kernel.yama.ptrace_scope=1"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
-- ""kernel.yama.ptrace_scope"" is set to: ""1"" in: ""/etc/sysctl.d/60-
-kernel_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `kernel.yama.ptrace_scope = 1`
 
-  •     If the UFW set value is displayed, and is the correct value, this is considered a
-        passing state. If this value is incorrect, it must be updated in the file shown in the
-        audit script output.
-  •     If multiple lines are returned:
-             o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-             o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-             o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-             o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-             o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.5.7 — Ensure kernel.yama.ptrace_scope is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
+# printf ""
+kernel.yama.ptrace_scope = 1
+"" >> /etc/sysctl.d/60-kernel_sysctl.conf
+```
 
-{
-    l_option=""kernel.yama.ptrace_scope"" l_value=""(1|2|3)""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(0|4-9|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
+Run the following command to set the active kernel parameter:
 
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .conf and edit or
-       add the following line:
+```
+# sysctl -w kernel.yama.ptrace_scope=1
+```
 
-kernel.yama.ptrace_scope = {N}
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""kernel.yama.ptrace_scope = 1"" >> /etc/sysctl.d/60-
-kernel_sysctl.conf
-Note: The example uses kernel.yama.ptrace_scope = 1 but value may be set to 1,
-2, or 3
-
-    3. Run the following command to load all system configuration filles:
-
-# sysctl --system
-```"
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.1.4.4,jr2_c_1_4_4,control,Additional Process Hardening,Ensure Automatic Error Reporting is not enabled.,debian;redhat,1,CIS-U22:1.5.4,Automatic Error Reporting must be disabled.,The Apport Error Reporting Service automatically generates crash reports for debugging.,"Apport collects potentially sensitive data, such as core dumps, stack traces, and log files. They can contain passwords, credit card numbers, serial numbers, and other private material.","Run the following command to verify that the Apport Error Reporting Service is not enabled:
 
 ```
@@ -3546,12 +3500,15 @@ exit 0
 #!/bin/bash
 DEBIAN_FRONTEND=noninteractive apt-get -y install apparmor apparmor-utils >/dev/null
 exit 0
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify SELinux is installed:
 ```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+rpm -q libselinux
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Install SELinux:
+```
+dnf install -y libselinux
+```"
 JR2.C.1.5.2,jr2_c_1_5_2,control,Configure AppArmor,Ensure AppArmor is enabled in the bootloader configuration.,debian;redhat,1,CIS-U22:1.6.1.2,AppArmor must be enabled in the bootloader configuration.,"Configure AppArmor to be enabled at boot time and verify that it has not been overwritten by the bootloader boot parameters.
 
 _Note: This recommendation is designed around the grub bootloader, if LILO or another bootloader is in use in your environment enact equivalent settings._",AppArmor must be enabled at boot time in your bootloader configuration to ensure that the controls it provides are not overridden.,"Run the following commands to verify that all `linux` lines have the `apparmor=1` and `security=apparmor` parameters set:
@@ -3573,12 +3530,24 @@ GRUB_CMDLINE_LINUX=""apparmor=1 security=apparmor""
 Run the following command to update the `grub2` configuration:
 ```
 # update-grub
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify SELinux is not disabled in the bootloader configuration:
+```bash
+#!/bin/bash
+# Fail if any current kernel arg disables SELinux (selinux=0 / enforcing=0).
+if grubby --info=ALL 2>/dev/null | grep -Eq 'selinux=0|enforcing=0'; then exit 1; fi
+grep -Eqs 'selinux=0|enforcing=0' /etc/default/grub && exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Remove SELinux-disabling kernel arguments:
+```bash
+#!/bin/bash
+grubby --update-kernel ALL --remove-args 'selinux=0 enforcing=0' 2>/dev/null || true
+if [ -f /etc/default/grub ]; then
+  sed -ri 's/\bselinux=0\b//g; s/\benforcing=0\b//g' /etc/default/grub
+fi
+exit 0
+```"
 JR2.C.1.5.3,jr2_c_1_5_3,control,Configure AppArmor,Ensure all AppArmor Profiles are in enforce or complain mode.,debian;redhat,1,CIS-U22:1.6.1.3,Set all AppArmor profiles to either enforce or complain mode.,AppArmor profiles define what resources applications are able to access.,"Security configuration requirements vary from site to site. Some sites may mandate a policy that is stricter than the default policy, which is perfectly acceptable. This item is intended to ensure that any policies that exist on the system are activated.","Run the following command and verify that profiles are loaded, and are in either enforce or complain mode:
 ```
 # apparmor_status | grep profiles
@@ -3614,12 +3583,23 @@ Run the following command to set all profiles to complain mode:
 ```
 # aa-complain /etc/apparmor.d/*
 ```
-_Note: Any unconfined processes may need to have a profile created or activated for them and then be restarted_","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+_Note: Any unconfined processes may need to have a profile created or activated for them and then be restarted_","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the SELinux mode is enforcing (running and in config):
+```bash
+#!/bin/bash
+[ ""$(getenforce 2>/dev/null)"" = ""Enforcing"" ] || exit 1
+grep -Eqs '^[[:space:]]*SELINUX=enforcing' /etc/selinux/config || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Set SELinux to enforcing (runtime + persistent):
+```bash
+#!/bin/bash
+setenforce 1 2>/dev/null || true
+if [ -f /etc/selinux/config ]; then
+  sed -ri 's/^[[:space:]]*SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+fi
+exit 0
+```"
 JR2.C.1.6.0,jr2_c_1_6_0,section,Command Line Warning Banners,Command Line Warning Banners,debian;redhat,,,,"Presenting a warning message prior to the normal user login may assist in the prosecution of trespassers on the computer system. Changing some of these login banners also has the side effect of hiding OS version information and other detailed system information from attackers attempting to target specific exploits at a system. The `/etc/motd`, `/etc/issue`, and `/etc/issue.net` files govern warning banners for standard command line logins for both local and remote users.
 
 Guidelines published by the US Department of Defense require that warning messages include at least the name of the organization that owns the system, the fact that the system is subject to monitoring and that such monitoring is in compliance with local statutes, and that use of the system implies consent to such monitoring. It is important that the organization's legal counsel review the content of all messages before any system modifications are made, as these warning messages are inherently site-specific. More information (including citations of relevant case law) can be found at [http://www.justice.gov/criminal/cybercrime/ ](http://www.justice.gov/criminal/cybercrime/ )
@@ -3946,96 +3926,23 @@ Run the following command to remove the gdm3 package:
 
 ```
 # apt purge gdm3
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.1 — Ensure GDM login banner is configured)
-```
-# gsettings writable org.gnome.login-screen banner-message-enable
-# gsettings writable org.gnome.login-screen banner-message-text
-# gsettings get org.gnome.login-screen banner-message-enable
-# gsettings get org.gnome.login-screen banner-message-text
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.1 — Ensure GDM login banner is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines to lock the login banner configuration:
-
-/org/gnome/login-screen/banner-message-enable
-/org/gnome/login-screen/banner-message-text
-Example:
-# printf '%s\n' """" ""/org/gnome/login-screen/banner-message-enable"" \
-""/org/gnome/login-screen/banner-message-text"" >>
-/etc/dconf/db/local.d/locks/60-banner-message
-
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-#!/usr/bin/env bash
-
-{
-    f_key_file_fix()
-    {
-       while IFS= read -r -d $'\0' l_file; do
-          grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-          sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-       done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-    }
-    l_parameter=""banner-message-enable="" l_value=""false""; f_key_file_fix
-    l_parameter=""banner-message-text="" l_value=""(['\""]{2})?""; f_key_file_fix
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines to set the login banner configuration:
-
-[org/gnome/login-screen]
-banner-message-enable=true
-banner-message-text='Type the banner message here.'
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-banner-message""
-   l_banner=""'Authorized uses only. All activity may be monitored and
-reported'""
-   a_keyfile=(""[org/gnome/login-screen]"" ""banner-message-enable=true"" \
-   ""banner-message-text=$l_banner"")
-   if grep -Psq -- '^\h*\[org\/gnome\/login-screen\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*banner-message-enable=true\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/login-screen\]/a banner-message-
-enable=true' ""$l_file""
-      ! grep -Psiq -- '^\h*banner-message-text=[^#\n\r]+' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/login-screen\]/a banner-message-
-text='""$l_banner""'' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf database:
-
-# dconf update
-Note:
-
-   •    banner-message-text should be set in accordance with local site policy
-   •    Users must log out and back in again before the system-wide settings take effect.
-   •    There is no character limit for the banner message. gnome-shell autodetects
-        longer stretches of text and enters two column mode.
-   •    The banner message cannot be read from an external file
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the GDM setting is configured (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs 'banner-message-enable=true' /etc/dconf/db/gdm.d/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+printf '[org/gnome/login-screen]\nbanner-message-enable=true\nbanner-message-text=%s\n' ""'Authorized users only. Activity may be monitored.'"" > /etc/dconf/db/gdm.d/01-banner
+dconf update
+exit 0
 ```"
 JR2.C.1.7.2,jr2_c_1_7_2,control,GNOME Display Manager,Ensure GDM disable-user-list option is enabled.,debian;redhat,1,CIS-U22:1.8.3,"If GDM is installed:
 Disable-user-list must be enabled.","GDM is the GNOME Display Manager which handles graphical login for GNOME based systems.
@@ -4122,77 +4029,23 @@ Run the following command to remove the GNOME package:
 
 ```
 # apt purge gdm3
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.2 — Ensure GDM disable-user-list is configured)
-```
-# gsettings writable org.gnome.login-screen disable-user-list
-# gsettings get org.gnome.login-screen disable-user-list
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.2 — Ensure GDM disable-user-list is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines:
-
-/org/gnome/login-screen/disable-user-list
-Example:
-# printf '%s\n' """" ""/org/gnome/login-screen/disable-user-list"" >>
-/etc/dconf/db/local.d/locks/60-login-screen
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-    l_parameter=""disable-user-list="" l_value=""false""
-    while IFS= read -r -d $'\0' l_file; do
-       grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-       sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-    done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/login-screen]
-disable-user-list=true
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-login-screen""
-   a_keyfile=(""[org/gnome/login-screen]"" ""disable-user-list=true"")
-   if grep -Psq -- '^\h*\[org\/gnome\/login-screen\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*disable-user-list=true\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/login-screen\]/a disable-user-list=true'
-""$l_file""
-      grep -Psiq -- '^\h*disable-user-list=false\b' ""$l_file"" && \
-      sed -ri 's/^\s*(disable-user-list=)(false).*$/\1true/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf databases:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the GDM setting is configured (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs 'disable-user-list=true' /etc/dconf/db/gdm.d/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+printf '[org/gnome/login-screen]\ndisable-user-list=true\n' > /etc/dconf/db/gdm.d/02-login
+dconf update
+exit 0
 ```"
 JR2.C.1.7.3,jr2_c_1_7_3,control,GNOME Display Manager,Ensure GDM screen locks when the user is idle.,debian;redhat,1,CIS-U22:1.8.4,"If GDM is installed:
 Set max value for idle-delay in seconds (between 1 and 900)
@@ -4350,109 +4203,25 @@ Run the following command to update the system databases:
 ```
 # dconf update
 ```
-**Note:** Users must log out and back in again before the system-wide settings take effect.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.3 — Ensure GDM screen lock is configured)
-```
-# gsettings writable org.gnome.desktop.session idle-delay
-# gsettings writable org.gnome.desktop.screensaver lock-delay
-# gsettings get org.gnome.desktop.screensaver lock-delay
-# gsettings get org.gnome.desktop.session idle-delay
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.3 — Ensure GDM screen lock is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines to lock the login banner configuration:
-
-/org/gnome/desktop/session/idle-delay
-/org/gnome/desktop/screensaver/lock-delay
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/session/idle-delay"" \
-""/org/gnome/desktop/screensaver/lock-delay"" >>
-/etc/dconf/db/local.d/locks/60-screensaver
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-   f_key_file_fix()
-   {
-      while IFS= read -r -d $'\0' l_file; do
-         grep -Psiq -- ""^\h*$l_parameter\h+$l_value(\b|\h*$)"" ""$l_file"" && \
-         sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-      done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-   }
-   l_parameter=""idle-delay=uint32"" l_value=""(0|90[1-9]|9[1-9][0-9]|1[0-
-9]{3,})""; f_key_file_fix
-   l_parameter=""lock-delay=uint32"" l_value=""([6-9]|[1-9][0-9]+)"";
-f_key_file_fix
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/session]
-idle-delay=uint32 900
-
-[org/gnome/desktop/screensaver]
-lock-delay=uint32 5
-
-    •   idle-delay=uint32 {n} - Number of seconds of inactivity before the screen goes
-        blank. Should be '900' (15 minutes) or less, and not 0 (disabled)
-    •   lock-delay=uint32 {n} - Number of seconds after the screen is blank before
-        locking the screen. Should be 5 or less
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-screensaver""
-   a_keyfile1=(""[org/gnome/desktop/session]"" ""idle-delay=uint32 900"")
-   a_keyfile2=(""[org/gnome/desktop/screensaver]"" ""lock-delay=uint32 5"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/session\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*idle-delay=' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/session\]/a idle-delay=uint32 900'
-""$l_file""
-      grep -Psiq -- '^\h*idle-delay=uint32\h+(0|90[1-9]|9[1-9][0-9]|[1-9][0-
-9]{3,})\b' \
-      ""$l_file"" && sed -ri 's/^\s*(idle-delay=uint32)\s+([0-9]|[1-9][0-
-9]+).*$/\1 900/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile1[@]}"" >> ""$l_file""
-   fi
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/screensaver\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*lock-delay=' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/screensaver\]/a lock-delay=uint32
-5' ""$l_file""
-      grep -Psiq -- '^\h*lock-delay=uint32\h+([6-9]|[1-9][0-9]+)\b' ""$l_file""
-&& \
-      sed -ri 's/^\s*(lock-delay=uint32)\s+([6-9]|[1-9][0-9]+).*$/\1 5/'
-""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile2[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf database:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+**Note:** Users must log out and back in again before the system-wide settings take effect.","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the GDM idle screen lock is configured (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs 'idle-delay=uint32 [1-9]' /etc/dconf/db/local.d/ /etc/dconf/db/gdm.d/ || exit 1
+grep -Eqrs 'lock-enabled=true' /etc/dconf/db/local.d/ /etc/dconf/db/gdm.d/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d
+printf '[org/gnome/desktop/session]\nidle-delay=uint32 900\n[org/gnome/desktop/screensaver]\nlock-enabled=true\nlock-delay=uint32 5\n' > /etc/dconf/db/local.d/00-screensaver
+dconf update
+exit 0
 ```"
 JR2.C.1.7.4,jr2_c_1_7_4,control,GNOME Display Manager,Ensure GDM screen locks cannot be overridden.,debian;redhat,1,CIS-U22:1.8.5,"If GDM is installed:
 Create files to prevent screen lock override.","GNOME Desktop Manager can make the screen lock automatically whenever the user is idle for some amount of time.
@@ -4588,109 +4357,25 @@ Run the following command to update the system databases:
 ```
 # dconf update
 ```
-**Note:** Users must log out and back in again before the system-wide settings take effect.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.3 — Ensure GDM screen lock is configured)
-```
-# gsettings writable org.gnome.desktop.session idle-delay
-# gsettings writable org.gnome.desktop.screensaver lock-delay
-# gsettings get org.gnome.desktop.screensaver lock-delay
-# gsettings get org.gnome.desktop.session idle-delay
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.3 — Ensure GDM screen lock is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines to lock the login banner configuration:
-
-/org/gnome/desktop/session/idle-delay
-/org/gnome/desktop/screensaver/lock-delay
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/session/idle-delay"" \
-""/org/gnome/desktop/screensaver/lock-delay"" >>
-/etc/dconf/db/local.d/locks/60-screensaver
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-   f_key_file_fix()
-   {
-      while IFS= read -r -d $'\0' l_file; do
-         grep -Psiq -- ""^\h*$l_parameter\h+$l_value(\b|\h*$)"" ""$l_file"" && \
-         sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-      done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-   }
-   l_parameter=""idle-delay=uint32"" l_value=""(0|90[1-9]|9[1-9][0-9]|1[0-
-9]{3,})""; f_key_file_fix
-   l_parameter=""lock-delay=uint32"" l_value=""([6-9]|[1-9][0-9]+)"";
-f_key_file_fix
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/session]
-idle-delay=uint32 900
-
-[org/gnome/desktop/screensaver]
-lock-delay=uint32 5
-
-    •   idle-delay=uint32 {n} - Number of seconds of inactivity before the screen goes
-        blank. Should be '900' (15 minutes) or less, and not 0 (disabled)
-    •   lock-delay=uint32 {n} - Number of seconds after the screen is blank before
-        locking the screen. Should be 5 or less
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-screensaver""
-   a_keyfile1=(""[org/gnome/desktop/session]"" ""idle-delay=uint32 900"")
-   a_keyfile2=(""[org/gnome/desktop/screensaver]"" ""lock-delay=uint32 5"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/session\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*idle-delay=' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/session\]/a idle-delay=uint32 900'
-""$l_file""
-      grep -Psiq -- '^\h*idle-delay=uint32\h+(0|90[1-9]|9[1-9][0-9]|[1-9][0-
-9]{3,})\b' \
-      ""$l_file"" && sed -ri 's/^\s*(idle-delay=uint32)\s+([0-9]|[1-9][0-
-9]+).*$/\1 900/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile1[@]}"" >> ""$l_file""
-   fi
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/screensaver\]' ""$l_file""; then
-      ! grep -Psiq -- '^\h*lock-delay=' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/screensaver\]/a lock-delay=uint32
-5' ""$l_file""
-      grep -Psiq -- '^\h*lock-delay=uint32\h+([6-9]|[1-9][0-9]+)\b' ""$l_file""
-&& \
-      sed -ri 's/^\s*(lock-delay=uint32)\s+([6-9]|[1-9][0-9]+).*$/\1 5/'
-""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile2[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf database:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+**Note:** Users must log out and back in again before the system-wide settings take effect.","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the idle/lock keys are locked (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs '/org/gnome/desktop/session/idle-delay' /etc/dconf/db/*/locks/ || exit 1
+grep -Eqrs '/org/gnome/desktop/screensaver/lock-enabled' /etc/dconf/db/*/locks/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d/locks
+printf '/org/gnome/desktop/session/idle-delay\n/org/gnome/desktop/screensaver/lock-enabled\n/org/gnome/desktop/screensaver/lock-delay\n' > /etc/dconf/db/local.d/locks/00-screensaver
+dconf update
+exit 0
 ```"
 JR2.C.1.7.5,jr2_c_1_7_5,control,GNOME Display Manager,Ensure GDM automatic mounting of removable media is disabled.,debian;redhat,1,CIS-U22:1.8.6,"If GDM is installed:
 Disable automatic mount of removable media in GDM/GNOME.",By default GNOME automatically mounts removable media when inserted as a convenience to the user.,With automounting enabled anyone with physical access could attach a USB drive or disc and have its contents available in system even if they lacked permissions to mount it themselves.,"Run the following script to verify automatic mounting is disabled:
@@ -4865,93 +4550,24 @@ Run the following command to uninstall the GNOME desktop Manager package:
 
 ```
 # apt purge gdm3
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.4 — Ensure GDM automount is configured)
-```
-# gsettings writable org.gnome.desktop.media-handling automount
-# gsettings writable org.gnome.desktop.media-handling automount-open
-# gsettings get org.gnome.desktop.media-handling automount
-# gsettings get org.gnome.desktop.media-handling automount-open
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.4 — Ensure GDM automount is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines:
-
-/org/gnome/desktop/media-handling/automount
-/org/gnome/desktop/media-handling/automount-open
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/media-handling/automount"" \
-""/org/gnome/desktop/media-handling/automount-open"" >> \
-/etc/dconf/db/local.d/locks/60-media-automount
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-    f_key_file_fix()
-    {
-       while IFS= read -r -d $'\0' l_file; do
-          grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-          sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-       done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-    }
-    l_parameter=""automount="" l_value=""true""; f_key_file_fix
-    l_parameter=""automount-open="" l_value=""true""; f_key_file_fix
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/media-handling]
-automount=false
-automount-open=false
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-media-automount""
-   a_keyfile=(""[org/gnome/desktop/media-handling]"" ""automount=false""
-""automount-open=false"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/media-handling\]' ""$l_file"";
-then
-      ! grep -Psiq -- '^\h*automount-open=false\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a automount-
-open=false' ""$l_file""
-      ! grep -Psiq -- '^\h*automount=false\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a
-automount=false' ""$l_file""
-      grep -Psiq -- '^\h*automount=true\b' ""$l_file"" && \
-      sed -ri 's/^\s*(automount=)(true).*$/\1fales/' ""$l_file""
-      grep -Psiq -- '^\h*automount-open=true\b' ""$l_file"" && \
-      sed -ri 's/^\s*(automount-open=)(true).*$/\1fales/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf databases:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the GDM setting is configured (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs 'automount=false' /etc/dconf/db/gdm.d/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d
+printf '[org/gnome/desktop/media-handling]\nautomount=false\nautomount-open=false\n' > /etc/dconf/db/local.d/00-media-automount
+dconf update
+exit 0
 ```"
 JR2.C.1.7.6,jr2_c_1_7_6,control,GNOME Display Manager,Ensure GDM disabling automatic mounting of removable media is not overridden.,debian;redhat,1,CIS-U22:1.8.7,"If GDM is installed:
 Lock the desktop screensaver settings.","By default GNOME automatically mounts removable media when inserted as a convenience to the user
@@ -5079,93 +4695,24 @@ _Example Lock File:_
  echo -e "" - GNOME Desktop Manager package is not installed on the system\n - Recommendation is not applicable""
  fi
 }
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.4 — Ensure GDM automount is configured)
-```
-# gsettings writable org.gnome.desktop.media-handling automount
-# gsettings writable org.gnome.desktop.media-handling automount-open
-# gsettings get org.gnome.desktop.media-handling automount
-# gsettings get org.gnome.desktop.media-handling automount-open
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.4 — Ensure GDM automount is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines:
-
-/org/gnome/desktop/media-handling/automount
-/org/gnome/desktop/media-handling/automount-open
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/media-handling/automount"" \
-""/org/gnome/desktop/media-handling/automount-open"" >> \
-/etc/dconf/db/local.d/locks/60-media-automount
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-    f_key_file_fix()
-    {
-       while IFS= read -r -d $'\0' l_file; do
-          grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-          sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-       done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-    }
-    l_parameter=""automount="" l_value=""true""; f_key_file_fix
-    l_parameter=""automount-open="" l_value=""true""; f_key_file_fix
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/media-handling]
-automount=false
-automount-open=false
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-media-automount""
-   a_keyfile=(""[org/gnome/desktop/media-handling]"" ""automount=false""
-""automount-open=false"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/media-handling\]' ""$l_file"";
-then
-      ! grep -Psiq -- '^\h*automount-open=false\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a automount-
-open=false' ""$l_file""
-      ! grep -Psiq -- '^\h*automount=false\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a
-automount=false' ""$l_file""
-      grep -Psiq -- '^\h*automount=true\b' ""$l_file"" && \
-      sed -ri 's/^\s*(automount=)(true).*$/\1fales/' ""$l_file""
-      grep -Psiq -- '^\h*automount-open=true\b' ""$l_file"" && \
-      sed -ri 's/^\s*(automount-open=)(true).*$/\1fales/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf databases:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the media-automount keys are locked (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs '/org/gnome/desktop/media-handling/automount' /etc/dconf/db/*/locks/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d/locks
+printf '/org/gnome/desktop/media-handling/automount\n/org/gnome/desktop/media-handling/automount-open\n' > /etc/dconf/db/local.d/locks/00-media
+dconf update
+exit 0
 ```"
 JR2.C.1.7.7,jr2_c_1_7_7,control,GNOME Display Manager,Ensure GDM autorun-never is enabled.,debian;redhat,1,CIS-U22:1.8.8,"if GDM is installed:
 autorun-never must be set.",The `autorun-never` setting allows the GNOME Desktop Display Manager to disable autorun through GDM.,Malware on removable media may taking advantage of Autorun features when the media is inserted into a system and execute.,"Run the following script to verify that `autorun-never` is set to `true` for GDM:
@@ -5308,78 +4855,24 @@ autorun-never must be set.",The `autorun-never` setting allows the GNOME Desktop
  # update dconf database
  dconf update
 }
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.5 — Ensure GDM autorun-never is configured)
-```
-# gsettings writable org.gnome.desktop.media-handling autorun-never
-# gsettings get org.gnome.desktop.media-handling autorun-never
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.5 — Ensure GDM autorun-never is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines:
-/org/gnome/desktop/media-handling/autorun-never
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/media-handling/autorun-never"" >> \
-/etc/dconf/db/local.d/locks/60-media-autorun
-
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-    l_parameter=""autorun-never="" l_value=""false""
-    while IFS= read -r -d $'\0' l_file; do
-       grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-       sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-    done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/media-handling]
-autorun-never=true
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-media-autorun""
-   a_keyfile=(""[org/gnome/desktop/media-handling]"" ""autorun-never=true"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/media-handling\]' ""$l_file"";
-then
-      ! grep -Psiq -- '^\h*autorun-never=true\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a autorun-
-never=true' ""$l_file""
-      grep -Psiq -- '^\h*autorun-never=false\b' ""$l_file"" && \
-      sed -ri 's/^\s*(autorun-never=)(false).*$/\1true/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf databases:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the GDM setting is configured (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs 'autorun-never=true' /etc/dconf/db/gdm.d/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d
+printf '[org/gnome/desktop/media-handling]\nautorun-never=true\n' > /etc/dconf/db/local.d/00-media-autorun
+dconf update
+exit 0
 ```"
 JR2.C.1.7.8,jr2_c_1_7_8,control,GNOME Display Manager,Ensure GDM autorun-never is not overridden.,debian;redhat,1,CIS-U22:1.8.9,"If GDM is installed:
 Lock the desktop media-handling settings to prevent override of autorun-never.","The autorun-never setting allows the GNOME Desktop Display Manager to disable autorun through GDM.
@@ -5480,78 +4973,24 @@ Example Lock File:
  echo -e "" - GNOME Desktop Manager package is not installed on the system\n - Recommendation is not applicable""
  fi
 }
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.5 — Ensure GDM autorun-never is configured)
-```
-# gsettings writable org.gnome.desktop.media-handling autorun-never
-# gsettings get org.gnome.desktop.media-handling autorun-never
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §1.8.5 — Ensure GDM autorun-never is configured)
-```
-#!/usr/bin/env bash
-
-{
-    l_dir=""/etc/dconf/profile/""
-    [ ! -d ""$l_dir"" ] && mkdir /etc/dconf/profile/
-    ! grep -Psq '^\h*user-db:user\b' ""$l_dir/user"" && \
-    printf '%s\n' """" ""user-db:user"" >> ""$l_dir/user""
-    ! grep -Psq '^\h*system-db:local\b' ""$l_dir/user"" && \
-    sed -ri '/^\s*user-db:user/a system-db:local' ""$l_dir/user""
-}
-
-    2. Run the following command to create the /etc/dconf/db/local.d/ and
-       /etc/dconf/db/local.d/locks/ directories if either does not exist:
-
-# [ ! -d ""/etc/dconf/db/local.d/locks/"" ] && mkdir -p
-/etc/dconf/db/local.d/locks/
-
-    3. Create or edit a file in /etc/dconf/db/local.d/locks/ and add the following
-       lines:
-/org/gnome/desktop/media-handling/autorun-never
-Example:
-# printf '%s\n' """" ""/org/gnome/desktop/media-handling/autorun-never"" >> \
-/etc/dconf/db/local.d/locks/60-media-autorun
-
-    4. Run the following script to comment out any incorrect settings in a local system-
-       wide database keyfile:
-
-#!/usr/bin/env bash
-
-{
-    l_parameter=""autorun-never="" l_value=""false""
-    while IFS= read -r -d $'\0' l_file; do
-       grep -Psiq -- ""^\h*$l_parameter$l_value(\b|\h*$)"" ""$l_file"" && \
-       sed -ri '/^\s*'""$l_parameter""'/s/^/# /g' ""$l_file""
-    done < <(find /etc/dconf/db -mindepth 2 -maxdepth 2 -type f -print0)
-}
-
-    5. Create or edit a local keyfile for machine-wide settings in '/etc/dconf/db/local.d/`
-       with the following lines:
-
-[org/gnome/desktop/media-handling]
-autorun-never=true
-Example script:
-#!/usr/bin/env bash
-
-{
-   l_file=""/etc/dconf/db/local.d/60-media-autorun""
-   a_keyfile=(""[org/gnome/desktop/media-handling]"" ""autorun-never=true"")
-   if grep -Psq -- '^\h*\[org\/gnome\/desktop\/media-handling\]' ""$l_file"";
-then
-      ! grep -Psiq -- '^\h*autorun-never=true\b' ""$l_file"" && \
-      sed -ri '/^\s*\[org\/gnome\/desktop\/media-handling\]/a autorun-
-never=true' ""$l_file""
-      grep -Psiq -- '^\h*autorun-never=false\b' ""$l_file"" && \
-      sed -ri 's/^\s*(autorun-never=)(false).*$/\1true/' ""$l_file""
-   else
-      printf '%s\n' """" ""${a_keyfile[@]}"" >> ""$l_file""
-   fi
-}
-
-    6. Run the following command to update the dconf databases:
-
-# dconf update
-Note: Users must log out and back in again before the system-wide settings take effect.
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify the autorun-never key is locked (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+grep -Eqrs '/org/gnome/desktop/media-handling/autorun-never' /etc/dconf/db/*/locks/ || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Apply the GDM setting via dconf (N/A if GDM absent):
+```bash
+#!/bin/bash
+rpm -q gdm >/dev/null 2>&1 || exit 101
+mkdir -p /etc/dconf/db/gdm.d/locks /etc/dconf/profile
+grep -qs '^system-db:gdm' /etc/dconf/profile/gdm 2>/dev/null || printf 'user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults\n' > /etc/dconf/profile/gdm
+mkdir -p /etc/dconf/db/local.d/locks
+printf '/org/gnome/desktop/media-handling/autorun-never\n' > /etc/dconf/db/local.d/locks/00-autorun
+dconf update
+exit 0
 ```"
 JR2.C.1.7.9,jr2_c_1_7_9,control,GNOME Display Manager,Ensure XDCMP is not enabled.,debian;redhat,1,CIS-U22:1.8.10,XDCMP must not be enabled.,X Display Manager Control Protocol (XDMCP) is designed to provide authenticated access to display management services for remote displays.,"XDMCP is inherently insecure.
 - XDMCP is not a ciphered protocol. This may allow an attacker to capture keystrokes entered by a user
@@ -6053,19 +5492,15 @@ avahi-daemon unknown ok not-installed not-installed
 # systemctl stop avahi-daaemon.service
 # systemctl stop avahi-daemon.socket
 # apt purge avahi-daemon
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §2.1.2 — Ensure avahi daemon services are not in use)
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0 (rpm/dnf, RHEL package names).
+Verify `avahi` is not installed:
 ```
-# rpm -q avahi
-# systemctl is-enabled avahi-daemon.socket avahi-daemon.service 2>/dev/null |
-# systemctl is-active avahi-daemon.socket avahi-daemon.service 2>/dev/null |
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §2.1.2 — Ensure avahi daemon services are not in use)
+rpm -q avahi
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0 (rpm/dnf, RHEL package names).
+Remove `avahi`:
 ```
-# systemctl stop avahi-daemon.socket avahi-daemon.service
-# dnf remove avahi
-# systemctl stop avahi-daemon.socket avahi-daemon.service
-# systemctl mask avahi-daemon.socket avahi-daemon.service
+systemctl stop avahi-daemon.socket avahi-daemon.service 2>/dev/null || true
+dnf remove -y avahi
 ```"
 JR2.C.2.2.2,jr2_c_2_2_2,control,Special Purpose Services,Ensure CUPS is not installed.,debian;redhat,1,CIS-U22:2.2.3,CUPS must not be installed.,The Common Unix Print System (CUPS) provides the ability to print to both local and network printers. A system running CUPS can also accept print jobs from remote systems and print them to local printers. It also provides a web based remote administration capability.,"If the system does not need to print jobs or accept print jobs from other systems, it is recommended that CUPS be removed to reduce the potential attack surface.","Run the following command to verify `cups` is not Installed:
 ```
@@ -6844,112 +6279,96 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.4 — Ensure net.ipv4.conf.all.send_redirects is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.conf.all.send_redirects` is set to `0`
+- `net.ipv4.conf.default.send_redirects` is set to `0`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence. 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.conf.all.send_redirects""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.conf.all.send_redirects=0"" ""net.ipv4.conf.default.send_redirects=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.conf.all.send_redirects = 0"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.conf.all.send_redirects = 0`
+- `net.ipv4.conf.default.send_redirects = 0`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.4 — Ensure net.ipv4.conf.all.send_redirects is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.conf.all.send_redirects"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.conf.all.send_redirects = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.conf.all.send_redirects = 0"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv4.conf.default.send_redirects = 0
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
 
-# sysctl --system
-```"
+```
+# {
+ sysctl -w net.ipv4.conf.all.send_redirects=0
+ sysctl -w net.ipv4.conf.default.send_redirects=0
+ sysctl -w net.ipv4.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten"
 JR2.C.3.2.2,jr2_c_3_2_2,control,Network Parameters (Host Only),Ensure IP forwarding is disabled.,debian;redhat,1,CIS-U22:3.2.2,"Must be disabled.
 net.ipv4.ip_forward = 0
 net.ipv6.conf.all.forwarding = 0",The `net.ipv4.ip_forward` and `net.ipv6.conf.all.forwarding` flags are used to tell the system whether it can forward packets or not.,"Setting `net.ipv4.ip_forward` and `net.ipv6.conf.all.forwarding` to `0` ensures that a system with multiple interfaces (for example, a hard proxy), will never be able to forward packets, and therefore, never serve as a router.","Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
@@ -7058,111 +6477,115 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.1 — Ensure net.ipv4.ip_forward is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.ip_forward` is set to `0`
+- `net.ipv6.conf.all.forwarding` is set to `0`
+
+**Note:**
+- kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+- IPv6 kernel parameters only apply to systems where IPv6 is enabled
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.ip_forward""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.ip_forward=0"" ""net.ipv6.conf.all.forwarding=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
-    - ""net.ipv4.ip_forward = 0"" is set in: ""/etc/sysctl.d/60-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.ip_forward = 0`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.1 — Ensure net.ipv4.ip_forward is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.ip_forward"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.ip_forward = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.ip_forward = 0"" >> /etc/sysctl.d/60-
-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
 
-# sysctl --system
-```"
+```
+# {
+ sysctl -w net.ipv4.ip_forward=0
+ sysctl -w net.ipv4.route.flush=1
+}
+```
+
+**-IF-** IPv6 is enabled on the system:
+
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv6.conf.all.forwarding = 0`
+
+_Example:_
+```
+# printf ""
+net.ipv6.conf.all.forwarding = 0
+"" >> /etc/sysctl.d/60-netipv6_sysctl.conf
+```
+
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv6.conf.all.forwarding=0
+ sysctl -w net.ipv6.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.0,jr2_c_3_3_0,section,Network Parameters (Host and Router),Network Parameters (Host and Router),debian;redhat,,,,"The following network parameters are intended for use on both host only and router systems. A system acts as a router if it has at least two interfaces and is configured to perform routing functions.
 
 **Note:**
@@ -7292,112 +6715,122 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.14 — Ensure net.ipv4.conf.all.accept_source_route is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.conf.all.accept_source_route` is set to `0`
+- `net.ipv4.conf.default.accept_source_route` is set to `0`
+- `net.ipv6.conf.all.accept_source_route` is set to `0`
+- `net.ipv6.conf.default.accept_source_route` is set to `0`
+
+**Note:** 
+- kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+- IPv6 kernel parameters only apply to systems where IPv6 is enabled 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.conf.all.accept_source_route""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.conf.all.accept_source_route=0"" ""net.ipv4.conf.default.accept_source_route=0"" ""net.ipv6.conf.all.accept_source_route=0"" ""net.ipv6.conf.default.accept_source_route=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.conf.all.accept_source_route = 0"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.conf.all.accept_source_route = 0`
+- `net.ipv4.conf.default.accept_source_route = 0`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.14 — Ensure net.ipv4.conf.all.accept_source_route is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.conf.all.accept_source_route"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.conf.all.accept_source_route = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.conf.all.accept_source_route = 0"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv4.conf.default.accept_source_route = 0
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv4.conf.all.accept_source_route=0
+ sysctl -w net.ipv4.conf.default.accept_source_route=0
+ sysctl -w net.ipv4.route.flush=1
+}
+```
 
-# sysctl --system
-```"
+**-IF-** IPv6 is enabled on the system:
+
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv6.conf.all.accept_source_route = 0`
+- `net.ipv6.conf.default.accept_source_route = 0`
+
+_Example:_
+```
+# printf ""
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+"" >> /etc/sysctl.d/60-netipv6_sysctl.conf
+```
+
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv6.conf.all.accept_source_route=0
+ sysctl -w net.ipv6.conf.default.accept_source_route=0
+ sysctl -w net.ipv6.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.2,jr2_c_3_3_2,control,Network Parameters (Host and Router),Ensure ICMP redirects are not accepted.,debian;redhat,1,CIS-U22:3.3.2,"net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
 
@@ -7517,112 +6950,123 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.8 — Ensure net.ipv4.conf.all.accept_redirects is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.conf.all.accept_redirects` is set to `0`
+- `net.ipv4.conf.default.accept_redirects` is set to `0`
+- `net.ipv6.conf.all.accept_redirects` is set to `0`
+- `net.ipv6.conf.default.accept_redirects` is set to `0`
+
+**Note:** 
+- kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+- IPv6 kernel parameters only apply to systems where IPv6 is enabled 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.conf.all.accept_redirects""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.conf.all.accept_redirects=0"" ""net.ipv4.conf.default.accept_redirects=0"" ""net.ipv6.conf.all.accept_redirects=0"" ""net.ipv6.conf.default.accept_redirects=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.conf.all.accept_redirects = 0"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.conf.all.accept_redirects = 0`
+- `net.ipv4.conf.default.accept_redirects = 0`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.8 — Ensure net.ipv4.conf.all.accept_redirects is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.conf.all.accept_redirects"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.conf.all.accept_redirects = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.conf.all.accept_redirects = 0"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv4.conf.default.accept_redirects = 0
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
 
-# sysctl --system
-```"
+```
+# {
+ sysctl -w net.ipv4.conf.all.accept_redirects=0
+ sysctl -w net.ipv4.conf.default.accept_redirects=0
+ sysctl -w net.ipv4.route.flush=1
+}
+```
+
+**-IF-** IPv6 is enabled on the system:
+
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv6.conf.all.accept_redirects = 0`
+- `net.ipv6.conf.default.accept_redirects = 0`
+
+_Example:_
+```
+# printf ""
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+"" >> /etc/sysctl.d/60-netipv6_sysctl.conf
+```
+
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv6.conf.all.accept_redirects=0
+ sysctl -w net.ipv6.conf.default.accept_redirects=0
+ sysctl -w net.ipv6.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.3,jr2_c_3_3_3,control,Network Parameters (Host and Router),Ensure secure ICMP redirects are not accepted.,debian;redhat,1,CIS-U22:3.3.3,"net.ipv4.conf.all.secure_redirects = 0
 net.ipv4.conf.default.secure_redirects = 0","Secure ICMP redirects are the same as ICMP redirects, except they come from gateways listed on the default gateway list. It is assumed that these gateways are known to your system, and that they are likely to be secure.",It is still possible for even known gateways to be compromised. Setting `net.ipv4.conf.all.secure_redirects` and `net.ipv4.conf.default.secure_redirects` to `0` protects the system from routing table updates by possibly compromised known gateways.,"Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
 - `net.ipv4.conf.all.secure_redirects` is set to `0`
@@ -7710,112 +7154,95 @@ Run the following commands to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.10 — Ensure net.ipv4.conf.all.secure_redirects is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.conf.all.secure_redirects` is set to `0`
+- `net.ipv4.conf.default.secure_redirects` is set to `0`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.conf.all.secure_redirects""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.conf.all.secure_redirects=0"" ""net.ipv4.conf.default.secure_redirects=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.conf.all.secure_redirects = 0"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.conf.all.secure_redirects = 0`
+- `net.ipv4.conf.default.secure_redirects = 0`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.10 — Ensure net.ipv4.conf.all.secure_redirects is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.conf.all.secure_redirects"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.conf.all.secure_redirects = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.conf.all.secure_redirects = 0"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv4.conf.default.secure_redirects = 0
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following commands to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv4.conf.all.secure_redirects=0
+ sysctl -w net.ipv4.conf.default.secure_redirects=0
+ sysctl -w net.ipv4.route.flush=1
+}
+```
 
-# sysctl --system
-```"
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.4,jr2_c_3_3_4,control,Network Parameters (Host and Router),Ensure suspicious packets are logged.,debian;redhat,1,CIS-U22:3.3.4,"net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1","When enabled, this feature logs packets with un-routable source addresses to the kernel log.",Setting `net.ipv4.conf.all.log_martians` and `net.ipv4.conf.default.log_martians to `1` enables this feature. Logging these packets allows an administrator to investigate the possibility that an attacker is sending spoofed packets to their system.,"Verify log_martians is 1 live AND persisted for all/default.
 
@@ -7939,112 +7366,92 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.7 — Ensure net.ipv4.icmp_echo_ignore_broadcasts is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.icmp_echo_ignore_broadcasts` is set to `1`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.icmp_echo_ignore_broadcasts""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.icmp_echo_ignore_broadcasts=1"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.icmp_echo_ignore_broadcasts = 1"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.icmp_echo_ignore_broadcasts = 1`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.7 — Ensure net.ipv4.icmp_echo_ignore_broadcasts is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.icmp_echo_ignore_broadcasts"" l_value=""1""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(0|[2-9]|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.icmp_echo_ignore_broadcasts = 1
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.icmp_echo_ignore_broadcasts = 1"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
 
-# sysctl --system
-```"
+```
+# {
+ sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+ sysctl -w net.ipv4.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.6,jr2_c_3_3_6,control,Network Parameters (Host and Router),Ensure bogus ICMP responses are ignored.,debian;redhat,1,CIS-U22:3.3.6,icmp_ignore_bogus_error_responses = 1,"Setting `net.ipv4.icmp_ignore_bogus_error_responses` to `1` prevents the kernel from logging bogus responses (RFC-1122 non-compliant) from broadcast reframes, keeping file systems from filling up with useless log messages.",Some routers (and some attackers) will send responses that violate RFC-1122 and attempt to fill up a log file system with many useless error messages.,"Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
 - `net.ipv4.icmp_ignore_bogus_error_responses` is set to `1`
 
@@ -8127,110 +7534,91 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.6 — Ensure net.ipv4.icmp_ignore_bogus_error_responses is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.icmp_ignore_bogus_error_responses` is set to `1`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.icmp_ignore_bogus_error_responses""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.icmp_ignore_bogus_error_responses=1"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.icmp_ignore_bogus_error_responses = 1"" is set in:
-""/etc/sysctl.d/60-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.icmp_ignore_bogus_error_responses = 1`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.6 — Ensure net.ipv4.icmp_ignore_bogus_error_responses is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.icmp_ignore_bogus_error_responses"" l_value=""1""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(0|[2-9]|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
+# printf ""
 net.ipv4.icmp_ignore_bogus_error_responses = 1
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.icmp_ignore_bogus_error_responses = 1"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1
+ sysctl -w net.ipv4.route.flush=1
+}
+```
 
-# sysctl --system
-```"
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.7,jr2_c_3_3_7,control,Network Parameters (Host and Router),Ensure Reverse Path Filtering is enabled.,debian;redhat,1,CIS-U22:3.3.7,"net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1","Setting `net.ipv4.conf.all.rp_filter` and `net.ipv4.conf.default.rp_filter` to `1` forces the Linux kernel to utilize reverse path filtering on a received packet to determine if the packet was valid. Essentially, with reverse path filtering, if the return packet does not go out the same interface that the corresponding source packet came from, the packet is dropped (and logged if `log_martians` is set).","Setting `net.ipv4.conf.all.rp_filter` and `net.ipv4.conf.default.rp_filter` to `1` is a good way to deter attackers from sending your system bogus packets that cannot be responded to. One instance where this feature breaks down is if asymmetrical routing is employed. This would occur when using dynamic routing protocols (bgp, ospf, etc) on your system. If you are using asymmetrical routing on your system, you will not be able to enable this feature without breaking the routing.","Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
 - `net.ipv4.conf.all.rp_filter` is set to `1`
@@ -8319,112 +7707,96 @@ Run the following commands to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.12 — Ensure net.ipv4.conf.all.rp_filter is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.conf.all.rp_filter` is set to `1`
+- `net.ipv4.conf.default.rp_filter` is set to `1`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.conf.all.rp_filter""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.conf.all.rp_filter=1"" ""net.ipv4.conf.default.rp_filter=1"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.conf.all.rp_filter = 1"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.conf.all.rp_filter = 1`
+- `net.ipv4.conf.default.rp_filter = 1`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.12 — Ensure net.ipv4.conf.all.rp_filter is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.conf.all.rp_filter"" l_value=""1""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(0|[2-9]|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.conf.all.rp_filter = 1
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.conf.all.rp_filter = 1"" \
->> /etc/sysctl.d/60-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv4.conf.default.rp_filter = 1
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following commands to set the active kernel parameters:
 
-# sysctl --system
-```"
+```
+# {
+ sysctl -w net.ipv4.conf.all.rp_filter=1
+ sysctl -w net.ipv4.conf.default.rp_filter=1
+ sysctl -w net.ipv4.route.flush=1
+}
+```
+
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.8,jr2_c_3_3_8,control,Network Parameters (Host and Router),Ensure TCP SYN Cookies is enabled.,debian;redhat,1,CIS-U22:3.3.8,net.ipv4.tcp_syncookies = 1,"When `tcp_syncookies` is set, the kernel will handle TCP SYN packets normally until the half-open connection queue is full, at which time, the SYN cookie functionality kicks in. SYN cookies work by not using the SYN queue at all. Instead, the kernel simply replies to the SYN with a SYN|ACK, but will include a specially crafted TCP sequence number that encodes the source and destination IP address and port number and the time the packet was sent. A legitimate connection would send the ACK packet of the three way handshake with the specially crafted sequence number. This allows the system to verify that it has received a valid response to a SYN cookie and allow the connection, even though there is no corresponding SYN in the queue.","Attackers use SYN flood attacks to perform a denial of service attacked on a system by sending many SYN packets without completing the three way handshake. This will quickly use up slots in the kernel's half-open connection queue and prevent legitimate connections from succeeding. Setting `net.ipv4.tcp_syncookies` to `1` enables SYN cookies, allowing the system to keep accepting valid connections, even if under a denial of service attack.","Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
 - `net.ipv4.tcp_syncookies` is set to `1`
 
@@ -8507,112 +7879,91 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.18 — Ensure net.ipv4.tcp_syncookies is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameter is set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv4.tcp_syncookies` is set to `1`
+
+**Note:** kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv4.tcp_syncookies""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv4.tcp_syncookies=1"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv4.tcp_syncookies = 1"" is set in: ""/etc/sysctl.d/60-
-ipv4_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Set the following parameter in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv4.tcp_syncookies = 1`
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.1.18 — Ensure net.ipv4.tcp_syncookies is configured)
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv4.tcp_syncookies"" l_value=""1""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(0|[2-9]|1[0-9]+)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv4.tcp_syncookies = 1
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv4.tcp_syncookies = 1"" >> /etc/sysctl.d/60-
-ipv4_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+"" >> /etc/sysctl.d/60-netipv4_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv4.tcp_syncookies=1
+ sysctl -w net.ipv4.route.flush=1
+}
+```
 
-# sysctl --system
-```"
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.3.9,jr2_c_3_3_9,control,Network Parameters (Host and Router),Ensure IPv6 router advertisements are not accepted.,debian;redhat,1,CIS-U22:3.3.9,"net.ipv6.conf.all.accept_ra = 0
 net.ipv6.conf.default.accept_ra = 0",This setting disables the system's ability to accept IPv6 router advertisements.,It is recommended that systems do not accept router advertisements as they could be tricked into routing traffic to compromised machines. Setting hard routes within the system (usually a single default route to a trusted router) protects the system from bad routes. Setting `net.ipv6.conf.all.accept_ra` and `net.ipv6.conf.default.accept_ra` to `0` disables the system's ability to accept IPv6 router advertisements.,"Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
 - `net.ipv6.conf.all.accept_ra` is set to `0`
@@ -8704,112 +8055,99 @@ Run the following command to set the active kernel parameters:
 }
 ```
 
-**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.2.7 — Ensure net.ipv6.conf.all.accept_ra is configured)
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten.","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+Run the following script to verify the following kernel parameters are set in the running configuration and correctly loaded from a kernel parameter configuration file:
+- `net.ipv6.conf.all.accept_ra` is set to `0`
+- `net.ipv6.conf.default.accept_ra` is set to `0`
+
+**Note:** 
+- kernel parameters are loaded by file and parameter order precedence. The following script observes this precedence as part of the auditing procedure. The parameters being checked may be set correctly in a file. If that file is superseded, the parameter is overridden by an incorrect setting later in that file, or in a conically later file, that ""correct"" setting will be ignored both by the script and by the system during a normal kernel parameter load sequence.
+- IPv6 kernel parameters only apply to systems where IPv6 is enabled 
+
 ```
 #!/usr/bin/env bash
 
 {
-      l_parameter_name=""net.ipv6.conf.all.accept_ra""
-      l_grep=""${l_parameter_name//./(\\.|\\/)}"" a_output=() a_files=()
-      l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-      || readlink -e /usr/lib/systemd/systemd-sysctl)""
-      l_ufw_file=""$([ -f /etc/default/ufw ] && \
-      awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-      [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-      a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-      while IFS= read -r l_fname; do
-         l_file=""$(readlink -e ""${l_fname//# /}"")""
-         [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-         <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-      done < <(""$l_systemdsysctl"" --cat-config | tac | \
-      grep -Pio '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-      for l_file in ""${a_files[@]}""; do
-         l_opt=""$(grep -Poi '^\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" | tail -n
-1)""
-         l_option_value=""$(cut -d= -f2 <<< ""$l_opt"" | xargs)""
-         [ -n ""$l_option_value"" ] && \
-         a_output+=("" - \""$l_parameter_name = $l_option_value\"" is set in:"" \
-         ""    \""$l_file\"""")
-      done
-      [ ""${#a_output[@]}"" -gt ""0"" ] && printf '%s\n' """" ""${a_output[@]}"" """"
+ l_output="""" l_output2=""""
+ a_parlist=(""net.ipv6.conf.all.accept_ra=0"" ""net.ipv6.conf.default.accept_ra=0"")
+ l_ufwscf=""$([ -f /etc/default/ufw ] && awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
+ kernel_parameter_chk()
+ { 
+ l_krp=""$(sysctl ""$l_kpname"" | awk -F= '{print $2}' | xargs)"" # Check running configuration
+ if [ ""$l_krp"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_krp\"" in the running configuration""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_krp\"" in the running configuration and should have a value of: \""$l_kpvalue\""""
+ fi
+ unset A_out; declare -A A_out # Check durable setting (files)
+ while read -r l_out; do
+ if [ -n ""$l_out"" ]; then
+ if [[ $l_out =~ ^\s*# ]]; then
+ l_file=""${l_out//# /}""
+ else
+ l_kpar=""$(awk -F= '{print $1}' <<< ""$l_out"" | xargs)""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_file"")
+ fi
+ fi
+ done < <(/usr/lib/systemd/systemd-sysctl --cat-config | grep -Po '^\h*([^#\n\r]+|#\h*\/[^#\n\r\h]+\.conf\b)')
+ if [ -n ""$l_ufwscf"" ]; then # Account for systems with UFW (Not covered by systemd-sysctl --cat-config)
+ l_kpar=""$(grep -Po ""^\h*$l_kpname\b"" ""$l_ufwscf"" | xargs)""
+ l_kpar=""${l_kpar//\//.}""
+ [ ""$l_kpar"" = ""$l_kpname"" ] && A_out+=([""$l_kpar""]=""$l_ufwscf"")
+ fi
+ if (( ${#A_out[@]} > 0 )); then # Assess output from files and generate output
+ while IFS=""="" read -r l_fkpname l_fkpvalue; do
+ l_fkpname=""${l_fkpname// /}""; l_fkpvalue=""${l_fkpvalue// /}""
+ if [ ""$l_fkpvalue"" = ""$l_kpvalue"" ]; then
+ l_output=""$l_output\n - \""$l_kpname\"" is correctly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\""\n""
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is incorrectly set to \""$l_fkpvalue\"" in \""$(printf '%s' ""${A_out[@]}"")\"" and should have a value of: \""$l_kpvalue\""\n""
+ fi
+ done < <(grep -Po -- ""^\h*$l_kpname\h*=\h*\H+"" ""${A_out[@]}"")
+ else
+ l_output2=""$l_output2\n - \""$l_kpname\"" is not set in an included file\n ** Note: \""$l_kpname\"" May be set in a file that's ignored by load procedure **\n""
+ fi
+ }
+ while IFS=""="" read -r l_kpname l_kpvalue; do # Assess and check parameters
+ l_kpname=""${l_kpname// /}""; l_kpvalue=""${l_kpvalue// /}""
+ if ! grep -Pqs '^\h*0\b' /sys/module/ipv6/parameters/disable && grep -q '^net.ipv6.' <<< ""$l_kpname""; then
+ l_output=""$l_output\n - IPv6 is disabled on the system, \""$l_kpname\"" is not applicable""
+ else
+ kernel_parameter_chk
+ fi
+ done < <(printf '%s\n' ""${a_parlist[@]}"")
+ if [ -z ""$l_output2"" ]; then # Provide output from checks
+ echo -e ""\n- Audit Result:\n ** PASS **\n$l_output\n""
+ else
+ echo -e ""\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:\n$l_output2\n""
+ [ -n ""$l_output"" ] && echo -e ""\n- Correctly set:\n$l_output\n""
+ fi
 }
-Example output:
- - ""net.ipv6.conf.all.accept_ra = 0"" is set in: ""/etc/sysctl.d/60-
-ipv6_sysctl.conf""
-Note:
+```","# [SABC] Red Hat family — mechanism identical to Debian on RHEL (sysctl/systemd-sysctl / file perms / cron).
+**-IF-** IPv6 is enabled on the system:
 
-  •     This script looks at all files used by systemd sysctl.
-  •     More information about these files and their location is available in the section
-        overview.
-  •     If multiple lines are returned:
-            o The first line includes the value being used by systemd sysctl. If this is a
-                correct value, this is considered a passing state. If the file listed is not in
-                the /etc/sysctl.d/ directory, it is highly recommended to follow the
-                remediation procedure to create a .conf file in the /etc/sysctl.d/
-                directory with the correct setting to prevent a potential change due to an
-                update to the system.
-            o Any files in the /etc/sysctl.d/ directory that include an incorrect value
-                should be modified to comment out or change the incorrect value to
-                minimize the potential of the incorrect value being used by systemd
-                sysctl due to system configuration changes.
-  •     SYSTEM FILE PRECEDENCE
-            o When using the --system option, sysctl will read files from directories in
-                the following list in given order from top to bottom. Once a file of a given
-                filename is loaded, any file of the same name in subsequent directories is
-                ignored.
-            o /etc/sysctl.d/*.conf /run/sysctl.d/*.conf
-                /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf
-                /lib/sysctl.d/*.conf /etc/sysctl.conf
-            o All configuration files are sorted in lexicographic order, regardless of the
-                directory they reside in. Configuration files can either be completely
-                replaced (by having a new configuration file with the same name in a
-                directory of higher priority) or partially replaced (by having a configuration
-                file that is ordered later)--
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §3.3.2.7 — Ensure net.ipv6.conf.all.accept_ra is configured)
+Set the following parameters in `/etc/sysctl.conf` or a file in `/etc/sysctl.d/` ending in `.conf`:
+- `net.ipv6.conf.all.accept_ra = 0`
+- `net.ipv6.conf.default.accept_ra = 0`
+
+_Example:_
 ```
-#!/usr/bin/env bash
-
-{
-    l_option=""net.ipv6.conf.all.accept_ra"" l_value=""0""
-    l_grep=""${l_option//./(\\.|\\/)}"" a_files=()
-    l_systemdsysctl=""$(readlink -e /lib/systemd/systemd-sysctl \
-    || readlink -e /usr/lib/systemd/systemd-sysctl)""
-    l_ufw_file=""$([ -f /etc/default/ufw ] && \
-    awk -F= '/^\s*IPT_SYSCTL=/ {print $2}' /etc/default/ufw)""
-    [ -f ""$(readlink -e ""$l_ufw_file"")"" ] && \
-    a_files+=(""$l_ufw_file""); a_files+=(""/etc/sysctl.conf"")
-    while IFS= read -r l_fname; do
-       l_file=""$(readlink -e ""${l_fname//# /}"")""
-       [ -n ""$l_file"" ] && ! grep -Psiq -- '(^|\h+)'""$l_file""'\b' \
-       <<< ""${a_files[*]}"" && a_files+=(""$l_file"")
-    done < <(""$l_systemdsysctl"" --cat-config | tac | \
-    grep -Pio -- '^\h*#\h*\/[^#\n\r\h]+\.conf\b')
-    for l_file in ""${a_files[@]}""; do
-       grep -Poi -- '\h*'""$l_grep""'\h*=\h*\H+\b' ""$l_file"" \
-       | grep -Pivq -- '^\h*'""$l_grep""'\h*=\h*'""$l_value""'\b' && \
-       sed -ri '/^\s*'""$l_grep""'\s*=\s*(1[0-9]*)/s/^/# /' ""$l_file""
-    done
-}
-
-    2. Create or edit a file in the /etc/sysctl.d/ directory ending in .confand edit or
-       add the following line:
-
+# printf ""
 net.ipv6.conf.all.accept_ra = 0
-Example:
-# [ ! -d ""/etc/sysctl.d/"" ] && mkdir -p /etc/sysctl.d/
-# printf '%s\n' """" ""net.ipv6.conf.all.accept_ra = 0"" >> /etc/sysctl.d/60-
-ipv6_sysctl.conf
-Note: If the UFW file was the first file listed in the audit, the entry will be commented out
-as part of the first step, however updating Uncomplicated Firewall (UFW) may update
-this change. In this case the updated entry will supersede the entry being created as
-part of this step.
+net.ipv6.conf.default.accept_ra = 0
+"" >> /etc/sysctl.d/60-netipv6_sysctl.conf
+```
 
-    3. Run the following command to load all sysctl configuration filles:
+Run the following command to set the active kernel parameters:
+```
+# {
+ sysctl -w net.ipv6.conf.all.accept_ra=0
+ sysctl -w net.ipv6.conf.default.accept_ra=0
+ sysctl -w net.ipv6.route.flush=1
+}
+```
 
-# sysctl --system
-```"
+**Note:** If these settings appear in a conically later file, or later in the same file, these settings will be overwritten."
 JR2.C.3.4.0,jr2_c_3_4_0,section,Firewall Configuration,Firewall Configuration,debian;redhat,,,,"A firewall is a set of rules. When a data packet moves into or out of a protected network space, its contents (in particular, information about its origin, target, and the protocol it plans to use) are tested against the firewall rules to see if it should be allowed through
 
 To provide a Host Based Firewall, the Linux kernel includes support for:
@@ -8848,12 +8186,15 @@ ufw install ok installed installed
 
 ```
 apt install ufw
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify firewalld is installed:
+```bash
+rpm -q firewalld
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Install firewalld:
+```bash
+dnf install -y firewalld
+```"
 JR2.C.3.4.1.2,jr2_c_3_4_1_2,control,Configure UncomplicatedFirewall,Ensure iptables-persistent is not installed with ufw.,debian;redhat,1,CIS-U22:3.4.1.2,Must not be installed if ufw is installed.,"The `iptables-persistent` is a boot-time loader for netfilter rules, iptables plugin.",Running both `ufw` and the services included in the iptables-persistent package may lead to conflict.,"Verify iptables-persistent is not installed alongside ufw (not applicable when ufw is not installed).
 
 ```bash
@@ -8919,12 +8260,21 @@ active
 Run the following command to enable ufw:
 ```
 # ufw enable
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify firewalld is enabled and running:
+```bash
+#!/bin/bash
+systemctl is-enabled firewalld 2>/dev/null | grep -q enabled || exit 1
+systemctl is-active --quiet firewalld || exit 1
+exit 0
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Unmask, enable and start firewalld:
+```bash
+#!/bin/bash
+systemctl unmask firewalld 2>/dev/null || true
+systemctl --now enable firewalld
+exit 0
+```"
 JR2.C.3.4.1.4,jr2_c_3_4_1_4,control,Configure UncomplicatedFirewall,Ensure ufw loopback traffic is configured.,debian;redhat,1,CIS-U22:3.4.1.4,"Anywhere on lo ALLOW IN Anywhere 
 Anywhere DENY IN 127.0.0.0/8 
 Anywhere (v6) on lo ALLOW IN Anywhere (v6) 
@@ -9037,12 +8387,18 @@ ufw default deny incoming >/dev/null 2>&1
 ufw default deny outgoing >/dev/null 2>&1
 ufw default deny routed >/dev/null 2>&1
 exit 0
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-```
-#!/usr/bin/env bash
-exit 101
-```","# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.
-"
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Verify firewalld's default zone rejects/drops by default:
+```bash
+#!/bin/bash
+systemctl is-active --quiet firewalld || exit 1
+z=$(firewall-cmd --get-default-zone 2>/dev/null)
+[ -n ""$z"" ] || exit 1
+t=$(firewall-cmd --permanent --zone=""$z"" --get-target 2>/dev/null)
+case ""$t"" in DROP|%%REJECT%%|REJECT|default) exit 0;; *) exit 1;; esac
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+# Enforcement is site-specific on RHEL (firewalld zone/rules policy) — manual.
+# The Validate check still runs; only the auto-fix is deferred."
 JR2.C.3.4.2.0,jr2_c_3_4_2_0,section,Firewall Configuration,Configure nftables.,debian;redhat,,,,"**If Uncomplicated Firewall (UFW) or iptables are being used in your environment, please follow the guidance in their respective section and pass-over the guidance in this section.**
 
 nftables is a subsystem of the Linux kernel providing filtering and classification of network packets/datagrams/frames and is the successor to iptables. The biggest change with the successor nftables is its simplicity. With iptables, we have to configure every single rule and use the syntax which can be compared with normal commands. With nftables, the simpler syntax, much like BPF (Berkely Packet Filter) means shorter lines and less repetition. Support for nftables should also be compiled into the kernel, together with the related nftables modules. Please ensure that your kernel supports nf_tables before choosing this option.
@@ -9263,17 +8619,16 @@ nft list chain inet filter input >/dev/null 2>&1 || exit 0
 nft list chain inet filter input | grep -q 'iif ""lo"" accept' || nft add rule inet filter input iif lo accept
 nft list chain inet filter input | grep -Eq 'ip saddr 127\.0\.0\.0/8.*drop' || nft add rule inet filter input ip saddr 127.0.0.0/8 counter drop
 exit 0
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --get-zone-of-interface=lo
-# firewall-cmd --list-all --zone=""$(firewall-cmd --get-zone-of-interface=lo |
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --permanent --zone=trusted --add-interface=lo
-# firewall-cmd --zone=public --change-interface=lo
-# firewall-cmd --reload
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Not applicable on RHEL: nftables as a standalone firewall is an alternative to firewalld; on RHEL firewalld (nftables backend) is the managed firewall.
+```bash
+#!/bin/bash
+exit 101
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+# N/A on RHEL — nothing to enforce.
+```bash
+#!/bin/bash
+exit 0
 ```"
 JR2.C.3.4.2.6,jr2_c_3_4_2_6,control,Configure nftables,Ensure nftables default deny firewall policy.,debian;redhat,1,CIS-U22:3.4.2.8,"Default policy must be set to drop:
 type filter hook input priority 0; policy drop;
@@ -9535,17 +8890,16 @@ iptables -C INPUT -i lo -j ACCEPT >/dev/null 2>&1 || iptables -A INPUT -i lo -j 
 iptables -C OUTPUT -o lo -j ACCEPT >/dev/null 2>&1 || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C INPUT -s 127.0.0.0/8 -j DROP >/dev/null 2>&1 || iptables -A INPUT -s 127.0.0.0/8 -j DROP
 exit 0
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --get-zone-of-interface=lo
-# firewall-cmd --list-all --zone=""$(firewall-cmd --get-zone-of-interface=lo |
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --permanent --zone=trusted --add-interface=lo
-# firewall-cmd --zone=public --change-interface=lo
-# firewall-cmd --reload
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Not applicable on RHEL: iptables as a standalone firewall is an alternative to firewalld; on RHEL firewalld is the managed firewall.
+```bash
+#!/bin/bash
+exit 101
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+# N/A on RHEL — nothing to enforce.
+```bash
+#!/bin/bash
+exit 0
 ```"
 JR2.C.3.4.3.2.3,jr2_c_3_4_3_2_3,control,Configure IPv4 iptables,Ensure iptables firewall rules exist for all open ports.,debian;redhat,1,CIS-U22:3.4.3.2.4,iptables firewall rules must exist for all open ports.,"Any ports that have been opened on non-loopback addresses need firewall rules to govern traffic.
 
@@ -9688,17 +9042,16 @@ ip6tables -C INPUT -i lo -j ACCEPT >/dev/null 2>&1 || ip6tables -A INPUT -i lo -
 ip6tables -C OUTPUT -o lo -j ACCEPT >/dev/null 2>&1 || ip6tables -A OUTPUT -o lo -j ACCEPT
 ip6tables -C INPUT -s ::1 -j DROP >/dev/null 2>&1 || ip6tables -A INPUT -s ::1 -j DROP
 exit 0
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --get-zone-of-interface=lo
-# firewall-cmd --list-all --zone=""$(firewall-cmd --get-zone-of-interface=lo |
-```","# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.
-# (CIS AlmaLinux 8 §4.1.5 — Ensure firewalld loopback traffic is configured)
-```
-# firewall-cmd --permanent --zone=trusted --add-interface=lo
-# firewall-cmd --zone=public --change-interface=lo
-# firewall-cmd --reload
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+Not applicable on RHEL: iptables as a standalone firewall is an alternative to firewalld; on RHEL firewalld is the managed firewall.
+```bash
+#!/bin/bash
+exit 101
+```","# [SABC] Red Hat family — authored from CIS AlmaLinux 8 v4.0.0.
+# N/A on RHEL — nothing to enforce.
+```bash
+#!/bin/bash
+exit 0
 ```"
 JR2.C.3.4.3.3.3,jr2_c_3_4_3_3_3,control,Configure IPv6 ip6tables,Ensure ip6tables firewall rules exist for all open ports.,debian;redhat,1,CIS-U22:3.4.3.3.4,All ports opened on non-loopback addresses need to have a firewall rule for accepting inbound connections established.,"Any ports that have been opened on non-loopback addresses need firewall rules to govern traffic.
 

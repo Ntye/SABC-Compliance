@@ -70,10 +70,11 @@ control 'JR2.C.1.7.4' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      gsettings writable org.gnome.desktop.session idle-delay
-      gsettings writable org.gnome.desktop.screensaver lock-delay
-      gsettings get org.gnome.desktop.screensaver lock-delay
-      gsettings get org.gnome.desktop.session idle-delay
+      #!/bin/bash
+      rpm -q gdm >/dev/null 2>&1 || exit 101
+      grep -Eqrs '/org/gnome/desktop/session/idle-delay' /etc/dconf/db/*/locks/ || exit 1
+      grep -Eqrs '/org/gnome/desktop/screensaver/lock-enabled' /etc/dconf/db/*/locks/ || exit 1
+      exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

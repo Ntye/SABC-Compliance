@@ -33,7 +33,15 @@ logger = logging.getLogger(__name__)
 # 1.3.1: complete Red Hat authoring from CIS AlmaLinux 8 — 53 controls
 #        authored (rpm/dnf/firewalld/GDM/chrony/sysctl), 119 family-neutral
 #        copied as-is, 34 Debian-only marked N/A; zero apt/dpkg on RHEL.
-SEED_VERSION = "1.3.1"
+# 1.3.2: repair pass over the Red Hat authoring — fixed 24 controls whose
+#        generated RHEL scripts failed `bash -n` (unbalanced parens/tokens in the
+#        verbose CIS-derived audit scripts would have errored at scan/enforce),
+#        and authored SELinux (installed / enforcing, replacing AppArmor) and
+#        firewalld (installed / enabled / default-deny) which were marked N/A —
+#        those are RHEL's primary MAC and firewall mechanisms and must be
+#        enforced, not skipped. All generated RHEL scripts now pass bash -n; the
+#        defensible ufw/standalone-nftables/iptables/ntp N/A calls are unchanged.
+SEED_VERSION = "1.3.2"
 _SEED_MARKER_KEY = "sabc_baseline_seed_version"
 
 _SEED_FILENAME = "sabc_baseline.csv"

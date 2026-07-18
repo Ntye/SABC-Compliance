@@ -19,8 +19,10 @@ control 'JR2.C.3.4.1.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+      #!/bin/bash
+      systemctl is-enabled firewalld 2>/dev/null | grep -q enabled || exit 1
+      systemctl is-active --quiet firewalld || exit 1
+      exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

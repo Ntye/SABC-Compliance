@@ -86,8 +86,10 @@ control 'JR2.C.1.7.7' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      gsettings writable org.gnome.desktop.media-handling autorun-never
-      gsettings get org.gnome.desktop.media-handling autorun-never
+      #!/bin/bash
+      rpm -q gdm >/dev/null 2>&1 || exit 101
+      grep -Eqrs 'autorun-never=true' /etc/dconf/db/gdm.d/ || exit 1
+      exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

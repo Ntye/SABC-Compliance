@@ -23,8 +23,12 @@ control 'JR2.C.3.4.1.6' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/usr/bin/env bash
-      exit 101
+      #!/bin/bash
+      systemctl is-active --quiet firewalld || exit 1
+      z=$(firewall-cmd --get-default-zone 2>/dev/null)
+      [ -n "$z" ] || exit 1
+      t=$(firewall-cmd --permanent --zone="$z" --get-target 2>/dev/null)
+      case "$t" in DROP|%%REJECT%%|REJECT|default) exit 0;; *) exit 1;; esac
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

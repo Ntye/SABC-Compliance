@@ -75,10 +75,10 @@ control 'JR2.C.1.7.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      gsettings writable org.gnome.login-screen banner-message-enable
-      gsettings writable org.gnome.login-screen banner-message-text
-      gsettings get org.gnome.login-screen banner-message-enable
-      gsettings get org.gnome.login-screen banner-message-text
+      #!/bin/bash
+      rpm -q gdm >/dev/null 2>&1 || exit 101
+      grep -Eqrs 'banner-message-enable=true' /etc/dconf/db/gdm.d/ || exit 1
+      exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do
