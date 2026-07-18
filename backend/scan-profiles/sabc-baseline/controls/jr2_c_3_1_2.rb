@@ -23,11 +23,9 @@ control 'JR2.C.3.1.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      rpm -q bluez >/dev/null 2>&1 || exit 0
-      systemctl is-active bluetooth 2>/dev/null | grep -qx active && exit 1
-      systemctl is-enabled bluetooth 2>/dev/null | grep -q '^enabled' && exit 1
-      exit 0
+      rpm -q bluez
+      systemctl is-enabled bluetooth.service 2>/dev/null | grep 'enabled'
+      systemctl is-active bluetooth.service 2>/dev/null | grep '^active'
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

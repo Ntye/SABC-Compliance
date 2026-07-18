@@ -25,13 +25,8 @@ control 'JR2.C.3.4.2.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101
-      rpm -q nftables >/dev/null 2>&1 || exit 101
-      r=$(nft list ruleset 2>/dev/null) || exit 1
-      printf '%s' "$r" | grep -q 'iif "lo" accept' || exit 1
-      printf '%s' "$r" | grep -Eq 'ip saddr 127\.0\.0\.0/8.*drop' || exit 1
-      exit 0
+      firewall-cmd --get-zone-of-interface=lo
+      firewall-cmd --list-all --zone="$(firewall-cmd --get-zone-of-interface=lo |
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

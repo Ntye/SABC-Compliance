@@ -23,11 +23,9 @@ control 'JR2.C.2.2.16' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      rpm -q rsync >/dev/null 2>&1 || exit 0
-      systemctl list-unit-files 2>/dev/null | grep -q '^rsync\.service' || exit 0
-      [ "$(systemctl is-enabled rsync 2>/dev/null)" = "masked" ] && exit 0
-      exit 1
+      rpm -q rsync-daemon
+      systemctl is-enabled rsyncd.socket rsyncd.service 2>/dev/null | grep
+      systemctl is-active rsyncd.socket rsyncd.service 2>/dev/null | grep
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

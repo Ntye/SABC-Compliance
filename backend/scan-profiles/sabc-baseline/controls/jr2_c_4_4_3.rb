@@ -19,8 +19,7 @@ control 'JR2.C.4.4.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      grep -P 'pam_faillock\.so' /etc/pam.d/system-auth /etc/pam.d/password-auth
-      grep -P '^\h*(deny|unlock_time)' /etc/security/faillock.conf
+      grep -P -- '^\h*password\h+([^#\n\r]+\h+)?(pam_pwhistory\.so|pam_unix\.so)\b' /etc/pam.d/common-password
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

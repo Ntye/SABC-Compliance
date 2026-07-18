@@ -9,8 +9,19 @@ control 'JR2.C.2.2.5' do
     end
   end
   if os.redhat?
-    describe package('nfs-utils') do
-      it { should_not be_installed }
+    v_redhat = command(<<-'SABC_V'.chomp)
+      rpm -q nfs-utils
+      systemctl is-enabled nfs-server.service 2>/dev/null | grep 'enabled'
+      systemctl is-active nfs-server.service 2>/dev/null | grep '^active'
+    SABC_V
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

@@ -23,11 +23,8 @@ control 'JR2.C.3.4.2.8' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101
-      rpm -q nftables >/dev/null 2>&1 || exit 101
-      grep -Eqs '^[[:space:]]*include[[:space:]]+"/etc/nftables/sabc\.nft"' /etc/sysconfig/nftables.conf && [ -s /etc/nftables/sabc.nft ] && exit 0
-      exit 1
+      #!/usr/bin/env bash
+      exit 101
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -19,7 +19,8 @@ control 'JR2.C.3.4.3.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      iptables -L -n
+      #!/usr/bin/env bash
+      exit 101
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

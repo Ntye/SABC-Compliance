@@ -9,8 +9,19 @@ control 'JR2.C.2.2.3' do
     end
   end
   if os.redhat?
-    describe package('dhcp-server') do
-      it { should_not be_installed }
+    v_redhat = command(<<-'SABC_V'.chomp)
+      rpm -q dhcp-server
+      systemctl is-enabled dhcpd.service dhcpd6.service 2>/dev/null | grep
+      systemctl is-active dhcpd.service dhcpd6.service 2>/dev/null | grep
+    SABC_V
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
     end
   end
 end

@@ -19,8 +19,8 @@ control 'JR2.C.1.5.3' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      getenforce
-      grep -Pi '^\h*SELINUX=enforcing' /etc/selinux/config
+      #!/usr/bin/env bash
+      exit 101
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

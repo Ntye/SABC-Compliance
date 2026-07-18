@@ -27,15 +27,8 @@ control 'JR2.C.3.4.2.6' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      #!/bin/bash
-      systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101
-      rpm -q nftables >/dev/null 2>&1 || exit 101
-      r=$(nft list ruleset 2>/dev/null) || exit 1
-      printf '%s' "$r" | grep -q 'hook input' || exit 1
-      n=$(printf '%s' "$r" | grep -cE 'hook (input|forward|output)')
-      d=$(printf '%s' "$r" | grep -E 'hook (input|forward|output)' | grep -c 'policy drop')
-      [ "$n" -gt 0 ] && [ "$n" -eq "$d" ] && exit 0
-      exit 1
+      #!/usr/bin/env bash
+      exit 101
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

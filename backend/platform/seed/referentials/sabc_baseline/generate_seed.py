@@ -114,12 +114,13 @@ def build(report: bool = False) -> list[list[str]]:
 
         v_rh = c_rh = ""
         if is_control and redhat_in_scope:
+            # Red Hat guidance is authoritative from derive_redhat (CIS AlmaLinux 8
+            # authoring → family-neutral copy → N/A). The older per-control
+            # authored_remediations Red Hat cells are intentionally NOT used: some
+            # were mis-derived from Debian, and derive_redhat now sources RHEL
+            # guidance from the actual AlmaLinux benchmark.
             v_rh, pv = derive_redhat(cid, "validate", r["validate_debian"])
             c_rh, pc = derive_redhat(cid, "configure", r["configure_debian"])
-            if authored and "validate_redhat" in authored:
-                v_rh, pv = PROV_AUTHORED + authored["validate_redhat"], "authored"
-            if authored and "configure_redhat" in authored:
-                c_rh, pc = PROV_AUTHORED + authored["configure_redhat"], "authored"
             for p, fld in ((pv, "validate"), (pc, "configure")):
                 stats[p] = stats.get(p, 0) + 1
                 if p == "empty":

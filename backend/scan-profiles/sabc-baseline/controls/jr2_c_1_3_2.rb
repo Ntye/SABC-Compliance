@@ -19,7 +19,7 @@ control 'JR2.C.1.3.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      stat -Lc 'Access: (%#a/%A) Uid: (%u/%U) Gid: (%g/%G)' /boot/grub2/grub.cfg
+      stat -Lc 'Access: (%#a/%A) Uid: ( %u/ %U) Gid: ( %g/ %G)' /boot/grub/grub.cfg
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

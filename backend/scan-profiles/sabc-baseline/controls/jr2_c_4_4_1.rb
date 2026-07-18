@@ -25,8 +25,8 @@ control 'JR2.C.4.4.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      grep -P 'pam_pwquality\.so' /etc/pam.d/system-auth /etc/pam.d/password-auth
-      rpm -q libpwquality
+      grep -Psi -- '^\h*(minclass|[dulo]credit)\b' /etc/security/pwquality.conf
+      grep -Psi --
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

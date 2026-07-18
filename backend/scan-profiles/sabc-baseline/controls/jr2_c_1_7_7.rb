@@ -84,4 +84,19 @@ control 'JR2.C.1.7.7' do
       end
     end
   end
+  if os.redhat?
+    v_redhat = command(<<-'SABC_V'.chomp)
+      gsettings writable org.gnome.desktop.media-handling autorun-never
+      gsettings get org.gnome.desktop.media-handling autorun-never
+    SABC_V
+    if v_redhat.exit_status == 101
+      describe 'Not applicable' do
+        skip 'Not applicable on this node: the validate procedure reported its prerequisite (package/service) is absent.'
+      end
+    else
+      describe v_redhat do
+        its('exit_status') { should cmp 0 }
+      end
+    end
+  end
 end

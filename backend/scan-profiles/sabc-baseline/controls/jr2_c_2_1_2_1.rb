@@ -19,7 +19,7 @@ control 'JR2.C.2.1.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      ps -ef | awk '(/[c]hronyd/ && $1!="_chrony") { print $1 }'
+      grep -Psi -- '^\h*OPTIONS=\"?\h*([^#\n\r]+\h+)?-u\h+root\b'
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

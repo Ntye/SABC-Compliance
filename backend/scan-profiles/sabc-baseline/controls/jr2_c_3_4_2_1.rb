@@ -17,4 +17,9 @@ control 'JR2.C.3.4.2.1' do
       end
     end
   end
+  if os.redhat?
+    describe package('firewalld') do
+      it { should be_installed }
+    end
+  end
 end

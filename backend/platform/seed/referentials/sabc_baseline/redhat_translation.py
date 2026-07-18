@@ -28,11 +28,37 @@ production enforcement. The authored overrides encode standard RHEL practice.
 """
 from __future__ import annotations
 
+import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cis_alma8 import ALMA8  # noqa: E402  (control_id -> RH guidance from CIS AlmaLinux 8)
 
 PROV_AUTHORED = "# [SABC] Red Hat family guidance — authored for RHEL/Alma/Rocky.\n"
 PROV_DERIVED = "# [SABC] Red Hat family guidance — derived from the Debian guidance (package manager mapped apt/dpkg to dnf/rpm; sysctl/systemctl/file checks are family-agnostic).\n"
 PROV_CROSS = "# [SABC] Red Hat family guidance — the source procedure self-detects the package manager (it already branches on dpkg vs rpm) and runs correctly on the Red Hat family as-is.\n"
+PROV_ALMA = "# [SABC] Red Hat family guidance — authored from the CIS AlmaLinux 8 Benchmark.\n"
+PROV_NEUTRAL = "# [SABC] Red Hat family guidance — family-neutral procedure; the Debian commands (sysctl/systemctl/file/pam checks) run identically on the Red Hat family.\n"
+PROV_NA = "# [SABC] Not applicable on the Red Hat family — no CIS AlmaLinux 8 equivalent for this Debian-specific control.\n"
+
+# Exit code the scan/enforce pipeline treats as "control not applicable on this
+# node" (kept in sync with artifact_generator.NA_EXIT_CODE).
+_NA_EXIT = 101
+_NA_VALIDATE = PROV_NA + f"```\n#!/usr/bin/env bash\nexit {_NA_EXIT}\n```"
+_NA_CONFIGURE = PROV_NA  # no runnable body → nothing to enforce on RHEL
+
+# Debian-only tooling: a field that mentions any of these cannot run on RHEL and,
+# absent an explicit CIS-AlmaLinux mapping, is marked not-applicable rather than
+# executed. sysctl/systemctl/chmod/grep on /etc are family-neutral and copy over.
+_DEB_ONLY = re.compile(
+    r"\b(apt|apt-get|dpkg|dpkg-query|dpkg-reconfigure|add-apt-repository|apt-mark|"
+    r"apparmor|aa-status|aa-enforce|ufw|apport)\b|/etc/apt", re.I
+)
+
+def _fenced(shell: str) -> str:
+    shell = (shell or "").strip()
+    return f"```\n{shell}\n```" if shell else ""
 
 
 # ── Mechanical package-manager translation ────────────────────────────────────
@@ -408,22 +434,35 @@ OVERRIDES: dict[str, dict[str, str]] = {
 
 
 def derive_redhat(control_id: str, field: str, debian_text: str) -> tuple[str, str]:
-    """Derive Red Hat guidance for one field of one control.
+    """Derive Red Hat guidance for one field ("validate"|"configure") of one control.
 
-    ``field`` is "validate" or "configure". Returns ``(text, provenance)`` where
-    provenance is "authored" or "derived". Empty Debian guidance yields empty
-    output (the caller reports implementation-pending; the built-in profile has
-    no empty cells because every source row has Debian guidance).
+    Precedence, most authoritative first:
+      1. CIS AlmaLinux 8 authoring (``cis_alma8.ALMA8``) — real RHEL-family audit
+         and remediation procedures for the controls that genuinely diverge from
+         Debian (packages via rpm/dnf, firewalld, GDM, chrony, sysctl scripts) or
+         that have no RHEL analogue (marked N/A → the scan skips them).
+      2. Family-neutral copy — when this field's Debian procedure uses no
+         Debian-only tooling (sysctl/systemctl/chmod/grep on /etc), the exact same
+         commands run on RHEL, so the Red Hat cell IS the Debian cell.
+      3. Not-applicable — a Debian-specific field with no AlmaLinux mapping is
+         marked N/A on RHEL rather than executed (never runs apt/dpkg on RHEL).
+
+    Returns ``(text, provenance)``.
     """
     src = (debian_text or "").strip()
     if not src:
         return "", "empty"
 
-    override = OVERRIDES.get(control_id)
-    if override and field in override:
-        return PROV_AUTHORED + override[field], "authored"
+    entry = ALMA8.get(control_id)
+    if entry is not None:
+        if entry.get("na"):
+            return (_NA_VALIDATE if field == "validate" else _NA_CONFIGURE), "alma-na"
+        body = _fenced(entry.get(field, ""))
+        prov = PROV_ALMA + f"# ({entry.get('source', 'CIS AlmaLinux 8')})\n"
+        return (prov + body) if body else (PROV_NA if field == "configure" else _NA_VALIDATE), "alma"
 
-    if is_self_detecting(src):
-        return PROV_CROSS + debian_text, "cross"
+    if not _DEB_ONLY.search(src):
+        return PROV_NEUTRAL + debian_text, "neutral"
 
-    return PROV_DERIVED + translate_mechanical(debian_text), "derived"
+    # Debian-specific and unmapped → skip on RHEL rather than run a wrong command.
+    return (_NA_VALIDATE if field == "validate" else _NA_CONFIGURE), "na"
