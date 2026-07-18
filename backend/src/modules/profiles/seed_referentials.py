@@ -26,7 +26,14 @@ logger = logging.getLogger(__name__)
 #        exit-101 "not applicable" convention.
 # 1.2.0: real CIS Level per control (15 Level-2: dedicated partitions, bluetooth,
 #        audit-tool integrity) so Non-critical (L1) and Critical (L1+L2) differ.
-SEED_VERSION = "1.2.0"
+# 1.3.0: Red Hat family guidance corrected from the CIS AlmaLinux 8 v4.0.0
+#        benchmark (Stage 1): 25 package controls now use rpm/dnf with real RHEL
+#        package names (aide not aide-common, httpd not apache2, bind, dhcp-server,
+#        openldap-*, net-snmp, ypserv/ypbind, nfs-utils, …); 80 family-neutral
+#        controls (sysctl/sshd/login.defs/file-perms/cron) mirror Debian, which is
+#        identical on RHEL; 11 divergent controls that still ran apt/dpkg on RHEL
+#        are marked implementation-pending until authored from the benchmark.
+SEED_VERSION = "1.3.0"
 _SEED_MARKER_KEY = "sabc_baseline_seed_version"
 
 _SEED_FILENAME = "sabc_baseline.csv"

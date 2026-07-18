@@ -15,8 +15,5 @@ control 'JR2.C.1.2.1' do
     describe package('aide') do
       it { should be_installed }
     end
-    describe package('aide-common') do
-      it { should be_installed }
-    end
   end
 end

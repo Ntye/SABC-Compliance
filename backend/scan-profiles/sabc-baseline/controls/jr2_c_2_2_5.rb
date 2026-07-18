@@ -9,7 +9,7 @@ control 'JR2.C.2.2.5' do
     end
   end
   if os.redhat?
-    describe package('nfs-kernel-server') do
+    describe package('nfs-utils') do
       it { should_not be_installed }
     end
   end

@@ -12,10 +12,7 @@ control 'JR2.C.2.2.9' do
     end
   end
   if os.redhat?
-    describe package('dovecot-imapd') do
-      it { should_not be_installed }
-    end
-    describe package('dovecot-pop3d') do
+    describe package('dovecot') do
       it { should_not be_installed }
     end
   end

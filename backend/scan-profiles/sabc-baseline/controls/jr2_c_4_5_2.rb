@@ -22,8 +22,10 @@ control 'JR2.C.4.5.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      grep -P '^\h*ENCRYPT_METHOD' /etc/login.defs
-      grep -P 'pam_unix\.so.*(sha512|yescrypt)' /etc/pam.d/system-auth /etc/pam.d/password-auth
+      #!/bin/bash
+      grep -Eqs '^[[:space:]]*UMASK[[:space:]]+027' /etc/login.defs || exit 1
+      grep -Eqs '^[[:space:]]*umask[[:space:]]+027' /etc/profile.d/*.sh /etc/profile 2>/dev/null || exit 1
+      exit 0
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

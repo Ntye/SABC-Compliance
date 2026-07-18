@@ -9,7 +9,7 @@ control 'JR2.C.2.2.8' do
     end
   end
   if os.redhat?
-    describe package('apache2') do
+    describe package('httpd') do
       it { should_not be_installed }
     end
   end

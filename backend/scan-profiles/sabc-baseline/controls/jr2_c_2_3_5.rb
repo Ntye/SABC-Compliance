@@ -9,7 +9,7 @@ control 'JR2.C.2.3.5' do
     end
   end
   if os.redhat?
-    describe package('ldap-utils') do
+    describe package('openldap-clients') do
       it { should_not be_installed }
     end
   end

@@ -9,7 +9,7 @@ control 'JR2.C.2.2.6' do
     end
   end
   if os.redhat?
-    describe package('bind9') do
+    describe package('bind') do
       it { should_not be_installed }
     end
   end

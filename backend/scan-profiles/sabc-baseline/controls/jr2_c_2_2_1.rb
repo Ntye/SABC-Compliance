@@ -9,7 +9,7 @@ control 'JR2.C.2.2.1' do
     end
   end
   if os.redhat?
-    describe package('avahi-daemon') do
+    describe package('avahi') do
       it { should_not be_installed }
     end
   end

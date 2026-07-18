@@ -9,7 +9,7 @@ control 'JR2.C.2.2.13' do
     end
   end
   if os.redhat?
-    describe package('nis') do
+    describe package('ypserv') do
       it { should_not be_installed }
     end
   end

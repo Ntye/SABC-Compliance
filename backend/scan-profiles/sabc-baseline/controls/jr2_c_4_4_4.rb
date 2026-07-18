@@ -19,7 +19,7 @@ control 'JR2.C.4.4.4' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-      grep -P 'pam_pwhistory\.so' /etc/pam.d/system-auth /etc/pam.d/password-auth
+      grep -Pi -- '^\h*password\h+[^#\n\r]+\h+pam_unix.so([^#\n\r]+\h+)?(sha512|yescrypt)\b' /etc/pam.d/common-password
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do
