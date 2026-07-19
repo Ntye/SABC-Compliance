@@ -246,15 +246,10 @@ export const translations = {
       helper: {
         title: 'SSH Setup',
         description: 'Before registering a server, run the bootstrap script on it. It creates the ansible user, installs the platform\'s SSH key, and grants sudo. Run once per server.',
-        onlineTitle: 'Option 1 — Server can reach the platform',
+        onlineTitle: 'Server can reach the platform',
         platformUrl: 'Platform URL',
         platformUrlHint: 'The address target servers use to reach this platform. Change it if you access via localhost but servers use a different IP.',
         runOnTarget: 'Run on the target server:',
-        or: 'or',
-        airgapTitle: 'Option 2 — Airgap / no network to platform',
-        downloadBtn: 'Download setup-node.sh',
-        airgapSteps: 'Download the script (platform key embedded), transfer it to the target server via USB or SCP, then run it.',
-        thenRun: 'Then run on the target server:',
       },
     },
     jobs: {
@@ -1120,15 +1115,10 @@ export const translations = {
       helper: {
         title: 'Configuration SSH',
         description: 'Avant d\'enregistrer un serveur, exécutez le script de bootstrap dessus. Il crée l\'utilisateur ansible, installe la clé SSH de la plateforme et accorde sudo. À exécuter une fois par serveur.',
-        onlineTitle: 'Option 1 — Le serveur peut joindre la plateforme',
+        onlineTitle: 'Le serveur peut joindre la plateforme',
         platformUrl: 'URL de la plateforme',
         platformUrlHint: 'L\'adresse que les serveurs cibles utilisent pour joindre cette plateforme. Modifiez si vous accédez via localhost mais que les serveurs utilisent une autre IP.',
         runOnTarget: 'Exécuter sur le serveur cible :',
-        or: 'ou',
-        airgapTitle: 'Option 2 — Airgap / pas de réseau vers la plateforme',
-        downloadBtn: 'Télécharger setup-node.sh',
-        airgapSteps: 'Téléchargez le script (clé plateforme intégrée), transférez-le sur le serveur cible via USB ou SCP, puis exécutez-le.',
-        thenRun: 'Puis exécuter sur le serveur cible :',
       },
     },
     jobs: {

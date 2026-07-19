@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Download, Gauge, Globe, HardDriveDownload, Terminal, XCircle } from 'lucide-react'
-import { downloadSetupScript, jobWsUrl, listTiers, registerNode } from '../lib/api.js'
+import { ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Gauge, Globe, Terminal, XCircle } from 'lucide-react'
+import { jobWsUrl, listTiers, registerNode } from '../lib/api.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn, logLineClass } from '../lib/tw.js'
@@ -130,7 +130,6 @@ export default function AddServerPage() {
   }
 
   const curlCmd = `curl -k -sSL ${platformUrl}/api/nodes/bootstrap | sudo bash`
-  const airgapCmd = 'sudo bash setup-node.sh'
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -385,50 +384,6 @@ export default function AddServerPage() {
           </div>
         </div>
 
-        {/* Divider */}
-        <div className="flex items-center gap-3 my-5">
-          <div className="flex-1 border-t border-white/10" />
-          <span className="text-[10px] font-semibold text-console-muted uppercase">{t('addServer.helper.or')}</span>
-          <div className="flex-1 border-t border-white/10" />
-        </div>
-
-        {/* Option 2 — Airgap: download + transfer */}
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <HardDriveDownload size={12} className="text-console-accent" />
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-console-accent">
-              {t('addServer.helper.airgapTitle')}
-            </p>
-          </div>
-
-          <div className="flex items-start gap-4 mb-3">
-            <div className="flex-shrink-0">
-              <button
-                onClick={async () => {
-                  try { await downloadSetupScript() }
-                  catch (err) { toast(err.message, 'error') }
-                }}
-                className="flex items-center gap-2 px-4 py-2 bg-console-accent/20 hover:bg-console-accent/30 border border-console-accent/40 text-console-accent rounded-lg text-[12px] font-semibold transition-colors"
-              >
-                <Download size={13} />
-                {t('addServer.helper.downloadBtn')}
-              </button>
-            </div>
-            <p className="text-[10px] text-console-muted pt-1.5 leading-relaxed">
-              {t('addServer.helper.airgapSteps')}
-            </p>
-          </div>
-
-          <p className="text-[10px] text-console-muted mb-1.5">{t('addServer.helper.thenRun')}</p>
-          <div className="bg-console-surface rounded-lg p-3 flex items-center justify-between gap-3">
-            <pre className="text-[12px] font-mono text-console-text">{airgapCmd}</pre>
-            <CopyButton
-              text={airgapCmd}
-              className="p-1 rounded hover:bg-white/10 text-console-muted hover:text-console-text flex-shrink-0"
-              onResult={(ok) => toast(ok ? t('common.copied') : t('common.copyFailed'), ok ? 'success' : 'error')}
-            />
-          </div>
-        </div>
       </div>
     </div>
   )

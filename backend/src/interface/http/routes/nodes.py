@@ -275,32 +275,6 @@ def _render_bootstrap_script(cert_host: str, https_port: int) -> str:
 
 
 @router.get(
-    "/setup-script",
-    summary="Download the node bootstrap script",
-    response_class=PlainTextResponse,
-)
-async def get_setup_script(
-    host: str | None = Query(None, description="Platform host to trust for HTTPS (defaults to PLATFORM_PUBLIC_HOST / HOST_IP)"),
-    https_port: int | None = Query(None, description="Platform HTTPS port (defaults to HTTPS_PORT or 8443)"),
-    principal: AuthPrincipal = Depends(get_current_principal),
-):
-    """
-    Returns a downloadable bash script to run on a target server.
-    The platform's ansible public key is embedded at download time.
-
-    Transfer to the target server, then run:  sudo bash setup-node.sh
-    """
-    script = _render_bootstrap_script(
-        _resolve_cert_host(host, None), _resolve_https_port(https_port),
-    )
-    return PlainTextResponse(
-        content=script,
-        headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
-        media_type="text/x-sh; charset=utf-8",
-    )
-
-
-@router.get(
     "/bootstrap",
     summary="Bootstrap script for curl | sudo bash",
     response_class=PlainTextResponse,
