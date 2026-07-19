@@ -5,7 +5,7 @@ control 'JR2.C.6.2.9' do
   tag control_key: 'jr2_c_6_2_9'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 
 RPCV="$(sudo -Hiu root env | grep '^PATH' | cut -d= -f2)"
@@ -35,7 +35,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 p=$(su - root -c 'echo "$PATH"' 2>/dev/null | tail -n1)
 [ -n "$p" ] || p="$PATH"

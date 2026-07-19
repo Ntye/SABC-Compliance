@@ -5,7 +5,7 @@ control 'JR2.C.4.4.5' do
   tag control_key: 'jr2_c_4_4_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -50,7 +50,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 umin=$(awk '/^\s*UID_MIN/{print $2}' /etc/login.defs)
 [ -n "$umin" ] || umin=1000

@@ -5,7 +5,7 @@ control 'JR2.C.4.5.1.4' do
   tag control_key: 'jr2_c_4_5_1_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 useradd -D | grep INACTIVE
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 d=$(useradd -D | awk -F= '/INACTIVE/{print $2}')
 [ -n "$d" ] && [ "$d" -ge 0 ] && [ "$d" -le 30 ] || exit 1

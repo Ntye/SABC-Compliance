@@ -414,7 +414,43 @@
         executable: /bin/bash
       delegate_to: pe_master_dynamic
       register: classifier_result
-      changed_when: "'Classified PE Master' in classifier_result.stdout"
+      changed_when: "'Classified PE Master' in (classifier_result.stdout | default(''))"
+      # Never fatal here: when pe-console-services is down the API refuses
+      # connections, but if the platform repo is ALREADY built and served the
+      # agent install does not need the classifier at all. The two tasks below
+      # decide — warn-and-continue vs abort-with-remediation.
+      failed_when: false
+
+    - name: Warn — classifier API unavailable, continuing (platform repo already served)
+      debug:
+        msg: >-
+          Could not reach the PE classifier API on the primary
+          (https://localhost:4433 — connection refused usually means the
+          pe-console-services service is not running). The
+          {{ pe_repo_class }} class was NOT added, but the platform repo
+          metadata for {{ pe_platform | trim }} is already built and served
+          from the primary, so this agent installation proceeds. To restore
+          the classifier for future platforms, run on the Puppet primary:
+          'sudo systemctl start pe-console-services' and check
+          'sudo /opt/puppetlabs/bin/puppet infrastructure status'.
+      when:
+        - classifier_result.rc | default(0) != 0
+        - repo_built | bool
+
+    - name: Abort — classifier API unavailable and platform repo not built
+      fail:
+        msg: >-
+          The PE classifier API on the primary is unreachable
+          (https://localhost:4433, connection refused — the pe-console-services
+          service is not running), and the {{ pe_platform | trim }} package
+          repo has not been built yet, so the {{ pe_repo_class }} class cannot
+          be added and pe_repo cannot stage the agent packages. On the Puppet
+          primary run 'sudo systemctl start pe-console-services' (verify with
+          'sudo /opt/puppetlabs/bin/puppet infrastructure status'), then re-run
+          this installation.
+      when:
+        - classifier_result.rc | default(0) != 0
+        - not (repo_built | bool)
 
     # Run puppet on the primary to let pe_repo build/refresh the repo metadata.
     # Needed when (a) the class was just added, OR (b) we just extracted a tarball

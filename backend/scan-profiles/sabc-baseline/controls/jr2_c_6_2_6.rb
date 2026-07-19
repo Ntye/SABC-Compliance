@@ -5,7 +5,7 @@ control 'JR2.C.6.2.6' do
   tag control_key: 'jr2_c_6_2_6'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash 
 
 cut -d: -f3 /etc/group | sort | uniq -d | while read x ; do
@@ -25,7 +25,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 cut -d: -f4 /etc/group | sort | uniq -d | grep -q . && exit 1
 exit 0

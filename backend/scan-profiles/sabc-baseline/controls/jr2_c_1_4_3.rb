@@ -5,7 +5,7 @@ control 'JR2.C.1.4.3' do
   tag control_key: 'jr2_c_1_4_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -78,7 +78,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 v=$(sysctl -n kernel.yama.ptrace_scope 2>/dev/null)
 [ -n "$v" ] && [ "$v" -ge 1 ] && [ "$v" -le 3 ]

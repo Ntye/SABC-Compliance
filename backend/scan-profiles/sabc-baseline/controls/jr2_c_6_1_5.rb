@@ -5,7 +5,7 @@ control 'JR2.C.6.1.5' do
   tag control_key: 'jr2_c_6_1_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 stat -Lc "%n %a %u/%U %g/%G" /etc/shadow
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 f=/etc/shadow
 [ -e "$f" ] || exit 1

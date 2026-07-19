@@ -5,7 +5,7 @@ control 'JR2.C.3.4.2.1' do
   tag control_key: 'jr2_c_3_4_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 dpkg-query -s nftables | grep 'Status: install ok installed'
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for p in nftables; do
   rpm -q "$p" >/dev/null 2>&1 || exit 1

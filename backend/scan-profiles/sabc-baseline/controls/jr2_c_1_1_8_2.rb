@@ -5,7 +5,7 @@ control 'JR2.C.1.1.8.2' do
   tag control_key: 'jr2_c_1_1_8_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 findmnt -kn /dev/shm | grep -v 'noexec'
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 # N/A when /dev/shm is not a separate mount point on this node.
 findmnt -kn /dev/shm >/dev/null 2>&1 || exit 101

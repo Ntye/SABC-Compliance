@@ -5,7 +5,7 @@ control 'JR2.C.4.5.2' do
   tag control_key: 'jr2_c_4_5_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 grep -Eqs '^[[:space:]]*UMASK[[:space:]]+027' /etc/login.defs || exit 1
 grep -Eqs '^[[:space:]]*umask[[:space:]]+027' /etc/profile.d/*.sh /etc/profile 2>/dev/null || exit 1
@@ -24,7 +24,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 u=$(awk '/^\s*UMASK\s/ {print $2}' /etc/login.defs | tail -n1)
 case "$u" in 027|077) : ;; *) exit 1 ;; esac

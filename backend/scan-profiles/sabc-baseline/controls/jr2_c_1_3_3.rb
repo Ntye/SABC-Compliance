@@ -5,7 +5,7 @@ control 'JR2.C.1.3.3' do
   tag control_key: 'jr2_c_1_3_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 grep -Eq '^root:\$[0-9]' /etc/shadow || echo "root is locked"
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 grep -Eq 'sulogin' /usr/lib/systemd/system/rescue.service /etc/systemd/system/rescue.service.d/*.conf 2>/dev/null || exit 1
 grep -Eq 'sulogin' /usr/lib/systemd/system/emergency.service /etc/systemd/system/emergency.service.d/*.conf 2>/dev/null || exit 1

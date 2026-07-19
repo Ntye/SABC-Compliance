@@ -562,10 +562,18 @@ def _bash_wrap(script: str) -> str:
     with exit 2 before checking anything (observed as false FAILs on every GDM
     control). The Puppet side already runs the same bodies via `/bin/bash
     <file>`; this makes the scan side identical. The heredoc is POSIX, so the
-    wrapper itself runs under any sh, and `exec` propagates bash's exit status
-    (including the NA convention's 101)."""
+    wrapper runs under any sh, and bash — the last command — supplies the exit
+    status (including the NA convention's 101).
+
+    Deliberately NOT `exec /bin/bash`: with --sudo, train prefixes `sudo -- `
+    to the command string, and `exec` is a shell BUILTIN sudo cannot execute —
+    every command() check then died with "sudo: exec: command not found"
+    (observed live as 0/182 on a RHEL node and 28/206 on a Debian node; the 28
+    were the only package-resource checks, which bypass command()). A plain
+    `/bin/bash` is a real executable, so the wrapper behaves identically with
+    and without the sudo prefix."""
     return (
-        "exec /bin/bash <<'SABC_BASH_EOF'\n"
+        "/bin/bash <<'SABC_BASH_EOF'\n"
         + script.rstrip("\n")
         + "\nSABC_BASH_EOF"
     )

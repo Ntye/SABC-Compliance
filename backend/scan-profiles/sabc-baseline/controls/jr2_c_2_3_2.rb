@@ -10,7 +10,7 @@ control 'JR2.C.2.3.2' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for p in rsh; do
   rpm -q "$p" >/dev/null 2>&1 && exit 1

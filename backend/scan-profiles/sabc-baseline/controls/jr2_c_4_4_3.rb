@@ -5,7 +5,7 @@ control 'JR2.C.4.4.3' do
   tag control_key: 'jr2_c_4_4_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 grep -P -- '^\h*password\h+([^#\n\r]+\h+)?(pam_pwhistory\.so|pam_unix\.so)\b' /etc/pam.d/common-password
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 r=$(awk -F= '/^\s*remember\s*=/ {gsub(/ /,"",$2); print $2}' /etc/security/pwhistory.conf 2>/dev/null | tail -n1)
 [ -z "$r" ] && r=$(grep -Eo 'pam_pwhistory\.so[^#]*remember=[0-9]+' /etc/pam.d/system-auth 2>/dev/null | grep -Eo '[0-9]+' | tail -n1)

@@ -5,7 +5,7 @@ control 'JR2.C.2.1.2.1' do
   tag control_key: 'jr2_c_2_1_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 ps -ef | awk '(/[c]hronyd/ && $1!="_chrony") { print $1 }'
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q chrony >/dev/null 2>&1 || exit 101
 pgrep -u root -x chronyd >/dev/null 2>&1 && exit 1

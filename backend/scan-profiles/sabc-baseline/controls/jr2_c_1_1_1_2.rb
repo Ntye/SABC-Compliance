@@ -5,7 +5,7 @@ control 'JR2.C.1.1.1.2' do
   tag control_key: 'jr2_c_1_1_1_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -82,7 +82,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 # Compliant when the freevxfs kernel module cannot be loaded and is not loaded.
 lsmod | grep -q '^freevxfs\b' && exit 1

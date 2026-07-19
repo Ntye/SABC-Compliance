@@ -5,7 +5,7 @@ control 'JR2.C.5.1.3.1' do
   tag control_key: 'jr2_c_5_1_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 if [ -d /etc/aide/aide.conf.d ]; then
   conf_glob='/etc/aide/aide.conf /etc/aide/aide.conf.d/*'
@@ -31,7 +31,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q aide >/dev/null 2>&1 || exit 101
 for t in /usr/sbin/auditctl /usr/sbin/auditd /usr/sbin/ausearch /usr/sbin/aureport /usr/sbin/autrace /usr/sbin/augenrules; do

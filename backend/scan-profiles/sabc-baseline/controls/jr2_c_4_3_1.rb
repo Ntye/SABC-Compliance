@@ -5,7 +5,7 @@ control 'JR2.C.4.3.1' do
   tag control_key: 'jr2_c_4_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W sudo >/dev/null 2>&1 && exit 0
 dpkg-query -W sudo-ldap >/dev/null 2>&1 && exit 0
@@ -24,7 +24,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for p in sudo; do
   rpm -q "$p" >/dev/null 2>&1 || exit 1

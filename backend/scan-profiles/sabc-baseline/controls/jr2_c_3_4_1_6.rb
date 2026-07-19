@@ -5,7 +5,7 @@ control 'JR2.C.3.4.1.6' do
   tag control_key: 'jr2_c_3_4_1_6'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W ufw >/dev/null 2>&1 || exit 101
 ufw status verbose 2>/dev/null | grep -q 'Status: active' || exit 1

@@ -5,7 +5,7 @@ control 'JR2.C.1.6.1' do
   tag control_key: 'jr2_c_1_6_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 [ -e /etc/motd ] || exit 0
 os_id=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
@@ -25,7 +25,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 f=/etc/motd
 [ -e "$f" ] || exit 0

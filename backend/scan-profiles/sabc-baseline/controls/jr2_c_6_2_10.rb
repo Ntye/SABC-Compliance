@@ -5,7 +5,7 @@ control 'JR2.C.6.2.10' do
   tag control_key: 'jr2_c_6_2_10'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 awk -F: '($3 == 0) { print $1 }' /etc/passwd
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 [ "$(awk -F: '($3 == 0) {print $1}' /etc/passwd)" = "root" ]
 SABC_BASH_EOF

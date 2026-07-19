@@ -5,7 +5,7 @@ control 'JR2.C.2.1.4.3' do
   tag control_key: 'jr2_c_2_1_4_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W ntp >/dev/null 2>&1 || dpkg-query -W ntpsec >/dev/null 2>&1 || exit 101
 for u in ntp ntpsec; do
@@ -28,7 +28,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q ntp >/dev/null 2>&1 || exit 101
 systemctl is-enabled ntpd.service 2>/dev/null | grep -q enabled || exit 1

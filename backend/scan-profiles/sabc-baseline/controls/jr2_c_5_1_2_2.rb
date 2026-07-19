@@ -5,7 +5,7 @@ control 'JR2.C.5.1.2.2' do
   tag control_key: 'jr2_c_5_1_2_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 systemctl is-enabled rsyslog
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q rsyslog >/dev/null 2>&1 || exit 101
 systemctl is-enabled rsyslog.service 2>/dev/null | grep -q enabled || exit 1

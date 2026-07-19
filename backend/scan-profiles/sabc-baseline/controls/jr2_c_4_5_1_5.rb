@@ -5,7 +5,7 @@ control 'JR2.C.4.5.1.5' do
   tag control_key: 'jr2_c_4_5_1_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -36,7 +36,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 now=$(( $(date +%s) / 86400 ))
 bad=$(awk -F: -v now="$now" '($3 != "" && $3 > now) {print $1}' /etc/shadow)

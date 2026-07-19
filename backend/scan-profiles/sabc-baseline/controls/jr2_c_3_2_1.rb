@@ -5,7 +5,7 @@ control 'JR2.C.3.2.1' do
   tag control_key: 'jr2_c_3_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -78,7 +78,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 [ "$(sysctl -n net.ipv4.conf.all.send_redirects 2>/dev/null)" = "0" ] || exit 1
 [ "$(sysctl -n net.ipv4.conf.default.send_redirects 2>/dev/null)" = "0" ] || exit 1

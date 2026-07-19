@@ -5,7 +5,7 @@ control 'JR2.C.2.1.3.1' do
   tag control_key: 'jr2_c_2_1_3_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 systemctl is-enabled systemd-timesyncd 2>/dev/null | grep -q '^enabled' || exit 101
 grep -Ersq '^[[:space:]]*(NTP|FallbackNTP)=[^[:space:]]' /etc/systemd/timesyncd.conf /etc/systemd/timesyncd.conf.d 2>/dev/null && exit 0
@@ -24,7 +24,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 systemctl list-unit-files systemd-timesyncd.service 2>/dev/null | grep -q systemd-timesyncd || exit 101
 grep -Ersq '^\s*NTP=\S+' /etc/systemd/timesyncd.conf /etc/systemd/timesyncd.conf.d 2>/dev/null

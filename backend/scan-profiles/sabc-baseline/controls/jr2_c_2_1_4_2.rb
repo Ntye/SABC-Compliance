@@ -5,7 +5,7 @@ control 'JR2.C.2.1.4.2' do
   tag control_key: 'jr2_c_2_1_4_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 ps -ef | awk '(/[n]tpd/ && $1!="ntp") { print $1 }'
 SABC_BASH_EOF
     SABC_V
@@ -21,7 +21,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q ntp >/dev/null 2>&1 || exit 101
 pgrep -x ntpd >/dev/null 2>&1 || exit 101

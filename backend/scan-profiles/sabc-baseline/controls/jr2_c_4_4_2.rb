@@ -5,7 +5,7 @@ control 'JR2.C.4.4.2' do
   tag control_key: 'jr2_c_4_4_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 d=$(grep -Ehs '^[[:space:]]*deny[[:space:]]*=' /etc/security/faillock.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+')
 [ -n "$d" ] && [ "$d" -ge 1 ] && [ "$d" -le 5 ] || exit 1
@@ -28,7 +28,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 d=$(awk -F= '/^\s*deny\s*=/ {gsub(/ /,"",$2); print $2}' /etc/security/faillock.conf 2>/dev/null | tail -n1)
 u=$(awk -F= '/^\s*unlock_time\s*=/ {gsub(/ /,"",$2); print $2}' /etc/security/faillock.conf 2>/dev/null | tail -n1)

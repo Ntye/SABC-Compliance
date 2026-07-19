@@ -299,8 +299,12 @@ class TestInspec:
         c = control("JR2.C.11", vdeb="```\n#!/usr/bin/env bash\n[[ -f /x ]]\n```")
         generate_inspec_profile(profile([c]), str(tmp_path))
         rb = (tmp_path / "controls" / "jr2_c_11.rb").read_text()
-        assert "exec /bin/bash <<'SABC_BASH_EOF'" in rb
-        assert "SABC_BASH_EOF" in rb.split("exec /bin/bash", 1)[1]
+        assert "/bin/bash <<'SABC_BASH_EOF'" in rb
+        assert "SABC_BASH_EOF" in rb.split("/bin/bash", 1)[1]
+        # NEVER `exec /bin/bash`: with --sudo train prefixes `sudo -- ` and
+        # exec is a shell builtin sudo cannot run — every check would fail
+        # with "sudo: exec: command not found" (live: 0/182 on RHEL).
+        assert "exec /bin/bash" not in rb
 
     def test_validate_exit_101_reported_as_not_applicable_skip(self, tmp_path) -> None:
         # Authored validates exit 101 when their prerequisite is absent (GDM on

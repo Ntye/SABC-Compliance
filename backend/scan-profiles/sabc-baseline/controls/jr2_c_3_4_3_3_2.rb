@@ -5,7 +5,7 @@ control 'JR2.C.3.4.3.3.2' do
   tag control_key: 'jr2_c_3_4_3_3_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
 systemctl is-enabled nftables 2>/dev/null | grep -q '^enabled' && exit 101
@@ -28,7 +28,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 systemctl is-active firewalld 2>/dev/null | grep -qx active && exit 101
 systemctl is-enabled nftables 2>/dev/null | grep -q '^enabled' && exit 101

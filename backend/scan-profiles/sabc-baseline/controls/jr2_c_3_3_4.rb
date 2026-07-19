@@ -5,7 +5,7 @@ control 'JR2.C.3.3.4' do
   tag control_key: 'jr2_c_3_3_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 [ "$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)" = "1" ] || exit 1
 [ "$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)" = "1" ] || exit 1
@@ -26,7 +26,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 [ "$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)" = "1" ] || exit 1
 [ "$(sysctl -n net.ipv4.conf.default.log_martians 2>/dev/null)" = "1" ] || exit 1

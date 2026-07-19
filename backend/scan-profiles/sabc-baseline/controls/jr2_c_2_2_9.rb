@@ -13,7 +13,7 @@ control 'JR2.C.2.2.9' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 installed=0
 for p in dovecot cyrus-imapd; do rpm -q "$p" >/dev/null 2>&1 && installed=1; done

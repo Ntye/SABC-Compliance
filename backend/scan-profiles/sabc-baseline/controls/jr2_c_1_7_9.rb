@@ -5,7 +5,7 @@ control 'JR2.C.1.7.9' do
   tag control_key: 'jr2_c_1_7_9'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W gdm3 >/dev/null 2>&1 || exit 101
 grep -Eqsi '^[[:space:]]*Enable[[:space:]]*=[[:space:]]*true' /etc/gdm3/custom.conf /etc/gdm/custom.conf 2>/dev/null && exit 1
@@ -24,7 +24,7 @@ SABC_BASH_EOF
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
-exec /bin/bash <<'SABC_BASH_EOF'
+/bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q gdm >/dev/null 2>&1 || exit 101
 [ -f /etc/gdm/custom.conf ] || exit 0
