@@ -455,6 +455,10 @@ export const translations = {
       // Fleet table
       fleetTitle: 'Fleet overview',
       node: 'Node',
+      tier: 'Tier',
+      enforcement: 'Enforcement',
+      enforceOn: 'On',
+      enforceOff: 'Off',
       score: 'Score',
       controls: 'Controls',
       lastScan: 'Last scan',
@@ -1323,6 +1327,10 @@ export const translations = {
       // Tableau parc
       fleetTitle: 'Vue d\'ensemble du parc',
       node: 'Nœud',
+      tier: 'Palier',
+      enforcement: 'Application',
+      enforceOn: 'Activée',
+      enforceOff: 'Désactivée',
       score: 'Score',
       controls: 'Contrôles',
       lastScan: 'Dernier scan',

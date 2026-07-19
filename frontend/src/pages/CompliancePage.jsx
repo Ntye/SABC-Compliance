@@ -464,6 +464,8 @@ export default function CompliancePage() {
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                 <th className="text-left px-5 py-2.5">{t('compliance.node')}</th>
+                <th className="text-left px-5 py-2.5">{t('compliance.tier')}</th>
+                <th className="text-left px-5 py-2.5">{t('compliance.enforcement')}</th>
                 <th className="text-left px-5 py-2.5 w-48">{t('compliance.score')}</th>
                 <th className="text-left px-5 py-2.5">{t('compliance.controls')}</th>
                 <th className="text-left px-5 py-2.5">{t('compliance.source')}</th>
@@ -479,6 +481,16 @@ export default function CompliancePage() {
                     <td className="px-5 py-3">
                       <div className="font-medium text-gray-800">{node.hostname}</div>
                       <div className="text-[11px] text-gray-400">{node.ip}</div>
+                    </td>
+                    <td className="px-5 py-3">
+                      {node.tier_name
+                        ? <span className={badge('gray')}>{node.tier_name}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={badge(node.enforce ? 'success' : 'gray')}>
+                        {node.enforce ? t('compliance.enforceOn') : t('compliance.enforceOff')}
+                      </span>
                     </td>
                     <td className="px-5 py-3">
                       {r ? (

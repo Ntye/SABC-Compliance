@@ -1113,6 +1113,12 @@ class ComplianceRepository(IComplianceRepository):
     async def find_summary(self) -> list[dict]:
         async with self._session() as s:
             node_rows = (await s.execute(select(nodes_table))).all()
+            # Tier lookup (id → name + enforce flag) so each fleet row can show
+            # the node's tier and whether that tier auto-enforces drift.
+            tier_map = {
+                r.id: (r.name, bool(getattr(r, "enforce", 0)))
+                for r in (await s.execute(select(tiers_table))).all()
+            }
             results = []
             for node_row in node_rows:
                 reports_task = s.execute(
@@ -1134,6 +1140,7 @@ class ComplianceRepository(IComplianceRepository):
                 remediations = [self._remediation_to_entity(r) for r in remediations_result.all()]
 
                 node = NodeRepository(self._session)._to_entity(node_row)
+                tier_name, tier_enforce = tier_map.get(node.tier_id, (None, False))
                 results.append({
                     "node_id": node.id,
                     "hostname": node.hostname,
@@ -1143,6 +1150,11 @@ class ComplianceRepository(IComplianceRepository):
                     "puppet_enrolled": node.puppet_enrolled,
                     "detection_enrolled": node.detection_enrolled,
                     "scan_ready": node.scan_ready,
+                    "tier_id": node.tier_id,
+                    "tier_name": tier_name,
+                    # Enforcement is welded to the tier (Tier 3/4 enforce) — the
+                    # canonical "does this node auto-remediate drift" signal.
+                    "enforce": tier_enforce,
                     "reports": [
                         {
                             "id": r.id, "source": r.source, "framework": r.framework,
