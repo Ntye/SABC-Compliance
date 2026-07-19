@@ -5,6 +5,7 @@ control 'JR2.C.3.4.1.5' do
   tag control_key: 'jr2_c_3_4_1_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -22,6 +23,7 @@ control 'JR2.C.3.4.1.5' do
  echo -e "\n - Audit Passed -\n- All open ports have a rule in UFW\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do

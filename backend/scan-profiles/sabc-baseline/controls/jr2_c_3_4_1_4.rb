@@ -5,7 +5,9 @@ control 'JR2.C.3.4.1.4' do
   tag control_key: 'jr2_c_3_4_1_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 ufw status verbose
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do

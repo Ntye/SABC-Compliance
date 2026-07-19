@@ -5,6 +5,7 @@ control 'JR2.C.4.2.1' do
   tag control_key: 'jr2_c_4_2_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -38,6 +39,7 @@ control 'JR2.C.4.2.1' do
  [ -n "$l_output" ] && echo -e " - * Correctly set * :\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -51,6 +53,7 @@ control 'JR2.C.4.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 f=/etc/ssh/sshd_config
 [ -e "$f" ] || exit 1
@@ -60,6 +63,7 @@ m=$1 o=$2 g=$3
 { [ "$g" = "root" ]; } || exit 1
 [ $(( 8#$m & ~8#600 & 8#7777 )) -eq 0 ] || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

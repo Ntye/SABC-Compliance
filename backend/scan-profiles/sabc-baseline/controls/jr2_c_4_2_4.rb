@@ -5,12 +5,14 @@ control 'JR2.C.4.2.4' do
   tag control_key: 'jr2_c_4_2_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 if command -v sshd >/dev/null 2>&1; then
   sshd -T 2>/dev/null | grep -Eqi '^(allowusers|allowgroups|denyusers|denygroups)[[:space:]]+[^[:space:]]' && exit 0
 fi
 cat /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | grep -Eqi '^[[:space:]]*(Allow|Deny)(Users|Groups)[[:space:]]+[^[:space:]]' && exit 0
 exit 1
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -24,10 +26,12 @@ exit 1
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 command -v sshd >/dev/null 2>&1 || exit 101
 T=$(sshd -T 2>/dev/null) || exit 1
 echo "$T" | grep -Eq '^(allowusers|allowgroups|denyusers|denygroups)\s'
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

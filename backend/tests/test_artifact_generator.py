@@ -291,6 +291,17 @@ class TestInspec:
         rb = (tmp_path / "controls" / "jr2_c_1_1_1.rb").read_text()
         assert "package('autofs')" in rb and "should_not be_installed" in rb
 
+    def test_validate_runs_under_real_bash_not_sh(self, tmp_path) -> None:
+        # train executes command() strings with /bin/sh (dash on Debian); the
+        # CIS validate bodies are bash-only and were dying with exit 2 before
+        # checking anything (false FAILs on every GDM control). The generated
+        # control must hand the body to real bash via a POSIX heredoc.
+        c = control("JR2.C.11", vdeb="```\n#!/usr/bin/env bash\n[[ -f /x ]]\n```")
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_11.rb").read_text()
+        assert "exec /bin/bash <<'SABC_BASH_EOF'" in rb
+        assert "SABC_BASH_EOF" in rb.split("exec /bin/bash", 1)[1]
+
     def test_validate_exit_101_reported_as_not_applicable_skip(self, tmp_path) -> None:
         # Authored validates exit 101 when their prerequisite is absent (GDM on
         # a headless server, ntp on a chrony host). The generated check must

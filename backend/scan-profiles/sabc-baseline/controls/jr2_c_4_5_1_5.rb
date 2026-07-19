@@ -5,6 +5,7 @@ control 'JR2.C.4.5.1.5' do
   tag control_key: 'jr2_c_4_5_1_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -21,6 +22,7 @@ control 'JR2.C.4.5.1.5' do
  echo -e "\n- Audit Result:\n ** FAIL **\n - * Reasons for audit failure * :$l_output2\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -34,10 +36,12 @@ control 'JR2.C.4.5.1.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 now=$(( $(date +%s) / 86400 ))
 bad=$(awk -F: -v now="$now" '($3 != "" && $3 > now) {print $1}' /etc/shadow)
 [ -z "$bad" ]
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

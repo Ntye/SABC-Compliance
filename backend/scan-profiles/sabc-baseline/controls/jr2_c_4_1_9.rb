@@ -5,6 +5,7 @@ control 'JR2.C.4.1.9' do
   tag control_key: 'jr2_c_4_1_9'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -44,6 +45,7 @@ control 'JR2.C.4.1.9' do
  echo -e "\n- Audit Result:\n ** FAIL **\n - Reason(s) for audit failure:$l_output2\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -57,6 +59,7 @@ control 'JR2.C.4.1.9' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q at >/dev/null 2>&1 || exit 101
 [ -f /etc/at.allow ] || exit 1
@@ -69,6 +72,7 @@ if [ -f /etc/at.deny ]; then
   [ "$o" = root ] && [ $(( 8#$m & 8#0137 )) -eq 0 ] || exit 1
 fi
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

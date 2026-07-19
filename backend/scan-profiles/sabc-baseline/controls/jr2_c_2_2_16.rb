@@ -5,11 +5,13 @@ control 'JR2.C.2.2.16' do
   tag control_key: 'jr2_c_2_2_16'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W rsync >/dev/null 2>&1 || exit 0
 systemctl list-unit-files 2>/dev/null | grep -q '^rsync\.service' || exit 0
 [ "$(systemctl is-enabled rsync 2>/dev/null)" = "masked" ] && exit 0
 exit 1
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -23,6 +25,7 @@ exit 1
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q rsync-daemon >/dev/null 2>&1 || {
   systemctl list-unit-files rsyncd.service 2>/dev/null | grep -q rsyncd || exit 0
@@ -30,6 +33,7 @@ rpm -q rsync-daemon >/dev/null 2>&1 || {
 systemctl is-enabled rsyncd.socket rsyncd.service 2>/dev/null | grep -q '^enabled' && exit 1
 systemctl is-active rsyncd.socket rsyncd.service 2>/dev/null | grep -q '^active' && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

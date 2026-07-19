@@ -5,7 +5,9 @@ control 'JR2.C.6.1.6' do
   tag control_key: 'jr2_c_6_1_6'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 stat -Lc "%n %a %u/%U %g/%G" /etc/shadow-
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,6 +21,7 @@ stat -Lc "%n %a %u/%U %g/%G" /etc/shadow-
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 f=/etc/shadow-
 [ -e "$f" ] || exit 0
@@ -28,6 +31,7 @@ m=$1 o=$2 g=$3
 { [ "$g" = "root" ]; } || exit 1
 [ $(( 8#$m & ~8#0 & 8#7777 )) -eq 0 ] || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

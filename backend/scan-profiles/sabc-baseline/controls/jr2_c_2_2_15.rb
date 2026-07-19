@@ -5,7 +5,9 @@ control 'JR2.C.2.2.15' do
   tag control_key: 'jr2_c_2_2_15'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 ss -lntu | grep -P ':25\b' | grep -Pv '\h+(127\.0\.0\.1|\[?::1\]?):25\b'
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,8 +21,10 @@ ss -lntu | grep -P ':25\b' | grep -Pv '\h+(127\.0\.0\.1|\[?::1\]?):25\b'
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 ss -lntu 2>/dev/null | awk '$5 !~ /^(127\.0\.0\.1|\[?::1\]?):(25|465|587)$/ && $5 ~ /:(25|465|587)$/ {found=1} END {exit found?1:0}'
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

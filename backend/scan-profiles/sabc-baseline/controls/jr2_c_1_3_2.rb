@@ -5,7 +5,9 @@ control 'JR2.C.1.3.2' do
   tag control_key: 'jr2_c_1_3_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 stat -Lc 'Access: (%#a/%A) Uid: ( %u/ %U) Gid: ( %g/ %G)' /boot/grub/grub.cfg
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,6 +21,7 @@ stat -Lc 'Access: (%#a/%A) Uid: ( %u/ %U) Gid: ( %g/ %G)' /boot/grub/grub.cfg
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 ok=0
 for f in /boot/grub2/grub.cfg /boot/grub2/grubenv /boot/grub2/user.cfg; do
@@ -30,6 +33,7 @@ m=$1 o=$2 g=$3
   [ $(( 8#$m & 8#0077 )) -eq 0 ] || exit 1
 done
 [ "$ok" -eq 1 ] && exit 0 || exit 101
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

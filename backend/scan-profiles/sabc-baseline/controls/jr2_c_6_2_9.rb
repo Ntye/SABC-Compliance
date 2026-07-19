@@ -5,6 +5,7 @@ control 'JR2.C.6.2.9' do
   tag control_key: 'jr2_c_6_2_9'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 
 RPCV="$(sudo -Hiu root env | grep '^PATH' | cut -d= -f2)"
@@ -20,6 +21,7 @@ for x in $(echo "$RPCV" | tr ":" " "); do
  echo "$x is not a directory"
  fi
 done
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -33,6 +35,7 @@ done
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 p=$(su - root -c 'echo "$PATH"' 2>/dev/null | tail -n1)
 [ -n "$p" ] || p="$PATH"
@@ -47,6 +50,7 @@ m=$1 o=$2 g=$3
   [ $(( 8#$m & 8#0022 )) -eq 0 ] || exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

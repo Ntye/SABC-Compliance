@@ -5,6 +5,7 @@ control 'JR2.C.6.2.5' do
   tag control_key: 'jr2_c_6_2_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 
 cut -f3 -d":" /etc/passwd | sort -n | uniq -c | while read x ; do
@@ -15,6 +16,7 @@ cut -f3 -d":" /etc/passwd | sort -n | uniq -c | while read x ; do
  echo "Duplicate UID ($2): $users"
  fi
 done
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -28,9 +30,11 @@ done
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 cut -d: -f3 /etc/passwd | sort | uniq -d | grep -q . && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

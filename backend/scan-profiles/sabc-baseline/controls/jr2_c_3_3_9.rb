@@ -5,6 +5,7 @@ control 'JR2.C.3.3.9' do
   tag control_key: 'jr2_c_3_3_9'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -63,6 +64,7 @@ control 'JR2.C.3.3.9' do
  [ -n "$l_output" ] && echo -e "\n- Correctly set:\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -76,12 +78,14 @@ control 'JR2.C.3.3.9' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 # N/A when IPv6 is disabled on this node (key absent).
 sysctl -n net.ipv6.conf.all.accept_ra >/dev/null 2>&1 || exit 101
 [ "$(sysctl -n net.ipv6.conf.all.accept_ra 2>/dev/null)" = "0" ] || exit 1
 [ "$(sysctl -n net.ipv6.conf.default.accept_ra 2>/dev/null)" = "0" ] || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

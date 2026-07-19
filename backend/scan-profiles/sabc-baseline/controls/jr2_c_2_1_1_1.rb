@@ -5,6 +5,7 @@ control 'JR2.C.2.1.1.1' do
   tag control_key: 'jr2_c_2_1_1_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -34,6 +35,7 @@ control 'JR2.C.2.1.1.1' do
  echo -e "\n- FAIL:\n$output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -47,12 +49,14 @@ control 'JR2.C.2.1.1.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 n=0
 systemctl is-enabled chronyd.service 2>/dev/null | grep -q enabled && n=$((n+1))
 systemctl is-enabled ntpd.service 2>/dev/null | grep -q enabled && n=$((n+1))
 systemctl is-enabled systemd-timesyncd.service 2>/dev/null | grep -q enabled && n=$((n+1))
 [ "$n" -eq 1 ]
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -10,6 +10,7 @@ control 'JR2.C.2.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 installed=0
 for p in avahi; do rpm -q "$p" >/dev/null 2>&1 && installed=1; done
@@ -18,6 +19,7 @@ for p in avahi; do rpm -q "$p" >/dev/null 2>&1 && installed=1; done
 systemctl is-enabled avahi-daemon.socket avahi-daemon.service 2>/dev/null | grep -q '^enabled' && exit 1
 systemctl is-active avahi-daemon.socket avahi-daemon.service 2>/dev/null | grep -q '^active' && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

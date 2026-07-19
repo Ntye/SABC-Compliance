@@ -5,7 +5,9 @@ control 'JR2.C.4.5.1' do
   tag control_key: 'jr2_c_4_5_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 grep "^root:" /etc/passwd | cut -f4 -d:
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,8 +21,10 @@ grep "^root:" /etc/passwd | cut -f4 -d:
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 [ "$(id -g root)" = "0" ]
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

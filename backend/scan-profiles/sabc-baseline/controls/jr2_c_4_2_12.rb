@@ -5,7 +5,9 @@ control 'JR2.C.4.2.12' do
   tag control_key: 'jr2_c_4_2_12'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/hosts | awk '{print $1}')" | grep ciphers
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,11 +21,13 @@ sshd -T -C user=root -C host="$(hostname)" -C addr="$(grep $(hostname) /etc/host
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 command -v sshd >/dev/null 2>&1 || exit 101
 T=$(sshd -T 2>/dev/null) || exit 1
 echo "$T" | grep '^ciphers ' | grep -Eq '(3des-cbc|aes128-cbc|aes192-cbc|aes256-cbc|rc4|blowfish-cbc|cast128-cbc)' && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

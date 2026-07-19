@@ -5,9 +5,11 @@ control 'JR2.C.4.3.4' do
   tag control_key: 'jr2_c_4_3_4'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 grep -rEs '^[^#]*\!authenticate' /etc/sudoers /etc/sudoers.d 2>/dev/null | grep -q . && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -21,9 +23,11 @@ exit 0
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 grep -Ersq '^\s*[^#]*\!authenticate' /etc/sudoers /etc/sudoers.d 2>/dev/null && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

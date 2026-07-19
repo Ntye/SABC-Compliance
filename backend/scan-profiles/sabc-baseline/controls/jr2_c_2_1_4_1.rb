@@ -5,6 +5,7 @@ control 'JR2.C.2.1.4.1' do
   tag control_key: 'jr2_c_2_1_4_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W ntp >/dev/null 2>&1 || dpkg-query -W ntpsec >/dev/null 2>&1 || exit 101
 f=/etc/ntpsec/ntp.conf; [ -e "$f" ] || f=/etc/ntp.conf
@@ -17,6 +18,7 @@ for v in 4 6; do
   done
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -30,10 +32,12 @@ exit 0
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 rpm -q ntp >/dev/null 2>&1 || exit 101
 c=$(grep -Ec '^\s*restrict\s+(-4\s+|-6\s+)?default\s' /etc/ntp.conf 2>/dev/null)
 [ "$c" -ge 2 ]
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

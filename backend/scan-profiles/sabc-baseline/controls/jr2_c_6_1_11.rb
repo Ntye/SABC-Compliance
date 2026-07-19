@@ -5,6 +5,7 @@ control 'JR2.C.6.1.11' do
   tag control_key: 'jr2_c_6_1_11'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -44,6 +45,7 @@ control 'JR2.C.6.1.11' do
  [ -n "$l_output" ] && echo -e "- * Correctly configured * :\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -57,12 +59,14 @@ control 'JR2.C.6.1.11' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 find / -xdev \( -path /proc -o -path /sys -o -path /run -o -path /tmp -o -path /var/tmp -o -path /dev/shm \) -prune \
   -o -type f -perm -0002 -print 2>/dev/null | grep -q . && exit 1
 find / -xdev \( -path /proc -o -path /sys -o -path /run \) -prune \
   -o -type d -perm -0002 ! -perm -1000 -print 2>/dev/null | grep -q . && exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

@@ -522,7 +522,7 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
         checks.append(
             f"  if {_inspec_family_guard(fam)}\n"
             f"    v_{fam} = command(<<-'SABC_V'.chomp)\n"
-            f"{_ruby_heredoc(validate)}"
+            f"{_ruby_heredoc(_bash_wrap(validate))}"
             f"    SABC_V\n"
             f"    if v_{fam}.exit_status == {NA_EXIT_CODE}\n"
             f"      describe 'Not applicable' do\n"
@@ -551,6 +551,24 @@ def _inspec_control(control: ProfileControl) -> tuple[str, list[str]]:
     else:
         body = "\n".join(checks) + "\n"
     return header + body + "end\n", pending
+
+
+def _bash_wrap(script: str) -> str:
+    """Hand the validate body to real bash, whatever shell runs the command.
+
+    InSpec's train backend executes command() strings with /bin/sh (locally
+    `sh -c`; over SSH the login shell) — on Debian that is dash, and the CIS
+    validate scripts are bash-only (herestrings, [[ ]], echo -e), so they died
+    with exit 2 before checking anything (observed as false FAILs on every GDM
+    control). The Puppet side already runs the same bodies via `/bin/bash
+    <file>`; this makes the scan side identical. The heredoc is POSIX, so the
+    wrapper itself runs under any sh, and `exec` propagates bash's exit status
+    (including the NA convention's 101)."""
+    return (
+        "exec /bin/bash <<'SABC_BASH_EOF'\n"
+        + script.rstrip("\n")
+        + "\nSABC_BASH_EOF"
+    )
 
 
 def _ruby_heredoc(script: str) -> str:

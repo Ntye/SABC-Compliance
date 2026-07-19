@@ -5,6 +5,7 @@ control 'JR2.C.6.2.12' do
   tag control_key: 'jr2_c_6_2_12'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -96,6 +97,7 @@ control 'JR2.C.6.2.12' do
  [ -n "$l_output" ] && echo -e "- * Correctly configured * :\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -109,6 +111,7 @@ control 'JR2.C.6.2.12' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 umin=$(awk '/^\s*UID_MIN/{print $2}' /etc/login.defs); [ -n "$umin" ] || umin=1000
 awk -F: -v m="$umin" '($3>=m && $7!~/(nologin|\/bin\/false)$/) {print $6}' /etc/passwd | \
@@ -120,6 +123,7 @@ while read -r h; do
   find "$h" -maxdepth 1 -name '.*' -type f -perm /go+w 2>/dev/null | grep -q . && exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

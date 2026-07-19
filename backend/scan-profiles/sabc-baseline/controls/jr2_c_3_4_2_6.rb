@@ -5,6 +5,7 @@ control 'JR2.C.3.4.2.6' do
   tag control_key: 'jr2_c_3_4_2_6'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 systemctl is-active ufw 2>/dev/null | grep -qx active && exit 101
 dpkg-query -W nftables >/dev/null 2>&1 || exit 101
@@ -14,6 +15,7 @@ n=$(printf '%s' "$r" | grep -cE 'hook (input|forward|output)')
 d=$(printf '%s' "$r" | grep -E 'hook (input|forward|output)' | grep -c 'policy drop')
 [ "$n" -gt 0 ] && [ "$n" -eq "$d" ] && exit 0
 exit 1
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -27,6 +29,7 @@ exit 1
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 # N/A when another firewall (firewalld) is the active choice on this node.
 systemctl is-active firewalld.service 2>/dev/null | grep -q '^active' && exit 101
@@ -34,6 +37,7 @@ rpm -q nftables >/dev/null 2>&1 || exit 101
 nft list ruleset 2>/dev/null | grep -E 'hook (input|forward|output)' | grep -vq 'policy drop' && exit 1
 nft list ruleset 2>/dev/null | grep -Eq 'hook input' || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

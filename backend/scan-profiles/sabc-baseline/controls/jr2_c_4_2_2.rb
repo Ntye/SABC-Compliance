@@ -5,6 +5,7 @@ control 'JR2.C.4.2.2' do
   tag control_key: 'jr2_c_4_2_2'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 bad=0
 for f in /etc/ssh/ssh_host_*_key; do
@@ -16,6 +17,7 @@ for f in /etc/ssh/ssh_host_*_key; do
   esac
 done
 exit $bad
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -29,6 +31,7 @@ exit $bad
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 found=0
 for f in /etc/ssh/ssh_host_*_key; do
@@ -44,6 +47,7 @@ m=$1 o=$2 g=$3
   fi
 done
 [ "$found" -eq 1 ] && exit 0 || exit 101
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

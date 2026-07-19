@@ -5,6 +5,7 @@ control 'JR2.C.3.3.5' do
   tag control_key: 'jr2_c_3_3_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -63,6 +64,7 @@ control 'JR2.C.3.3.5' do
  [ -n "$l_output" ] && echo -e "\n- Correctly set:\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -76,9 +78,11 @@ control 'JR2.C.3.3.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 [ "$(sysctl -n net.ipv4.icmp_echo_ignore_broadcasts 2>/dev/null)" = "1" ] || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

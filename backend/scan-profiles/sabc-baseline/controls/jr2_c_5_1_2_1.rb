@@ -10,11 +10,13 @@ control 'JR2.C.5.1.2.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for p in rsyslog; do
   rpm -q "$p" >/dev/null 2>&1 || exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

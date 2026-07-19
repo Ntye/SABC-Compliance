@@ -5,6 +5,7 @@ control 'JR2.C.6.2.3' do
   tag control_key: 'jr2_c_6_2_3'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 
 for i in $(cut -s -d: -f4 /etc/passwd | sort -u ); do
@@ -13,6 +14,7 @@ for i in $(cut -s -d: -f4 /etc/passwd | sort -u ); do
  echo "Group $i is referenced by /etc/passwd but does not exist in /etc/group"
  fi
 done
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -26,11 +28,13 @@ done
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for g in $(cut -d: -f4 /etc/passwd | sort -u); do
   getent group "$g" >/dev/null || exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

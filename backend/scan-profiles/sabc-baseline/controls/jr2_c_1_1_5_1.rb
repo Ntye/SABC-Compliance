@@ -5,7 +5,9 @@ control 'JR2.C.1.1.5.1' do
   tag control_key: 'jr2_c_1_1_5_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 findmnt -kn /var/log | grep -v 'nodev'
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -19,10 +21,12 @@ findmnt -kn /var/log | grep -v 'nodev'
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 # N/A when /var/log is not a separate mount point on this node.
 findmnt -kn /var/log >/dev/null 2>&1 || exit 101
 findmnt -kn /var/log | grep -qw nodev
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

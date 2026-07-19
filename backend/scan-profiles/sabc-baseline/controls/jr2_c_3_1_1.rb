@@ -5,6 +5,7 @@ control 'JR2.C.3.1.1' do
   tag control_key: 'jr2_c_3_1_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -50,6 +51,7 @@ control 'JR2.C.3.1.1' do
  [ -n "$l_output" ] && echo -e "\n- Correctly set:\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -63,6 +65,7 @@ control 'JR2.C.3.1.1' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 ls /sys/class/net/*/wireless >/dev/null 2>&1 || exit 101
 for w in /sys/class/net/*/wireless; do
@@ -70,6 +73,7 @@ for w in /sys/class/net/*/wireless; do
   ip link show "$i" 2>/dev/null | grep -q 'state UP' && exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

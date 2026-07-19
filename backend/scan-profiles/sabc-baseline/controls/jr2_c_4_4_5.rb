@@ -5,6 +5,7 @@ control 'JR2.C.4.4.5' do
   tag control_key: 'jr2_c_4_4_5'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 
 {
@@ -35,6 +36,7 @@ control 'JR2.C.4.4.5' do
  [ -n "$l_output" ] && echo -e "- * Correctly configured * :\n$l_output\n"
  fi
 }
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -48,11 +50,13 @@ control 'JR2.C.4.4.5' do
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 umin=$(awk '/^\s*UID_MIN/{print $2}' /etc/login.defs)
 [ -n "$umin" ] || umin=1000
 bad=$(awk -F: -v m="$umin" '($1!~/^(root|halt|sync|shutdown|nfsnobody)$/ && ($3<m || $3==65534) && $7!~/(nologin|\/bin\/false)$/) {print $1}' /etc/passwd)
 [ -z "$bad" ]
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do

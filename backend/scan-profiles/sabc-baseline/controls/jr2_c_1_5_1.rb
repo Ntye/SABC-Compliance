@@ -5,10 +5,12 @@ control 'JR2.C.1.5.1' do
   tag control_key: 'jr2_c_1_5_1'
   if os.debian?
     v_debian = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/bin/bash
 dpkg-query -W apparmor >/dev/null 2>&1 || exit 1
 dpkg-query -W apparmor-utils >/dev/null 2>&1 || exit 1
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_debian.exit_status == 101
       describe 'Not applicable' do
@@ -22,11 +24,13 @@ exit 0
   end
   if os.redhat?
     v_redhat = command(<<-'SABC_V'.chomp)
+exec /bin/bash <<'SABC_BASH_EOF'
 #!/usr/bin/env bash
 for p in libselinux; do
   rpm -q "$p" >/dev/null 2>&1 || exit 1
 done
 exit 0
+SABC_BASH_EOF
     SABC_V
     if v_redhat.exit_status == 101
       describe 'Not applicable' do
