@@ -58,14 +58,6 @@
           Puppet agent before enforcing the referential.
       when: not puppet_bin_stat.stat.exists
 
-    - name: Ensure the local module root exists
-      file:
-        path: "{{ module_root }}/sabc_hardening"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
     # Clear any stale copy first so a re-push can never leave the module in a
     # half-populated state (e.g. control manifests from a previous run without a
     # fresh init.pp/metadata.json) — the exact shape that made `puppet apply`
@@ -75,17 +67,41 @@
         path: "{{ module_root }}/sabc_hardening"
         state: absent
 
-    # Trailing slash on src copies the CONTENTS into the module directory, so
-    # manifests/init.pp AND metadata.json AND every control manifest land under
-    # {{ module_root }}/sabc_hardening/ — not just the per-control *.pp files.
-    - name: Push the generated sabc_hardening module to the node
-      copy:
-        src: "{{ sabc_module_src }}/"
+    - name: Ensure the local module root exists
+      file:
+        path: "{{ module_root }}/sabc_hardening"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # The module is ~800 small files (a manifest + validate/configure script per
+    # control, per OS family). Ansible's copy module transfers those one-by-one
+    # over SFTP — many minutes to a remote node, and the job window it opens got
+    # a real run SIGTERM-killed mid-push. Ship ONE tarball instead and extract
+    # on the node: same content, seconds instead of minutes.
+    - name: Create a controller-side tarball of the module
+      command: >-
+        tar -czf {{ sabc_module_tar }} -C {{ sabc_module_src }} .
+      vars:
+        sabc_module_tar: "/tmp/sabc_hardening_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.tar.gz"
+      delegate_to: localhost
+      become: no
+      changed_when: true
+
+    - name: Push and extract the generated sabc_hardening module on the node
+      unarchive:
+        src: "/tmp/sabc_hardening_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.tar.gz"
         dest: "{{ module_root }}/sabc_hardening/"
         owner: root
         group: root
-        mode: "0644"
-        directory_mode: "0755"
+
+    - name: Remove the controller-side tarball
+      file:
+        path: "/tmp/sabc_hardening_{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '_') }}.tar.gz"
+        state: absent
+      delegate_to: localhost
+      become: no
 
     # Fail loudly and specifically if the module arrived without its scaffolding
     # rather than letting `puppet apply` fail later with an opaque
