@@ -71,15 +71,21 @@ function ResponseTimesCard({ t }) {
           <table className="w-full text-[12px]">
             <thead>
               <tr className="border-b border-gray-100">
-                <th rowSpan={2} className="text-left px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider align-bottom">{t('dash.rtFamily')}</th>
-                <th colSpan={3} className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50">{t('dash.rtDetection')}</th>
-                <th rowSpan={2} className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom">{t('dash.rtSamples')}</th>
-                <th colSpan={3} className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50">{t('dash.rtEnforcement')}</th>
-                <th rowSpan={2} className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom">{t('dash.rtSamples')}</th>
+                <th rowSpan={2} title={t('dash.rtFamilyHint')}
+                    className="text-left px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider align-bottom cursor-help">{t('dash.rtFamily')}</th>
+                <th colSpan={3} title={t('dash.rtDetectionHint')}
+                    className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50 cursor-help">{t('dash.rtDetection')}</th>
+                <th rowSpan={2} title={t('dash.rtSamplesDetectionHint')}
+                    className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom cursor-help">{t('dash.rtSamples')}</th>
+                <th colSpan={3} title={t('dash.rtEnforcementHint')}
+                    className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50 cursor-help">{t('dash.rtEnforcement')}</th>
+                <th rowSpan={2} title={t('dash.rtSamplesEnforcementHint')}
+                    className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom cursor-help">{t('dash.rtSamples')}</th>
               </tr>
               <tr className="border-b border-gray-100">
                 {['rtMin', 'rtAvg', 'rtMax', 'rtMin', 'rtAvg', 'rtMax'].map((k, i) => (
-                  <th key={i} className={`text-right px-4 py-1.5 text-[10px] font-medium text-gray-400 uppercase tracking-wider ${i % 3 === 0 ? 'border-l border-gray-50' : ''}`}>
+                  <th key={i} title={t(`dash.${k}Hint`)}
+                      className={`text-right px-4 py-1.5 text-[10px] font-medium text-gray-400 uppercase tracking-wider cursor-help ${i % 3 === 0 ? 'border-l border-gray-50' : ''}`}>
                     {t(`dash.${k}`)}
                   </th>
                 ))}
@@ -88,7 +94,10 @@ function ResponseTimesCard({ t }) {
             <tbody className="divide-y divide-gray-50">
               {rows.map((r) => (
                 <tr key={r.os_family}>
-                  <td className="px-4 py-2.5 font-medium text-gray-800">{r.os_family}</td>
+                  <td className={`px-4 py-2.5 font-medium text-gray-800 ${r.os_family === 'Unknown' ? 'cursor-help' : ''}`}
+                      title={r.os_family === 'Unknown' ? t('dash.rtUnknownHint') : undefined}>
+                    {r.os_family}
+                  </td>
                   <TimingCells stats={r.detection} />
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.detection.count || '—'}</td>
                   <TimingCells stats={r.enforcement} />
@@ -97,7 +106,7 @@ function ResponseTimesCard({ t }) {
               ))}
               {overall && rows.length > 1 && (
                 <tr className="bg-gray-50/60">
-                  <td className="px-4 py-2.5 font-semibold text-gray-500">{t('dash.rtOverall')}</td>
+                  <td className="px-4 py-2.5 font-semibold text-gray-500 cursor-help" title={t('dash.rtOverallHint')}>{t('dash.rtOverall')}</td>
                   <TimingCells stats={overall.detection} />
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.detection.count || '—'}</td>
                   <TimingCells stats={overall.enforcement} />

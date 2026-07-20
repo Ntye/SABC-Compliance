@@ -112,12 +112,21 @@ async def test_baselines_pending_and_skewed_samples_are_excluded():
 
 
 @pytest.mark.asyncio
-async def test_unknown_node_falls_into_unknown_bucket_and_empty_is_shaped():
-    out = await _uc([], [_event("ghost", 0, 3)], []).execute()
-    assert out["families"][0]["os_family"] == "Unknown"
+async def test_deleted_node_samples_dropped_and_no_family_is_unknown():
+    # Ghost samples (node deleted from the registry) are excluded entirely —
+    # same rule as the events listing. "Unknown" is only a registered node
+    # whose OS family has not been detected yet.
+    no_family = Node(id="n1", hostname="h1", ip="10.0.0.1", os_family=None)
+    out = await _uc([no_family], [_event("ghost", 0, 3), _event("n1", 0, 2)],
+                    [_remediation("ghost", 30)]).execute()
+
+    assert [f["os_family"] for f in out["families"]] == ["Unknown"]
+    assert out["families"][0]["detection"]["count"] == 1
+    assert out["families"][0]["detection"]["avg_s"] == 2.0
     assert out["families"][0]["enforcement"] == {
         "count": 0, "min_s": None, "max_s": None, "avg_s": None,
     }
+    assert out["overall"]["enforcement"]["count"] == 0
 
     empty = await _uc([], [], []).execute()
     assert empty["families"] == []

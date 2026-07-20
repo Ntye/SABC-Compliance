@@ -698,6 +698,9 @@ class GetDetectionTimingStatsUseCase:
         }
 
     async def execute(self) -> dict:
+        # Samples from nodes no longer in the registry are dropped (same rule
+        # as the events listing); "Unknown" is reserved for registered nodes
+        # whose OS family has not been detected yet.
         family_by_node = {
             n.id: (getattr(n, "os_family", None) or "Unknown")
             for n in await self._nodes.find_all({})
@@ -707,19 +710,23 @@ class GetDetectionTimingStatsUseCase:
         for e in await self._repo.find_events(limit=self._SAMPLE_LIMIT):
             if e.event_type == "baseline" or e.created_at is None or e.timestamp is None:
                 continue
+            if e.node_id not in family_by_node:
+                continue
             delta = (e.created_at - e.timestamp).total_seconds()
             if delta < 0:
                 continue
-            detect.setdefault(family_by_node.get(e.node_id, "Unknown"), []).append(delta)
+            detect.setdefault(family_by_node[e.node_id], []).append(delta)
 
         enforce: dict[str, list[float]] = {}
         for r in await self._compliance.find_all_remediations(self._SAMPLE_LIMIT):
             if r.completed_at is None or r.triggered_at is None:
                 continue
+            if r.node_id not in family_by_node:
+                continue
             delta = (r.completed_at - r.triggered_at).total_seconds()
             if delta < 0:
                 continue
-            enforce.setdefault(family_by_node.get(r.node_id, "Unknown"), []).append(delta)
+            enforce.setdefault(family_by_node[r.node_id], []).append(delta)
 
         families = sorted(set(detect) | set(enforce))
         return {
