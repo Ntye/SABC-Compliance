@@ -592,6 +592,11 @@ export async function getNodeDetectionStatus(id) {
   return request('GET', `/detection/nodes/${encodeURIComponent(id)}/status`)
 }
 
+// Min/max/avg detection + enforcement times, bucketed by OS family.
+export async function getDetectionTimingStats() {
+  return request('GET', '/detection/stats')
+}
+
 // Watch configuration — the folders/files the detection agents monitor.
 export async function getWatchConfig() {
   return request('GET', '/detection/watch-config')

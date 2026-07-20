@@ -63,7 +63,8 @@ from modules.compliance.usecases import (
 )
 from modules.compliance.scheduler import AutoScanScheduler
 from modules.detection.usecases import (
-    GetConfigBlobUseCase, GetNodeDetectionStatusUseCase,
+    GetConfigBlobUseCase, GetDetectionTimingStatsUseCase,
+    GetNodeDetectionStatusUseCase,
     ListDetectionEventsUseCase, ReceiveDetectionEventUseCase,
 )
 from modules.profiles.usecases import ProfileUseCases
@@ -488,6 +489,7 @@ async def lifespan(app: FastAPI):
         get_watch_uc=GetWatchConfigUseCase(platform_config_repo),
         update_watch_uc=UpdateWatchConfigUseCase(platform_config_repo),
         apply_watch_uc=ApplyWatchConfigUseCase(node_repo, install_detection_agent_uc),
+        timing_stats_uc=GetDetectionTimingStatsUseCase(detection_repo, node_repo, compliance_repo),
     )
 
     # -- Auto-scan background scheduler (runs fleet-wide compliance on a timer) --

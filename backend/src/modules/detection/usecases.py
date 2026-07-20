@@ -639,6 +639,83 @@ class ListDetectionEventsUseCase:
         ]
 
 
+class GetDetectionTimingStatsUseCase:
+    """Dashboard KPI: min / max / average detection and enforcement times,
+    bucketed by the node's OS family.
+
+    Detection time — how long the platform took to learn about a change: the
+    gap between the moment the agent observed the event on the node
+    (``timestamp``, agent clock) and the moment the gateway stored it
+    (``created_at``, platform clock). Baselines are excluded (bulk snapshots,
+    not changes) and negative gaps are dropped rather than clamped — a skewed
+    node clock would otherwise fake a 0s minimum.
+
+    Enforcement time — how long a closed-loop correction took: the gap between
+    ``triggered_at`` and ``completed_at`` on finished remediation events
+    (outcome success/failed/skipped; pending runs have no duration yet).
+    """
+
+    _SAMPLE_LIMIT = 500
+
+    def __init__(self, detection_repo: IDetectionRepository,
+                 node_repo: INodeRepository,
+                 compliance_repo: IComplianceRepository) -> None:
+        self._repo = detection_repo
+        self._nodes = node_repo
+        self._compliance = compliance_repo
+
+    @staticmethod
+    def _stats(samples: list[float]) -> dict:
+        if not samples:
+            return {"count": 0, "min_s": None, "max_s": None, "avg_s": None}
+        return {
+            "count": len(samples),
+            "min_s": round(min(samples), 3),
+            "max_s": round(max(samples), 3),
+            "avg_s": round(sum(samples) / len(samples), 3),
+        }
+
+    async def execute(self) -> dict:
+        family_by_node = {
+            n.id: (getattr(n, "os_family", None) or "Unknown")
+            for n in await self._nodes.find_all({})
+        }
+
+        detect: dict[str, list[float]] = {}
+        for e in await self._repo.find_events(limit=self._SAMPLE_LIMIT):
+            if e.event_type == "baseline" or e.created_at is None or e.timestamp is None:
+                continue
+            delta = (e.created_at - e.timestamp).total_seconds()
+            if delta < 0:
+                continue
+            detect.setdefault(family_by_node.get(e.node_id, "Unknown"), []).append(delta)
+
+        enforce: dict[str, list[float]] = {}
+        for r in await self._compliance.find_all_remediations(self._SAMPLE_LIMIT):
+            if r.completed_at is None or r.triggered_at is None:
+                continue
+            delta = (r.completed_at - r.triggered_at).total_seconds()
+            if delta < 0:
+                continue
+            enforce.setdefault(family_by_node.get(r.node_id, "Unknown"), []).append(delta)
+
+        families = sorted(set(detect) | set(enforce))
+        return {
+            "families": [
+                {
+                    "os_family": fam,
+                    "detection": self._stats(detect.get(fam, [])),
+                    "enforcement": self._stats(enforce.get(fam, [])),
+                }
+                for fam in families
+            ],
+            "overall": {
+                "detection": self._stats([s for v in detect.values() for s in v]),
+                "enforcement": self._stats([s for v in enforce.values() for s in v]),
+            },
+        }
+
+
 class GetConfigBlobUseCase:
     """Fetch a content-addressed file snapshot by hash for the diff modal.
 

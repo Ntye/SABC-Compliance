@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Activity, ChevronDown, FileDiff, FileWarning, FolderCog, RefreshCw, ShieldOff } from 'lucide-react'
+import { Activity, ChevronDown, Download, FileDiff, FileWarning, FolderCog, RefreshCw, ShieldOff } from 'lucide-react'
 import { jobWsUrl, listDetectionEvents, listNodes } from '../lib/api.js'
 import { eventStatus } from '../hooks/usePosture.js'
+import { exportDetectionEventsCsv, exportDetectionEventsJson } from '../lib/detectionExport.js'
 import { useT } from '../context/LangContext.jsx'
 import { badge, btnSm } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
@@ -186,6 +187,17 @@ export default function DetectionEventsPage() {
     setSearchParams(params, { replace: true })
   }
 
+  // Export exactly what the filters show — not the unfiltered feed.
+  function doExport(format) {
+    const meta = {
+      status: statusFilter || null,
+      nodeId: nodeFilter || null,
+      hostname: nodeFilter ? nodes.find((n) => n.id === nodeFilter)?.hostname : null,
+    }
+    if (format === 'csv') exportDetectionEventsCsv(visibleEvents, meta)
+    else exportDetectionEventsJson(visibleEvents, meta)
+  }
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-5">
@@ -239,6 +251,24 @@ export default function DetectionEventsPage() {
             </select>
             <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
+          <button
+            onClick={() => doExport('csv')}
+            disabled={visibleEvents.length === 0}
+            className={btnSm(false)}
+            title={t('detection.exportHint')}
+          >
+            <Download size={11} />
+            {t('detection.exportCsv')}
+          </button>
+          <button
+            onClick={() => doExport('json')}
+            disabled={visibleEvents.length === 0}
+            className={btnSm(false)}
+            title={t('detection.exportHint')}
+          >
+            <Download size={11} />
+            {t('detection.exportJson')}
+          </button>
           <button onClick={() => { setRefreshing(true); load() }} disabled={refreshing} className={btnSm(false)}>
             {refreshing ? <Spinner size={11} /> : <RefreshCw size={11} />}
             {t('common.refresh')}

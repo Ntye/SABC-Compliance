@@ -43,6 +43,24 @@ class DetectionEventResponse(BaseModel):
     created_at: datetime
 
 
+class TimingStats(BaseModel):
+    count: int = 0
+    min_s: float | None = None
+    max_s: float | None = None
+    avg_s: float | None = None
+
+
+class FamilyTimingStats(BaseModel):
+    os_family: str
+    detection: TimingStats
+    enforcement: TimingStats
+
+
+class DetectionTimingStatsResponse(BaseModel):
+    families: list[FamilyTimingStats] = []
+    overall: dict[str, TimingStats]
+
+
 class WatchedPathStatus(BaseModel):
     path: str
     last_event_type: str
@@ -89,18 +107,21 @@ _blob_uc = None
 _get_watch_uc = None
 _update_watch_uc = None
 _apply_watch_uc = None
+_timing_stats_uc = None
 
 
 def set_use_cases(list_events_uc=None, node_status_uc=None, blob_uc=None,
-                  get_watch_uc=None, update_watch_uc=None, apply_watch_uc=None) -> None:
+                  get_watch_uc=None, update_watch_uc=None, apply_watch_uc=None,
+                  timing_stats_uc=None) -> None:
     global _list_events_uc, _node_status_uc, _blob_uc
-    global _get_watch_uc, _update_watch_uc, _apply_watch_uc
+    global _get_watch_uc, _update_watch_uc, _apply_watch_uc, _timing_stats_uc
     _list_events_uc = list_events_uc
     _node_status_uc = node_status_uc
     _blob_uc = blob_uc
     _get_watch_uc = get_watch_uc
     _update_watch_uc = update_watch_uc
     _apply_watch_uc = apply_watch_uc
+    _timing_stats_uc = timing_stats_uc
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -118,6 +139,19 @@ async def list_detection_events(
     if _list_events_uc is None:
         raise HTTPException(status_code=503, detail="Detection module not initialised")
     return await _list_events_uc.execute(node_id=node_id, limit=limit)
+
+
+@router.get("/stats", response_model=DetectionTimingStatsResponse,
+            summary="Detection and enforcement timing stats by OS family")
+async def get_detection_timing_stats(
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """Dashboard KPI: min / max / average detection time (agent event →
+    platform ingest) and enforcement time (remediation triggered → completed),
+    bucketed by the node's OS family, plus fleet-wide overall figures."""
+    if _timing_stats_uc is None:
+        raise HTTPException(status_code=503, detail="Detection module not initialised")
+    return await _timing_stats_uc.execute()
 
 
 @router.get("/nodes/{id}/status", response_model=NodeDetectionStatusResponse,

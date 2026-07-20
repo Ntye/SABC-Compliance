@@ -1,10 +1,12 @@
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   ResponsiveContainer, BarChart, Bar, Cell, XAxis, Tooltip,
 } from 'recharts'
-import { ShieldCheck, Server, Activity, AlertTriangle, ArrowRight } from 'lucide-react'
+import { ShieldCheck, Server, Activity, AlertTriangle, ArrowRight, Timer } from 'lucide-react'
 import { useT } from '../context/LangContext.jsx'
 import { usePosture } from '../hooks/usePosture.js'
+import { getDetectionTimingStats } from '../lib/api.js'
 import { scoreColor, scoreBarColor } from '../lib/tw.js'
 import { utcDate } from '../lib/time.js'
 import Spinner from '../components/common/Spinner.jsx'
@@ -12,6 +14,102 @@ import Spinner from '../components/common/Spinner.jsx'
 function fmtWhen(iso) {
   const d = utcDate(iso)
   return d ? d.toLocaleString() : '—'
+}
+
+// Human duration from seconds: 840ms · 2.4s · 3m 12s · 1h 04m.
+function fmtDur(s) {
+  if (s == null) return '—'
+  if (s < 1) return `${Math.round(s * 1000)}ms`
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
+}
+
+// min / avg / max triple for one metric of one OS family.
+function TimingCells({ stats }) {
+  if (!stats || stats.count === 0) {
+    return <td colSpan={3} className="px-4 py-2.5 text-center text-gray-300">—</td>
+  }
+  return (
+    <>
+      <td className="px-4 py-2.5 text-right font-mono text-[11px] text-gray-500">{fmtDur(stats.min_s)}</td>
+      <td className="px-4 py-2.5 text-right font-mono text-[11px] font-semibold text-gray-800">{fmtDur(stats.avg_s)}</td>
+      <td className="px-4 py-2.5 text-right font-mono text-[11px] text-gray-500">{fmtDur(stats.max_s)}</td>
+    </>
+  )
+}
+
+// Detection latency (agent event → platform ingest) and enforcement duration
+// (remediation triggered → completed) — min/avg/max per OS family.
+function ResponseTimesCard({ t }) {
+  const [stats, setStats] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    const load = () => getDetectionTimingStats()
+      .then((s) => { if (alive) setStats(s) })
+      .catch(() => {})
+    load()
+    const id = setInterval(load, 60000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
+  const rows = stats?.families || []
+  const overall = stats?.overall
+  const hasAny = rows.some((r) => r.detection.count > 0 || r.enforcement.count > 0)
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 p-4">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">
+        <Timer size={12} />
+        {t('dash.responseTimes')}
+      </div>
+      {!hasAny ? (
+        <div className="text-[12px] text-gray-300">{t('dash.responseTimesEmpty')}</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th rowSpan={2} className="text-left px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider align-bottom">{t('dash.rtFamily')}</th>
+                <th colSpan={3} className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50">{t('dash.rtDetection')}</th>
+                <th rowSpan={2} className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom">{t('dash.rtSamples')}</th>
+                <th colSpan={3} className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50">{t('dash.rtEnforcement')}</th>
+                <th rowSpan={2} className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom">{t('dash.rtSamples')}</th>
+              </tr>
+              <tr className="border-b border-gray-100">
+                {['rtMin', 'rtAvg', 'rtMax', 'rtMin', 'rtAvg', 'rtMax'].map((k, i) => (
+                  <th key={i} className={`text-right px-4 py-1.5 text-[10px] font-medium text-gray-400 uppercase tracking-wider ${i % 3 === 0 ? 'border-l border-gray-50' : ''}`}>
+                    {t(`dash.${k}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {rows.map((r) => (
+                <tr key={r.os_family}>
+                  <td className="px-4 py-2.5 font-medium text-gray-800">{r.os_family}</td>
+                  <TimingCells stats={r.detection} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.detection.count || '—'}</td>
+                  <TimingCells stats={r.enforcement} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.enforcement.count || '—'}</td>
+                </tr>
+              ))}
+              {overall && rows.length > 1 && (
+                <tr className="bg-gray-50/60">
+                  <td className="px-4 py-2.5 font-semibold text-gray-500">{t('dash.rtOverall')}</td>
+                  <TimingCells stats={overall.detection} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.detection.count || '—'}</td>
+                  <TimingCells stats={overall.enforcement} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.enforcement.count || '—'}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // A titled panel showing per-bucket average scores as labelled meters.
@@ -165,6 +263,9 @@ export default function OverviewPage() {
               />
             </div>
           </div>
+
+          {/* Row 3: detection & enforcement response times per OS family */}
+          <ResponseTimesCard t={t} />
         </>
       )}
     </div>
