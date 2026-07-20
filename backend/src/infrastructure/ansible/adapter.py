@@ -6,6 +6,8 @@ import os
 import tempfile
 from typing import Callable, Awaitable
 
+from infrastructure.ssh.hardening import host_key_opts
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,16 +24,6 @@ STUB_STEPS: dict[str, list[str]] = {
         "Wait for port 8140 to open",
         "Verify Puppet Server is running",
     ],
-    "install_wazuh_manager.yml": [
-        "Gather facts",
-        "Check for offline Wazuh packages (airgap detection)",
-        "Install wazuh-manager package",
-        "Configure ossec.conf (cluster, enrollment)",
-        "Open firewall ports 1514 1515 55000",
-        "Enable and start wazuh-manager",
-        "Wait for Wazuh API port 55000",
-        "Verify wazuh-manager status",
-    ],
     "install_puppet_agent.yml": [
         "Gather facts",
         "Preflight — sync clock (chrony) to avoid 'cert not yet valid'",
@@ -42,19 +34,14 @@ STUB_STEPS: dict[str, list[str]] = {
         "Submit CSR and sign certificate on master",
         "Run first catalog (self-heals stale certs from VM clones)",
     ],
-    "install_wazuh_agent.yml": [
+    "install_detection_agent.yml": [
         "Gather facts",
-        "Check if wazuh-agent is already installed",
-        "Find offline Wazuh agent packages (airgap detection)",
-        "Preflight — sync clock (chrony)",
-        "Preflight — verify manager ports 1514/1515 are reachable",
-        "Resolve manager hostname — patch /etc/hosts if needed",
-        "Detect OS family — dispatch to DEB or RPM script",
-        "Install wazuh-agent (Debian/Ubuntu via APT or airgap .deb)",
-        "Install wazuh-agent (RedHat/CentOS via YUM or airgap .rpm)",
-        "Set manager address in ossec.conf",
-        "Enable and start wazuh-agent",
-        "Verify connection (self-heals duplicate key from VM clones)",
+        "Install python3 + watchdog (distro package or pip)",
+        "Copy the compliance detection agent",
+        "Write /etc/compliance-agent/config.yaml",
+        "Install systemd unit",
+        "Enable and start compliance-detection-agent",
+        "Verify the agent is running",
     ],
     "provision.yml": [
         "Gather facts",
@@ -176,6 +163,9 @@ class AnsibleAdapter:
     async def _write_inventory(self, node) -> str:
         raw_key = node.ssh_key_path or self._ssh_key_path
         key = os.path.abspath(raw_key)
+        # Same TOFU host-key verification the SSH adapter uses, into the same
+        # shared known_hosts file — a swapped host key is refused here too.
+        ssh_common = " ".join(host_key_opts(self._ssh_key_path))
         with tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False) as f:
             if node:
                 f.write(
@@ -183,7 +173,7 @@ class AnsibleAdapter:
                     f"{node.ip} "
                     f"ansible_user={node.ssh_user} "
                     f"ansible_ssh_private_key_file={key} "
-                    f"ansible_ssh_common_args='-o StrictHostKeyChecking=no'\n"
+                    f"ansible_ssh_common_args='{ssh_common}'\n"
                 )
             else:
                 f.write("[target]\nlocalhost ansible_connection=local\n")

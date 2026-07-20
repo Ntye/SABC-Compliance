@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Server, Shield, RotateCw, Plus, Trash2, Save, Zap,
+  ArrowLeft, Server, Shield, ShieldCheck, RotateCw, Plus, Trash2, Save, Zap,
   Network, ChevronRight, CheckCircle, XCircle, Package, Play,
 } from 'lucide-react'
 import {
   getNodeGroup, updateNodeGroup, listNodes, listNodeGroupFacts, runClosedLoop,
-  applyGroupPackageRepo,
+  applyGroupPackageRepo, enforceReferential,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -56,8 +56,9 @@ function ActiveResponseCard({ group, onToggled }) {
           <div>
             <h3 className="text-[13px] font-semibold text-gray-900">Active response</h3>
             <p className="text-[11px] text-gray-500 mt-0.5 max-w-md">
-              When on, a Wazuh alert for any member server drives the closed remediation
-              loop (Puppet enforce → re-scan) across the whole group automatically.
+              When on, a detection event for any member server drives the closed remediation
+              loop automatically: the platform enforces only the control(s) that regressed
+              (Puppet), then re-scans to confirm.
             </p>
           </div>
         </div>
@@ -324,7 +325,7 @@ function MembersCard({ group, nodes, navigate }) {
                 <div className="text-[11px] text-gray-400 font-mono truncate">{n.ip}{n.os_name ? ` · ${n.os_name}` : ''}</div>
               </div>
               <SyncPip ok={n.puppet_enrolled} label="Puppet" />
-              <SyncPip ok={n.wazuh_enrolled} label="Wazuh" />
+              <SyncPip ok={n.detection_enrolled} label="Detection" />
               <ChevronRight size={14} className="text-gray-300 flex-shrink-0" />
             </button>
           ))}
@@ -345,6 +346,7 @@ export default function NodeGroupDetailPage() {
   const { data: nodes } = useApi(listNodes)
   const { data: facts } = useApi(listNodeGroupFacts)
   const [looping, setLooping] = useState(false)
+  const [enforcing, setEnforcing] = useState(false)
 
   async function handleClosedLoop() {
     const count = group?.matching_node_ids?.length ?? 0
@@ -360,6 +362,20 @@ export default function NodeGroupDetailPage() {
       toast(err.message, 'error')
     } finally {
       setLooping(false)
+    }
+  }
+
+  async function handleEnforce() {
+    const count = group?.matching_node_ids?.length ?? 0
+    if (count === 0) { toast('No member servers to enforce.', 'info'); return }
+    setEnforcing(true)
+    try {
+      const r = await enforceReferential({ groupId: id })
+      toast(t('tiers.enforceLaunched', { n: r.launched ?? (r.jobs?.length || 0) }), 'success')
+    } catch (err) {
+      toast(err.message, 'error')
+    } finally {
+      setEnforcing(false)
     }
   }
 
@@ -395,16 +411,22 @@ export default function NodeGroupDetailPage() {
               {group.parent && group.parent !== 'All Nodes' && (
                 <span className="text-[11px] text-gray-400">⤷ {group.parent}</span>
               )}
-              <SyncPip ok={group.wazuh_synced} label="Wazuh sync" />
               <SyncPip ok={group.puppet_synced} label="Puppet sync" />
             </div>
           </div>
         </div>
-        <button onClick={handleClosedLoop} disabled={looping || count === 0}
-          title={count === 0 ? 'No member servers' : 'Enforce with Puppet, then re-scan every member'}
-          className={`${btn(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
-          {looping ? <Spinner size={14} /> : <RotateCw size={14} />}Run closed loop
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={handleEnforce} disabled={enforcing || count === 0}
+            title={count === 0 ? 'No member servers' : t('tiers.enforceHint')}
+            className={`${btn(false)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+            {enforcing ? <Spinner size={14} /> : <ShieldCheck size={14} />}{t('tiers.enforce')}
+          </button>
+          <button onClick={handleClosedLoop} disabled={looping || count === 0}
+            title={count === 0 ? 'No member servers' : 'Enforce with Puppet, then re-scan every member'}
+            className={`${btn(true)} disabled:opacity-40 disabled:cursor-not-allowed`}>
+            {looping ? <Spinner size={14} /> : <RotateCw size={14} />}Run closed loop
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4">

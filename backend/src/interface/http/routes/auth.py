@@ -8,8 +8,18 @@ from core.domain.entities import AuthPrincipal
 from core.errors import (
     ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError,
 )
+from interface.http.net import LoginThrottle, client_ip
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+# Brute-force speed bump for /auth/login. Configured from settings by main.py;
+# a permissive default keeps unit tests that don't wire it up working.
+_login_throttle: LoginThrottle = LoginThrottle()
+
+
+def configure_login_throttle(throttle: LoginThrottle) -> None:
+    global _login_throttle
+    _login_throttle = throttle
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
@@ -32,10 +42,15 @@ class ApiKeyResponse(BaseModel):
     active: bool
     created_at: datetime
     last_used: datetime | None = None
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    status: str = "active"   # active | pending | expired | revoked
 
 class CreateApiKeyRequest(BaseModel):
     name: str
     role: str
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
 
 class CreateUserRequest(BaseModel):
     username: str
@@ -156,21 +171,30 @@ def set_use_cases(
 # ── Auth dependency ───────────────────────────────────────────────────────────
 
 async def get_current_principal(
+    request: Request,
     x_api_key: str | None = Header(None, alias="X-API-Key"),
     authorization: str | None = Header(None),
 ) -> AuthPrincipal:
-    """Authenticate via X-API-Key header or Authorization: Bearer JWT."""
+    """Authenticate via X-API-Key header or Authorization: Bearer JWT.
+
+    The resolved principal is stashed on ``request.state`` so the audit
+    middleware can attribute every request to a real user.
+    """
     if x_api_key:
         try:
             key = await _authenticate_uc.execute(x_api_key)
-            return AuthPrincipal(id=key.id, name=key.name, role=key.role, source="api_key")
+            principal = AuthPrincipal(id=key.id, name=key.name, role=key.role, source="api_key")
+            request.state.principal = principal
+            return principal
         except UnauthorizedError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
 
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
         try:
-            return await _decode_jwt_uc.execute(token)
+            principal = await _decode_jwt_uc.execute(token)
+            request.state.principal = principal
+            return principal
         except UnauthorizedError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
 
@@ -198,12 +222,27 @@ async def require_admin(principal: AuthPrincipal = Depends(get_current_principal
     response_model=LoginResponse,
     summary="Login with username and password",
 )
-async def login(body: LoginRequest):
-    """Authenticate with username and password. Returns a JWT Bearer token."""
+async def login(body: LoginRequest, request: Request):
+    """Authenticate with username and password. Returns a JWT Bearer token.
+
+    Repeated failures for the same (client-IP, username) are locked out to blunt
+    online brute-force attacks.
+    """
+    ip = client_ip(request)
+    locked = _login_throttle.seconds_locked(ip, body.username)
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed login attempts. Try again in {locked}s.",
+            headers={"Retry-After": str(locked)},
+        )
     try:
-        return await _login_uc.execute(body.username, body.password)
+        result = await _login_uc.execute(body.username, body.password)
     except UnauthorizedError as exc:
+        _login_throttle.record_failure(ip, body.username)
         raise HTTPException(status_code=401, detail=str(exc))
+    _login_throttle.record_success(ip, body.username)
+    return result
 
 
 @router.post(
@@ -231,6 +270,8 @@ async def list_api_keys(principal: AuthPrincipal = Depends(require_admin)):
         ApiKeyResponse(
             id=k.id, name=k.name, role=k.role, active=k.active,
             created_at=k.created_at, last_used=k.last_used,
+            starts_at=k.starts_at, expires_at=k.expires_at,
+            status=k.effective_status(),
         )
         for k in keys
     ]
@@ -245,9 +286,14 @@ async def create_api_key(
     body: CreateApiKeyRequest,
     principal: AuthPrincipal = Depends(require_admin),
 ):
-    """Create a new API key with the specified role (admin only)."""
+    """Create a new API key with the specified role (admin only). Optional
+    starts_at/expires_at bound the key's validity window; an expired key is
+    rejected at authentication time, so revocation is automatic."""
     try:
-        return await _create_api_key_uc.execute({"name": body.name, "role": body.role})
+        return await _create_api_key_uc.execute({
+            "name": body.name, "role": body.role,
+            "starts_at": body.starts_at, "expires_at": body.expires_at,
+        })
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

@@ -36,14 +36,17 @@ COPY ansible/          ansible/
 COPY scan-profiles/    scan-profiles/
 # Puppet module (sabc_compliance) shipped to the master by deploy_compliance_module.yml
 COPY puppet/           puppet/
+# Detection agent shipped to nodes by install_detection_agent.yml (lands at /app/detection-agent)
+COPY detection-agent/  detection-agent/
+# Committed referential seed (SABC Baseline) imported at first boot (lands at /app/platform)
+COPY platform/         platform/
 
 # One-shot SQLite → PostgreSQL migration helper (invoked by deploy/ship.sh).
 COPY migrate_to_postgres.py .
 
 # Persistent directories (overridden by volumes at runtime)
 RUN mkdir -p data keys \
-    packages/puppet-master packages/puppet-agent \
-    packages/wazuh-manager packages/wazuh-agent
+    packages/puppet-master packages/puppet-agent
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # Strip any CR characters before making the script executable. When the repo is

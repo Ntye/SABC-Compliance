@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { login } from '../lib/api.js'
 import Spinner from '../components/common/Spinner.jsx'
 import { useT } from '../context/LangContext.jsx'
-import sabcLogo from '../assets/bdc-logo.png'
+import sabcLogo from '../assets/criclo-logo.svg'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -31,7 +31,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-surface-page flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <img src={sabcLogo} alt="Boissons du Cameroun" className="w-52 mx-auto object-contain" />
+          <img src={sabcLogo} alt="CRICLO" className="w-52 mx-auto object-contain" />
           <div className="text-[13px] text-gray-500 mt-3">{t('nav.platform')}</div>
         </div>
 

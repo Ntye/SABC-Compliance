@@ -1,0 +1,349 @@
+---
+# Installs the SABC compliance detection agent (the custom lightweight
+# detection plane that replaced the Wazuh agent).
+#
+# What it does:
+#   1. Ensures python3 is present (raw bootstrap — works on minimal images).
+#   2. Installs the `watchdog` library: distro package first, then a wheel
+#      dropped in packages/detection-agent/ (airgap), then pip as last resort.
+#   3. Copies agent.py, writes /etc/compliance-agent/config.yaml with the
+#      gateway URL + API key injected from platform config, installs the
+#      systemd unit, enables + starts the service and verifies it is active.
+#
+# Vars injected by InstallServiceUseCase:
+#   detection_gateway_url     https://<platform>:8443/api/webhooks/detection
+#   detection_api_key         shared X-API-Key value
+#   detection_node_hostname   hostname the agent reports with (Node Registry name)
+#   detection_agent_src       controller-side dir holding agent.py + unit file
+#   packages_dir              controller packages dir (airgap wheels)
+#
+- name: Install SABC Compliance Detection Agent
+  hosts: target
+  become: yes
+  gather_facts: no
+
+  vars:
+    agent_src: "{{ detection_agent_src }}"
+    agent_dst: /usr/local/lib/compliance-agent
+    conf_dir: /etc/compliance-agent
+    unit_name: compliance-detection-agent
+    wheel_dir: "{{ packages_dir }}/detection-agent"
+
+  pre_tasks:
+    # Minimal cloud images may ship without python3 — bootstrap over raw SSH.
+    - name: Ensure python3 is available (raw SSH, no facts)
+      raw: |
+        if command -v python3 >/dev/null 2>&1; then echo "PY_OK"; exit 0; fi
+        echo "BOOTSTRAP: installing python3" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y && apt-get install -y python3
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python3
+        fi
+        command -v python3 >/dev/null 2>&1 && echo "PY_OK" || { echo "no python3" >&2; exit 1; }
+      register: py_bootstrap
+      changed_when: "'installing python3' in (py_bootstrap.stderr | default(''))"
+
+    - name: Gather facts now that python3 is available
+      setup:
+
+  tasks:
+    # ── Interpreter selection ─────────────────────────────────────────────────
+    # The agent opens with `from __future__ import annotations`, which requires
+    # Python >=3.7, so it CANNOT run on Python 3.6. RHEL/Alma/Rocky 8 default
+    # /usr/bin/python3 to 3.6, which crashes the service at import
+    # ("future feature annotations is not defined"). Pick the newest interpreter
+    # >=3.8 the node already has (installing python3.11 on EL if it has none) and
+    # run the unit — and install watchdog — with THAT interpreter, not `python3`.
+    # (>=3.8 is a safe floor: annotations are lazy strings under the future
+    # import, and the agent uses no runtime `X | Y` unions or match statements.)
+    - name: Select a Python >=3.8 for the agent (raw — no facts needed)
+      raw: |
+        for p in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+          if command -v "$p" >/dev/null 2>&1; then
+            v=$("$p" -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])' 2>/dev/null || echo 0)
+            if [ "$v" -ge 308 ]; then command -v "$p"; exit 0; fi
+          fi
+        done
+        # None >=3.8 present. On EL the module package names vary by minor
+        # version (python3.11/python3.12 vs python39/python38), so cascade.
+        if command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3.11 >/dev/null 2>&1 && command -v python3.11 && exit 0
+          dnf install -y python3.12 >/dev/null 2>&1 && command -v python3.12 && exit 0
+          dnf install -y python39   >/dev/null 2>&1 && command -v python3.9  && exit 0
+          dnf install -y python38   >/dev/null 2>&1 && command -v python3.8  && exit 0
+        fi
+        if command -v apt-get >/dev/null 2>&1; then apt-get install -y python3 >/dev/null 2>&1 && command -v python3 && exit 0; fi
+        exit 1
+      register: agent_py_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Pin the agent interpreter (fall back to /usr/bin/python3)
+      set_fact:
+        agent_python: "{{ (agent_py_probe.stdout_lines | default([]) | select('match', '^/.*/python3') | list | last) | default('/usr/bin/python3', true) }}"
+
+    - name: Derive the interpreter's package prefix (python3.11 → python3.11-*)
+      set_fact:
+        agent_py_base: "{{ agent_python | basename }}"
+
+    - name: Report the agent interpreter
+      debug:
+        msg: "Detection agent will run under {{ agent_python }}."
+
+    # ── watchdog library (OPTIONAL) ───────────────────────────────────────────
+    # watchdog gives inotify-speed detection, but the agent ships a stdlib
+    # polling fallback and runs fine without it. So EVERY install step here is
+    # best-effort: nothing in this block may fail the play. This is what makes
+    # enrolment work uniformly across distros (Debian/Ubuntu apt, RHEL/Alma/
+    # Rocky/Amazon dnf/yum) and on minimal or airgapped images where pip is
+    # absent — the exact failure that used to abort on Ubuntu 24.04
+    # ("No module named pip").
+    - name: Install watchdog from the distro repository (Debian family)
+      apt:
+        name: python3-watchdog
+        state: present
+        update_cache: yes
+      when: ansible_facts['os_family'] == 'Debian'
+      register: watchdog_apt
+      failed_when: false
+
+    - name: Install watchdog from the distro repository (RedHat family)
+      dnf:
+        name: "{{ agent_py_base }}-watchdog"
+        state: present
+      when: ansible_facts['os_family'] == 'RedHat'
+      register: watchdog_dnf
+      failed_when: false
+
+    - name: Check whether watchdog imports
+      command: "{{ agent_python }} -c \"import watchdog\""
+      register: watchdog_import
+      changed_when: false
+      failed_when: false
+
+    - name: Find offline watchdog wheels on the controller (airgap)
+      find:
+        paths: "{{ wheel_dir }}"
+        patterns: "*.whl"
+      register: watchdog_wheels
+      delegate_to: localhost
+      become: no
+      failed_when: false
+      when: watchdog_import.rc != 0
+
+    - name: Install watchdog from bundled wheels (airgap)
+      when:
+        - watchdog_import.rc != 0
+        - (watchdog_wheels.files | default([]) | length) > 0
+      block:
+        - name: Create wheel staging directory on the node
+          file:
+            path: /tmp/sabc-wheels
+            state: directory
+            mode: "0755"
+
+        - name: Copy wheels to the node
+          copy:
+            src: "{{ item.path }}"
+            dest: "/tmp/sabc-wheels/{{ item.path | basename }}"
+            mode: "0644"
+          loop: "{{ watchdog_wheels.files }}"
+
+        - name: Install wheels with pip (no index)
+          shell: "{{ agent_python }} -m pip install --no-index --find-links /tmp/sabc-wheels watchdog"
+          register: wheel_install
+          changed_when: "'Successfully installed' in (wheel_install.stdout | default(''))"
+          failed_when: false
+
+    - name: Re-check whether watchdog imports
+      command: "{{ agent_python }} -c \"import watchdog\""
+      register: watchdog_import2
+      changed_when: false
+      failed_when: false
+
+    # Online pip is a LAST resort and stays best-effort: ensure pip exists first
+    # (modern Ubuntu/RHEL ship none by default), then try a PEP-668-safe install.
+    - name: Ensure pip is available for the online fallback (best-effort)
+      when: watchdog_import2.rc != 0
+      block:
+        - name: Install python3-pip (Debian family)
+          apt: { name: python3-pip, state: present, update_cache: yes }
+          when: ansible_facts['os_family'] == 'Debian'
+          failed_when: false
+        - name: Install pip for the selected interpreter (RedHat family)
+          dnf: { name: "{{ agent_py_base }}-pip", state: present }
+          when: ansible_facts['os_family'] == 'RedHat'
+          failed_when: false
+
+    - name: Install watchdog with pip (online fallback, best-effort)
+      shell: |
+        {{ agent_python }} -m pip install watchdog 2>/dev/null \
+          || {{ agent_python }} -m pip install --break-system-packages watchdog
+      when: watchdog_import2.rc != 0
+      register: pip_install
+      changed_when: "'Successfully installed' in (pip_install.stdout | default(''))"
+      failed_when: false
+
+    - name: Report the file-change backend the agent will use
+      command: "{{ agent_python }} -c \"import watchdog\""
+      register: watchdog_final
+      changed_when: false
+      failed_when: false
+
+    - name: Note detection backend
+      debug:
+        msg: >-
+          Detection backend: {{ 'watchdog (inotify)' if watchdog_final.rc == 0
+          else 'stdlib polling (watchdog unavailable — install python3-watchdog
+          for inotify-speed detection)' }}.
+
+    # ── Agent files ───────────────────────────────────────────────────────────
+    - name: Create agent directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      loop:
+        - "{{ agent_dst }}"
+        - "{{ conf_dir }}"
+        - /var/lib/compliance-agent
+        - /var/spool/compliance-agent
+
+    - name: Copy the detection agent
+      copy:
+        src: "{{ agent_src }}/agent.py"
+        dest: "{{ agent_dst }}/agent.py"
+        mode: "0755"
+        owner: root
+        group: root
+      notify: Restart detection agent
+
+    # The config carries the shared API key — root-only. The platform renders
+    # the whole file (including the operator-configured watch list) and passes
+    # it as detection_config_yaml, so the dynamic path list can never corrupt
+    # the YAML here. A default keeps the playbook runnable stand-alone.
+    - name: Write /etc/compliance-agent/config.yaml
+      copy:
+        dest: "{{ conf_dir }}/config.yaml"
+        mode: "0600"
+        owner: root
+        group: root
+        content: "{{ detection_config_yaml | default(_default_agent_config) }}"
+      vars:
+        _default_agent_config: |
+          # Managed by the SABC compliance platform (install_detection_agent.yml).
+          node_hostname: {{ detection_node_hostname }}
+
+          gateway:
+            url: {{ detection_gateway_url }}
+            api_key: {{ detection_api_key }}
+            verify_tls: false
+
+          watch:
+            - /etc/ssh/
+            - /etc/pam.d/
+            - /etc/sudoers
+            - /etc/sudoers.d/
+            - /etc/passwd
+            - /etc/group
+            - /etc/shadow
+
+          snapshot_policies:
+            - path: /etc/shadow
+              snapshot: hash-only
+
+          debounce_seconds: 2
+          heartbeat_interval_seconds: 600
+          spool_dir: /var/spool/compliance-agent
+          state_dir: /var/lib/compliance-agent
+      notify: Restart detection agent
+
+    # Rendered inline (not copied verbatim) so ExecStart uses the interpreter
+    # selected above ({{ agent_python }}, >=3.8) rather than the unit file's
+    # hardcoded /usr/bin/python3. On EL8, /usr/bin/python3 is 3.6 and the agent
+    # aborts at import with "future feature annotations is not defined".
+    - name: Install the systemd unit
+      copy:
+        dest: "/etc/systemd/system/{{ unit_name }}.service"
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=SABC Compliance Detection Agent (config-change watch + evidence)
+          Documentation=https://github.com/ntye/sabc-compliance
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart={{ agent_python }} {{ agent_dst }}/agent.py --config {{ conf_dir }}/config.yaml
+          Restart=always
+          RestartSec=5
+          User=root
+
+          # Hardening — the agent only reads watched paths and writes its own state/spool.
+          NoNewPrivileges=yes
+          ProtectHome=read-only
+          ReadWritePaths=/var/lib/compliance-agent /var/spool/compliance-agent
+          PrivateTmp=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart detection agent
+
+    - name: Enable and start the detection agent
+      systemd:
+        name: "{{ unit_name }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Flush handlers (apply restart before verifying)
+      meta: flush_handlers
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Wait for the service to settle
+      command: "systemctl is-active {{ unit_name }}"
+      register: agent_active
+      retries: 6
+      delay: 5
+      until: agent_active.stdout == 'active'
+      changed_when: false
+      failed_when: false
+
+    - name: Show recent agent log on failure (diagnostic)
+      command: "journalctl -u {{ unit_name }} -n 20 --no-pager"
+      register: agent_log
+      changed_when: false
+      failed_when: false
+      when: agent_active.stdout != 'active'
+
+    - name: Abort — the detection agent did not start
+      fail:
+        msg: |
+          {{ unit_name }} is not active on {{ ansible_facts['fqdn'] }}.
+          Recent log:
+          {{ agent_log.stdout | default('(no log)') }}
+      when: agent_active.stdout != 'active'
+
+    - name: Detection agent ready
+      debug:
+        msg: >-
+          Compliance detection agent installed on {{ ansible_facts['fqdn'] }} and
+          reporting to {{ detection_gateway_url }} as
+          '{{ detection_node_hostname }}'. Watched paths: /etc/ssh/, /etc/pam.d/,
+          /etc/sudoers*, /etc/passwd, /etc/group, /etc/shadow.
+
+  handlers:
+    - name: Restart detection agent
+      systemd:
+        name: "{{ unit_name }}"
+        state: restarted
+        daemon_reload: yes

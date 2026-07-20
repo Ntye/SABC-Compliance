@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 24
 
+    # Master key for encrypting secrets at rest (Puppet console password,
+    # detection-webhook key, auto-generated JWT secret). When blank, a random
+    # key is generated and persisted (0600) next to the database so secrets are
+    # still encrypted; set MASTER_KEY explicitly to keep them portable and to
+    # keep the key off the DB host. Any passphrase works — it is hashed to a key.
+    master_key: str = ""
+
+    # Login brute-force protection: lock (username, client-IP) after this many
+    # failed attempts within the window, for the lockout duration.
+    login_max_failures: int = 5
+    login_window_seconds: int = 300
+    login_lockout_seconds: int = 900
+
     # Puppet
     # Which Puppet edition the platform integrates with:
     #   "enterprise" — Puppet Enterprise (PE Advanced). Uses the commercial
@@ -59,25 +72,15 @@ class Settings(BaseSettings):
     puppet_core_ssh_user: str = "root"
     puppet_core_default_environment: str = "production"
 
-    # Wazuh
-    wazuh_manager_host: str | None = None
-    wazuh_api_port: int = 55000
-    wazuh_api_user: str = "wazuh"
-    wazuh_api_pass: str | None = None
-    wazuh_reg_port: int = 1515
-    wazuh_agent_port: int = 1514
-    wazuh_webhook_source_ip: str | None = None
-    # Shared secret presented by Wazuh's integrator in the X-Wazuh-Webhook-Token
-    # header. When unset the webhook is DISABLED (closed by default) — no alert is
-    # ever processed without an explicitly configured secret.
-    wazuh_webhook_secret: str | None = None
-    # Only alerts at or above this Wazuh rule level trigger the active-response
-    # remediation loop. Wazuh levels: 7+ ≈ important, 10+ ≈ high, 12+ ≈ critical.
-    wazuh_webhook_min_level: int = 7
-    # Re-run a compliance scan on the node after remediation completes, so the
-    # dashboard reflects the post-enforcement state automatically.
-    wazuh_webhook_rescan: bool = True
-    wazuh_token_refresh_seconds: int = 840
+    # Detection agent webhook (the custom lightweight detection plane).
+    # Comma-separated list of IPs/CIDRs allowed to POST /api/webhooks/detection.
+    # Empty = allow any source that presents a valid API key.
+    detection_webhook_source_ip: str | None = None
+    # Shared API key presented by detection agents in the X-API-Key header.
+    # When unset the webhook is DISABLED (closed by default) — no event is ever
+    # processed without an explicitly configured key. Auto-generated and stored
+    # in platform_config the first time a detection agent is installed.
+    detection_webhook_api_key: str | None = None
 
     # Collection
     collector_interval_seconds: int = 300
@@ -90,9 +93,6 @@ class Settings(BaseSettings):
     # Max nodes remediated concurrently when the loop targets a whole node group
     # (bounds simultaneous SSH/Puppet runs).
     closed_loop_concurrency: int = 4
-    # When true, a Wazuh alert for a node escalates the closed loop to every
-    # member of the groups that node belongs to, not just the single node.
-    wazuh_webhook_remediate_group: bool = False
 
     # Offline AI assistant (Ollama)
     ollama_url: str = "http://localhost:11434"

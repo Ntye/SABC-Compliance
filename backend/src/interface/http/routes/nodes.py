@@ -32,8 +32,9 @@ class NodeResponse(BaseModel):
     tags: list[str]
     status: str
     puppet_enrolled: bool
-    wazuh_enrolled: bool
+    detection_enrolled: bool
     scan_ready: bool
+    tier_id: str | None = None
     last_seen: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -50,6 +51,8 @@ class RegisterNodeRequest(BaseModel):
     ssh_key_path: str | None = None
     description: str | None = None
     tags: list[str] = []
+    # Criticality tier assigned at enrolment; omit for Non-critical (Level 1).
+    tier_id: str | None = None
 
 
 class UpdateNodeRequest(BaseModel):
@@ -97,9 +100,6 @@ class ChangeIdentityResponse(BaseModel):
     steps: dict
     dns_resolves: bool | None = None
     warnings: list[str] = []
-    # Present when the changed node is the Wazuh manager: reports the new manager
-    # address and the per-agent re-point results.
-    wazuh_manager_reconfig: dict | None = None
     node: NodeResponse
 
 
@@ -156,8 +156,9 @@ def _to_response(node, detect_job_id: str | None = None) -> NodeResponse:
         tags=node.tags,
         status=node.status,
         puppet_enrolled=node.puppet_enrolled,
-        wazuh_enrolled=node.wazuh_enrolled,
+        detection_enrolled=node.detection_enrolled,
         scan_ready=node.scan_ready,
+        tier_id=node.tier_id,
         last_seen=node.last_seen,
         created_at=node.created_at,
         updated_at=node.updated_at,
@@ -274,32 +275,6 @@ def _render_bootstrap_script(cert_host: str, https_port: int) -> str:
 
 
 @router.get(
-    "/setup-script",
-    summary="Download the node bootstrap script",
-    response_class=PlainTextResponse,
-)
-async def get_setup_script(
-    host: str | None = Query(None, description="Platform host to trust for HTTPS (defaults to PLATFORM_PUBLIC_HOST / HOST_IP)"),
-    https_port: int | None = Query(None, description="Platform HTTPS port (defaults to HTTPS_PORT or 8443)"),
-    principal: AuthPrincipal = Depends(get_current_principal),
-):
-    """
-    Returns a downloadable bash script to run on a target server.
-    The platform's ansible public key is embedded at download time.
-
-    Transfer to the target server, then run:  sudo bash setup-node.sh
-    """
-    script = _render_bootstrap_script(
-        _resolve_cert_host(host, None), _resolve_https_port(https_port),
-    )
-    return PlainTextResponse(
-        content=script,
-        headers={"Content-Disposition": 'attachment; filename="setup-node.sh"'},
-        media_type="text/x-sh; charset=utf-8",
-    )
-
-
-@router.get(
     "/bootstrap",
     summary="Bootstrap script for curl | sudo bash",
     response_class=PlainTextResponse,
@@ -368,11 +343,11 @@ async def ping_node(id: str, principal: AuthPrincipal = Depends(require_operator
 @router.post("/{id}/check-dns", response_model=DnsCheckResponse, summary="Run full multi-directional DNS check")
 async def check_node_dns(id: str, principal: AuthPrincipal = Depends(require_operator)):
     """
-    Runs four DNS checks:
+    Runs three DNS checks:
     - Platform server → node hostname (backend resolves the node)
-    - Node → platform server hostname (node resolves the backend)
+    - Node → platform server hostname (node resolves the backend — needed by
+      the detection agent to reach the gateway by name)
     - Node → Puppet master hostname (required for Puppet agent enrollment)
-    - Node → Wazuh manager hostname (required for Wazuh agent enrollment)
 
     Updates dns_resolves on the node and returns per-check results with descriptions.
     """
@@ -405,7 +380,6 @@ async def fix_node_dns(id: str, body: DnsFixRequest, principal: AuthPrincipal = 
     - backend_to_node:  writes node IP → hostname to the platform's /etc/hosts
     - node_to_backend:  SSHes to node (ansible user) and writes platform IP → hostname
     - node_to_puppet:   SSHes to node and writes puppet master IP → hostname
-    - node_to_wazuh:    SSHes to node and writes wazuh manager IP → hostname
 
     Returns per-check result with ok, entry written, or error message.
     """
@@ -427,7 +401,7 @@ async def change_node_identity(id: str, body: ChangeIdentityRequest, principal: 
 
     Set `apply_system_hostname=true` to also rename the server itself via
     hostnamectl (opt-in; off by default). Returns the updated node plus any
-    warnings (e.g. Puppet/Wazuh agents bound to the old hostname).
+    warnings (e.g. a Puppet agent certificate bound to the old hostname).
     """
     try:
         result = await _change_identity_uc.execute(id, body.model_dump())
@@ -498,7 +472,7 @@ def _detect_admin_user() -> str:
 # ── Setup script ──────────────────────────────────────────────────────────────
 
 _SETUP_SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
-# SABC Compliance Platform — Node Bootstrap Script
+# CRICLO — Linux Compliance Platform — Node Bootstrap Script
 #
 # Run this directly on the target server with root privileges:
 #   sudo bash setup-node.sh
@@ -525,7 +499,7 @@ PLATFORM_HTTPS_PORT="__PLATFORM_HTTPS_PORT__"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  SABC Compliance — Node Bootstrap"
+echo "  CRICLO — Node Bootstrap"
 echo "  Host: $(hostname -f 2>/dev/null || hostname)"
 echo "══════════════════════════════════════════════════════"
 echo ""

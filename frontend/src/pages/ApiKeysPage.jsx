@@ -12,6 +12,8 @@ import { badge } from '../lib/tw.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function relativeTime(iso, t) {
   if (!iso) return '—'
@@ -25,6 +27,20 @@ function relativeTime(iso, t) {
   return new Date(iso).toLocaleDateString()
 }
 
+// Date -> value for <input type="datetime-local"> (local wall-clock, minutes).
+function toLocalInput(date) {
+  const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return d.toISOString().slice(0, 16)
+}
+
+// Badge style + label per effective key status.
+const STATUS_META = {
+  active:  { badge: 'success', key: 'keys.statusActive' },
+  pending: { badge: 'warning', key: 'keys.statusPending' },
+  expired: { badge: 'gray',    key: 'keys.statusExpired' },
+  revoked: { badge: 'gray',    key: 'keys.statusRevoked' },
+}
+
 export default function ApiKeysPage() {
   const t = useT()
   const toast = useToast()
@@ -32,6 +48,11 @@ export default function ApiKeysPage() {
 
   const [name, setName] = useState('')
   const [role, setRole] = useState('readonly')
+  // Temporal window — defaults: valid from now until 90 days out.
+  const [startsAt, setStartsAt] = useState(() => toLocalInput(new Date()))
+  const [expiresAt, setExpiresAt] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() + 90); return toLocalInput(d)
+  })
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState(null)
 
@@ -54,13 +75,21 @@ export default function ApiKeysPage() {
       return true
     })
   }, [keys, query, roleFilter, statusFilter])
+  const pager = usePagination(filtered)
 
   async function handleCreate(e) {
     e.preventDefault()
     if (!name.trim()) return
+    if (!expiresAt) { toast(t('keys.needExpiry'), 'error'); return }
+    if (startsAt && expiresAt && expiresAt <= startsAt) {
+      toast(t('keys.badWindow'), 'error'); return
+    }
     setCreating(true)
     try {
-      const result = await createApiKey(name.trim(), role)
+      const result = await createApiKey(name.trim(), role, {
+        startsAt: startsAt || null,
+        expiresAt: expiresAt || null,
+      })
       setNewKey(result)
       setName('')
       setRole('readonly')
@@ -117,6 +146,29 @@ export default function ApiKeysPage() {
               <option value="admin">admin</option>
             </select>
           </div>
+          {/* Temporal validity window — the key auto-revokes at the end date */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('keys.startsAt')}</label>
+              <input
+                type="datetime-local"
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+                className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">{t('keys.expiresAt')}</label>
+              <input
+                type="datetime-local"
+                value={expiresAt}
+                min={startsAt || undefined}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-400 -mt-1">{t('keys.windowHint')}</p>
           <button
             type="submit"
             disabled={creating || !name.trim()}
@@ -196,34 +248,41 @@ export default function ApiKeysPage() {
           ) : filtered.length === 0 ? (
             <div className="p-8 text-center text-[13px] text-gray-400">No keys match the filters.</div>
           ) : (
+            <>
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-gray-100">
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colName')}</th>
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colRole')}</th>
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colStatus')}</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colExpires')}</th>
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colLastUsed')}</th>
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{t('keys.colCreated')}</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map((k) => (
+                {pager.pageItems.map((k) => (
                   <tr key={k.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium">{k.name}</td>
                     <td className="px-4 py-3"><span className={badge(k.role)}>{k.role}</span></td>
                     <td className="px-4 py-3">
-                      <span className={badge(k.active ? 'success' : 'gray')}>
-                        {k.active ? t('common.active') : t('common.revoked')}
-                      </span>
+                      {(() => {
+                        const meta = STATUS_META[k.status] || STATUS_META[k.active ? 'active' : 'revoked']
+                        return <span className={badge(meta.badge)}>{t(meta.key)}</span>
+                      })()}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400 text-[12px]">
+                      {k.expires_at ? new Date(k.expires_at).toLocaleString() : t('keys.noExpiry')}
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.last_used, t)}</td>
                     <td className="px-4 py-3 text-gray-400 text-[12px]">{relativeTime(k.created_at, t)}</td>
                     <td className="px-4 py-3 text-right">
-                      {k.active && (
+                      {k.status !== 'revoked' && (
                         <button
                           onClick={() => setRevokeTarget(k)}
                           className="p-1.5 text-gray-400 hover:text-red-500 rounded hover:bg-red-50 transition-colors"
+                          title={t('keys.revoke')}
                         >
                           <Trash2 size={13} />
                         </button>
@@ -233,6 +292,8 @@ export default function ApiKeysPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
+            </>
           )
         )}
       </div>

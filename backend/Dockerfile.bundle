@@ -7,8 +7,8 @@
 #
 # Build workflow (run from the repo root):
 #
-#   # 1. First save the Wazuh Docker images into the packages directory:
-#   #    (see README for the full export command)
+#   # 1. Place any offline installers into backend/packages/
+#   #    (see backend/packages/README.md)
 #
 #   # 2. Build the standard backend image:
 #   docker build -t sabc-compliance-backend ./backend

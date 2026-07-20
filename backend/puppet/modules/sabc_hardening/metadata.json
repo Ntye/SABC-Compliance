@@ -1,0 +1,14 @@
+{
+  "name": "sabc-sabc_hardening",
+  "version": "1.0.0",
+  "author": "CRICLO (generated)",
+  "source": "generated://sabc-compliance-platform/referential",
+  "summary": "Generated hardening module from the SABC referential",
+  "license": "proprietary",
+  "dependencies": [],
+  "operatingsystem_support": [
+    {"operatingsystem": "Ubuntu"}, {"operatingsystem": "Debian"},
+    {"operatingsystem": "RedHat"}, {"operatingsystem": "Rocky"},
+    {"operatingsystem": "AlmaLinux"}, {"operatingsystem": "CentOS"}
+  ]
+}

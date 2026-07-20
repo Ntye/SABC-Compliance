@@ -25,10 +25,16 @@ class AutoScanScheduler:
         auto_scan_last_run  ISO-8601 UTC timestamp of the last completed run
     """
 
-    def __init__(self, collect_uc, node_repo, config_repo) -> None:
+    def __init__(self, collect_uc, node_repo, config_repo,
+                 group_repo=None, scan_group_uc=None) -> None:
         self._collect_uc = collect_uc
         self._nodes = node_repo
         self._cfg = config_repo
+        # Section 6: scan by compliance group + members. Ungrouped nodes still
+        # get scanned individually (falling back to the built-in baseline) so a
+        # freshly-enrolled node is never missed.
+        self._groups = group_repo
+        self._scan_group_uc = scan_group_uc
         self._task: asyncio.Task | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -72,7 +78,25 @@ class AutoScanScheduler:
 
         logger.info("Auto-scan: starting scheduled fleet scan (interval=%d %s)", interval, unit)
         await self._cfg.set("auto_scan_last_run", now.isoformat())
-        nodes = await self._nodes.find_all({})
+
+        # Section 6: iterate compliance groups + members. Track which nodes were
+        # covered so ungrouped nodes can still be swept individually afterwards.
+        covered: set[str] = set()
+        groups_scanned = 0
+        if self._groups is not None and self._scan_group_uc is not None:
+            try:
+                for group in await self._groups.find_all():
+                    try:
+                        await self._scan_group_uc.execute(group.id)
+                        groups_scanned += 1
+                        covered.update(group.node_ids)
+                    except Exception as exc:
+                        logger.warning("Auto-scan: group %s failed: %s",
+                                       getattr(group, "name", group.id), exc)
+            except Exception as exc:
+                logger.warning("Auto-scan: could not enumerate compliance groups: %s", exc)
+
+        nodes = [n for n in await self._nodes.find_all({}) if n.id not in covered]
         ok = failed = 0
         for node in nodes:
             try:
@@ -85,4 +109,7 @@ class AutoScanScheduler:
                     getattr(node, "hostname", node.id),
                     exc,
                 )
-        logger.info("Auto-scan complete: %d succeeded, %d failed", ok, failed)
+        logger.info(
+            "Auto-scan complete: %d group(s), %d ungrouped node(s) ok, %d failed",
+            groups_scanned, ok, failed,
+        )

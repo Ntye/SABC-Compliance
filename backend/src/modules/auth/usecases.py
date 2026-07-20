@@ -1,11 +1,43 @@
 from __future__ import annotations
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jose import jwt, JWTError
+
+logger = logging.getLogger(__name__)
+
+# The placeholder shipped in config defaults / .env.example. Treated as "unset".
+DEFAULT_JWT_SECRET = "change-me-in-production-use-random-32-chars"
+
+
+async def resolve_jwt_secret(configured: str | None, config_repo) -> str:
+    """Return a strong JWT signing secret, never the insecure default.
+
+    If the operator set a safe secret (>= 32 chars, not the placeholder) it is
+    used as-is. Otherwise a random secret is generated once and persisted in
+    platform_config, so tokens cannot be forged with a known key and stay valid
+    across restarts. A warning is logged so production operators set their own.
+    """
+    value = (configured or "").strip()
+    if value and value != DEFAULT_JWT_SECRET and len(value) >= 32:
+        return value
+
+    stored = await config_repo.get("jwt_secret_auto")
+    if stored:
+        return stored
+
+    generated = secrets.token_urlsafe(48)
+    await config_repo.set("jwt_secret_auto", generated)
+    logger.warning(
+        "JWT_SECRET is unset or insecure; generated and persisted a random "
+        "signing secret. Set a strong JWT_SECRET (>= 32 chars) in the "
+        "environment for production deployments."
+    )
+    return generated
 
 from core.domain.entities import ApiKey, User, UserGroup, AuthPrincipal
 from core.domain.interfaces import IApiKeyRepository, IUserRepository, IUserGroupRepository
@@ -67,6 +99,13 @@ class AuthenticateUseCase:
         found = await self._repo.find_by_hash(_hash_key(raw_key))
         if not found or not found.active:
             raise UnauthorizedError("Invalid or inactive API key")
+        # Temporal validity: a key outside its start/end window is rejected, so
+        # revocation at the end date is automatic (no background sweep needed).
+        now = datetime.utcnow()
+        if found.expires_at is not None and now >= found.expires_at:
+            raise UnauthorizedError("API key expired")
+        if found.starts_at is not None and now < found.starts_at:
+            raise UnauthorizedError("API key is not yet valid")
         await self._repo.touch_last_used(found.id)
         return found
 
@@ -75,6 +114,17 @@ class CreateApiKeyUseCase:
     def __init__(self, repo: IApiKeyRepository) -> None:
         self._repo = repo
 
+    @staticmethod
+    def _parse_dt(value) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            raise ValidationError(f"Invalid date/time: {value!r}")
+
     async def execute(self, data: dict) -> dict:
         name = data.get("name", "").strip()
         role = data.get("role", "")
@@ -82,6 +132,10 @@ class CreateApiKeyUseCase:
             raise ValidationError("name is required")
         if role not in ApiKey.ROLES:
             raise ValidationError(f"role must be one of {ApiKey.ROLES}")
+        starts_at = self._parse_dt(data.get("starts_at"))
+        expires_at = self._parse_dt(data.get("expires_at"))
+        if starts_at and expires_at and expires_at <= starts_at:
+            raise ValidationError("expires_at must be after starts_at")
         raw = _gen_key()
         key = ApiKey(
             id=str(uuid.uuid4()),
@@ -89,9 +143,16 @@ class CreateApiKeyUseCase:
             key_hash=_hash_key(raw),
             role=role,
             created_at=datetime.utcnow(),
+            starts_at=starts_at,
+            expires_at=expires_at,
         )
         await self._repo.save(key)
-        return {"id": key.id, "name": key.name, "role": key.role, "api_key": raw, "message": "Store this key securely — it will not be shown again."}
+        return {
+            "id": key.id, "name": key.name, "role": key.role, "api_key": raw,
+            "starts_at": key.starts_at.isoformat() if key.starts_at else None,
+            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+            "message": "Store this key securely — it will not be shown again.",
+        }
 
 
 class ListApiKeysUseCase:

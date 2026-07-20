@@ -8,6 +8,7 @@ from core.domain.entities import AuthPrincipal
 from core.errors import NotFoundError, ValidationError
 from interface.http.routes.auth import get_current_principal, require_operator, require_admin
 from modules.compliance.scheduler import UNITS_TO_SECONDS
+from modules.detection.usecases import DETECTION_CLOSED_LOOP_CONFIG_KEY
 
 router = APIRouter(prefix="/compliance", tags=["Compliance"])
 
@@ -32,6 +33,19 @@ class ScanScheduleRequest(BaseModel):
     interval: int = Field(default=30, ge=1)
     unit: str = "minutes"  # "seconds" | "minutes" | "days"
 
+class ClosedLoopSettingRequest(BaseModel):
+    enabled: bool = False
+
+class EnforceRequest(BaseModel):
+    # Exactly one of node_id / group_id. Apply the tier-applicable referential
+    # (sabc_hardening) so the internal referential fully passes on the target.
+    node_id: str | None = None
+    group_id: str | None = None
+    # Set by the Tiers page: when each enforcement job finishes, record a
+    # platform notification, then run a verification scan and notify its
+    # outcome too.
+    notify_on_complete: bool = False
+
 
 # ── Dependency injection (set by main.py) ─────────────────────────────────────
 
@@ -40,18 +54,24 @@ _node_uc = None
 _collect_uc = None
 _remediate_uc = None
 _closed_loop_uc = None
+_enforce_uc = None
+_history_uc = None
+_report_uc = None
 _config_repo = None
 
 
 def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=None,
-                  closed_loop_uc=None) -> None:
+                  closed_loop_uc=None, enforce_uc=None, history_uc=None, report_uc=None) -> None:
     global _summary_uc, _node_uc, _collect_uc, _remediate_uc, _config_repo
-    global _closed_loop_uc
+    global _closed_loop_uc, _enforce_uc, _history_uc, _report_uc
     _summary_uc = summary_uc
     _node_uc = node_uc
     _collect_uc = collect_uc
     _remediate_uc = remediate_uc
     _closed_loop_uc = closed_loop_uc
+    _enforce_uc = enforce_uc
+    _history_uc = history_uc
+    _report_uc = report_uc
     _config_repo = config_repo
 
 
@@ -61,6 +81,38 @@ def set_use_cases(summary_uc, node_uc, collect_uc, remediate_uc, config_repo=Non
 async def compliance_summary(principal: AuthPrincipal = Depends(get_current_principal)):
     """One row per node with its latest compliance reports and remediation events."""
     return await _summary_uc.execute()
+
+
+@router.get("/history", summary="Scan history (fleet or a node) within a time window")
+async def compliance_history(
+    node_id: str | None = None,
+    since: str | None = None,   # ISO-8601 lower bound (inclusive) on collected_at
+    until: str | None = None,   # ISO-8601 upper bound (inclusive)
+    limit: int = 1000,
+    principal: AuthPrincipal = Depends(get_current_principal),
+):
+    """Newest-first scan-history rows (score + counts + context, no control
+    details) for the History tab: the whole fleet, or one node when `node_id`
+    is given, optionally bounded by `since`/`until`. Drives the history graph,
+    the day/time search, and custom-interval exports."""
+    if _history_uc is None:
+        raise HTTPException(status_code=503, detail="Compliance history not available")
+    try:
+        return await _history_uc.execute(node_id=node_id, since=since, until=until, limit=limit)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/reports/{report_id}", summary="One historical scan report with control details")
+async def compliance_report(report_id: str, principal: AuthPrincipal = Depends(get_current_principal)):
+    """Full details of a single past scan — for viewing or exporting a specific
+    result found via the history search."""
+    if _report_uc is None:
+        raise HTTPException(status_code=503, detail="Compliance history not available")
+    try:
+        return await _report_uc.execute(report_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/nodes/{id}", summary="Compliance detail for a single node")
@@ -132,6 +184,34 @@ async def run_closed_loop(
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+@router.post("/enforce", summary="Enforce the full referential on a node or a node group")
+async def enforce_referential(
+    body: EnforceRequest,
+    principal: AuthPrincipal = Depends(require_operator),
+):
+    """Apply the generated ``sabc_hardening`` module — scoped to the target's
+    tier- and family-applicable controls — so the internal referential fully
+    passes. Provide exactly one of ``{"node_id": "..."}`` or
+    ``{"group_id": "..."}`` (a Puppet node group; every member is enforced).
+
+    Returns the launched Ansible job(s); each streams progress on its own job
+    channel. With ``notify_on_complete`` (sent by the Tiers page) each finished
+    job records a platform notification and chains a verification scan whose
+    outcome is notified as well; otherwise follow up with a manual scan.
+    """
+    if _enforce_uc is None:
+        raise HTTPException(status_code=503, detail="Referential enforcement not available")
+    try:
+        return await _enforce_uc.execute(
+            node_id=body.node_id, group_id=body.group_id,
+            notify_on_complete=body.notify_on_complete,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.get("/schedule", summary="Get the auto-scan schedule")
 async def get_scan_schedule(principal: AuthPrincipal = Depends(get_current_principal)):
     """Return the current auto-scan schedule and the estimated next-run timestamp."""
@@ -173,3 +253,30 @@ async def update_scan_schedule(
     await _config_repo.set("auto_scan_interval", str(body.interval))
     await _config_repo.set("auto_scan_unit", body.unit)
     return {"ok": True, "enabled": body.enabled, "interval": body.interval, "unit": body.unit}
+
+
+@router.get("/closed-loop/settings", summary="Get the global closed-loop enforcement setting")
+async def get_closed_loop_setting(principal: AuthPrincipal = Depends(get_current_principal)):
+    """Whether detection events auto-trigger Puppet remediation platform-wide.
+
+    When off (the default), a detected change always launches a compliance
+    scan but never enforces on its own; a node group's ``active_response`` can
+    still enable the loop for its own members regardless of this switch."""
+    if not _config_repo:
+        return {"enabled": False}
+    raw = await _config_repo.get(DETECTION_CLOSED_LOOP_CONFIG_KEY)
+    return {"enabled": (raw or "").strip().lower() in {"true", "1", "yes", "on"}}
+
+
+@router.put("/closed-loop/settings", summary="Enable/disable global closed-loop enforcement (admin only)")
+async def update_closed_loop_setting(
+    body: ClosedLoopSettingRequest,
+    principal: AuthPrincipal = Depends(require_admin),
+):
+    """Flip the platform-wide closed loop. With it on, every genuine detected
+    change enforces with Puppet after scanning; with it off, detection observes
+    and scans only. Requires admin role."""
+    if not _config_repo:
+        raise HTTPException(status_code=500, detail="Config repository not available")
+    await _config_repo.set(DETECTION_CLOSED_LOOP_CONFIG_KEY, "true" if body.enabled else "false")
+    return {"ok": True, "enabled": body.enabled}

@@ -16,7 +16,7 @@ host is Docker — nothing else is installed on your machine.
 3. [First-time setup](#3-first-time-setup)
 4. [Authentication](#4-authentication)
 5. [Adding managed servers](#5-adding-managed-servers)
-6. [Infrastructure (Puppet & Wazuh)](#6-infrastructure-puppet--wazuh)
+6. [Infrastructure (Puppet & Detection agent)](#6-infrastructure-puppet--detection-agent)
 7. [Compliance](#7-compliance)
 8. [Day-to-day operations](#8-day-to-day-operations)
 9. [EC2 deployment](#9-ec2-deployment)
@@ -38,11 +38,22 @@ Browser
 
 sabc-backend container (FastAPI + Ansible + OpenSSH client)
   Volumes:
-    sabc_backend-data  →  /app/data      SQLite database (nodes, jobs, rules, audit)
-    sabc_backend-keys  →  /app/keys      Ansible SSH key pair (generated once, persisted)
-    ./backend/packages →  /app/packages  Airgap install files (.deb/.rpm/tarballs)
+    sabc_backend-data  →  /app/data            SQLite database (nodes, jobs, rules, audit)
+    sabc_backend-keys  →  /app/keys            Ansible SSH key pair (generated once, persisted)
+    ./backend/packages →  /app/packages        Airgap install files (.deb/.rpm/wheels)
+    ./detection-agent  →  /app/detection-agent Agent sources shipped to managed nodes
 
 Docker network: sabc-net (bridge, internal — backend is not exposed to LAN)
+
+Managed node (each server in the fleet)
+  ├── puppet-agent                 enforcement plane — applies the referential
+  └── compliance-detection-agent  detection plane — SABC's own lightweight
+        Python daemon (inotify via watchdog). Watches /etc/ssh/, /etc/pam.d/,
+        /etc/sudoers*, /etc/passwd, /etc/group, /etc/shadow, snapshots every
+        change as evidence (SHA-256 + metadata, content where policy allows)
+        and POSTs it to the platform:
+
+          POST /api/webhooks/detection   (X-API-Key + optional CIDR allowlist)
 ```
 
 The browser talks to a **single origin** (port 80). Nginx proxies all `/api/` traffic and
@@ -51,6 +62,36 @@ no hard-coded backend hostname in the browser.
 
 The backend exposes port 3000 separately for direct API access and the Swagger docs
 (`http://localhost:3000/docs`).
+
+### Detection → scan (→ optional remediation) loop
+
+The **detection plane is the custom SABC detection agent** (there is no
+third-party SIEM). Each event the agent reports is stored as tamper-evident
+evidence — `config_change_events` rows plus content-addressed `config_blobs`
+(deduplicated by SHA-256) — and then run through the gateway's feedback-storm
+guard, in this order:
+
+1. **Active remediation window** — a remediation with `outcome=pending` exists
+   for the node → the event is stored `suppressed` and linked to that
+   remediation (it is our own Puppet run writing files).
+2. **`puppet_running` flag** — the agent saw Puppet's catalog-run lock file →
+   stored `suppressed` (scheduled converge).
+3. **Genuine drift** — stored live, `compliance.violation_detected` is
+   published, and a **compliance scan always runs** so the dashboard reflects
+   the node's true posture. **Remediation is decoupled**: Puppet enforcement
+   runs only when the **closed loop** is enabled — globally
+   (`detection_closed_loop_enabled`, toggled on the Tiers page) or for a Puppet
+   node group the node belongs to (`active_response_enabled`). With the loop
+   off, the platform observes and scans but never auto-enforces.
+
+Every event records **who** made the change: the agent enriches it from auditd
+(`auid`/`uid`/`exe`/`comm`) and resolves the login uid to a username. The
+**Detection Events** page shows the actor, and **view diff** opens a modal that
+diffs the previous snapshot against the new one (by content hash).
+
+The agent never suppresses locally — every change reaches the platform, so the
+evidence trail is complete either way. Snapshots are evidence only; the platform
+never rolls files back from blobs.
 
 ---
 
@@ -246,7 +287,7 @@ instances in another account, simply add an inbound rule to their security group
 
 ---
 
-## 6. Infrastructure (Puppet & Wazuh)
+## 6. Infrastructure (Puppet & Detection agent)
 
 Before enrolling agents on nodes, set up the master services on the **Infrastructure** page.
 
@@ -262,70 +303,134 @@ master or install one on a registered node:
 
 Then **Install Puppet agent** on each managed node from the Infrastructure page.
 
-### Wazuh (security monitoring & threat detection)
+### Detection agent (config-change detection & evidence)
 
-Wazuh detects violations, fires a webhook, and the platform triggers Puppet remediation —
-closing the compliance feedback loop automatically.
+The platform ships its own lightweight detection agent — a small Python daemon
+(`detection-agent/agent.py`, inotify-based) that watches the compliance-critical
+paths (`/etc/ssh/`, `/etc/pam.d/`, `/etc/sudoers*`, `/etc/passwd`, `/etc/group`,
+`/etc/shadow`, …), snapshots every change as evidence (SHA-256 + metadata, file
+content only where policy allows), and reports to the platform's detection
+webhook. There is no separate manager service to install.
 
-1. **Infrastructure → Wazuh Manager → Install on a node**
-   Deploys Wazuh (manager + indexer + dashboard) as Docker containers with self-signed TLS.
-2. Or **Connect existing** for an already-running Wazuh stack.
-
-Then **Install Wazuh agent** on each managed node.
-
-#### Wazuh offline (airgap)
-
-In airgap environments, export the Wazuh Docker images on a connected machine and place
-them in `backend/packages/wazuh-manager/`:
-
-```bash
-# On a machine with internet access:
-docker pull wazuh/wazuh-manager:4.10.4
-docker pull wazuh/wazuh-indexer:4.10.4
-docker pull wazuh/wazuh-dashboard:4.10.4
-
-docker save \
-  wazuh/wazuh-manager:4.10.4 \
-  wazuh/wazuh-indexer:4.10.4 \
-  wazuh/wazuh-dashboard:4.10.4 \
-  | gzip > backend/packages/wazuh-manager/wazuh-images.tar.gz
-```
-
-The install playbook detects the tarball and uses it instead of pulling from Docker Hub.
+**Install detection agent** on each managed node from the Infrastructure page —
+the platform injects the gateway URL and the shared API key automatically. The
+agent needs only Python 3 and the `watchdog` library (installed by the playbook
+from the distro repo or pip; drop a wheel into `backend/packages/detection-agent/`
+for airgap installs).
 
 ---
 
 ## 7. Compliance
 
-The **Compliance** page shows each node's compliance status against:
+### The unified referential (profiles)
 
-- **CIS Benchmarks** — hardening checks for Ubuntu and RHEL-family systems
-- **ISO/IEC 27001** — information security management controls
-- **PCI-DSS** — payment card industry data security standard
+Compliance **profiles** are hardening referentials imported from the **unified
+multi-OS referential** — one sheet/CSV in the structure of
+`platform/seed/referentials/sabc_baseline/` = one profile. Each control row
+carries:
 
-### Rules
+- an internal **Control ID** (e.g. `JR2.C.1.1.1`) — *the* key; the Control Key is
+  auto-derived from it, and imports never key on the CIS reference;
+- **per-OS-family guidance**: separate Validate/Configure procedures for the
+  **Debian family** (Ubuntu/Debian/Mint) and the **Red Hat family**
+  (Alma/Rocky/RHEL/CentOS);
+- a **CIS Level** (1 or 2; blank = 1).
 
-Manage compliance rules in **Rules**. Each rule has:
-- A Puppet manifest snippet (the desired state)
-- Target OS family (debian / rhel / both)
-- Framework tag (cis / iso27001 / pcidss)
-- Active/inactive toggle
+Import is **UPSERT** (never wipe-and-rebuild): matched by Control ID, existing
+controls are updated (with edit history), new ones inserted, and controls absent
+from a re-import are **retired** (soft — kept so historical reports still read
+them). The **SABC Baseline** ships built-in (system profile, undeletable), seeded
+at first boot through the same importer, complete for **both families** out of
+the box.
 
-### Remediation
+From each profile the platform generates, at seed time:
 
-On the Compliance page, click **Remediate** on a failing node. This triggers an Ansible
-job that applies the relevant Puppet manifests. Job output streams live in the **Jobs** page.
+- a **Puppet module** (`sabc_hardening`) — one class per control, branching
+  internally on `$facts['os']['family']`, filled from the two Configure columns;
+- an **InSpec profile** — one control per referential control, guarded by
+  `os.family`, from the two Validate columns.
+
+A family with no runnable authored guidance for a control is reported as
+*implementation pending* and never auto-generated (see
+`backend/puppet/modules/sabc_hardening/IMPLEMENTATION_PENDING.txt`).
+
+### Tiers — which CIS Levels apply
+
+CIS Level is a **control** property; a node's **tier** decides which levels apply
+to it:
+
+- **Non-critical** (system tier): CIS Level 1 only.
+- **Critical** (system tier): CIS Level 1 + 2.
+- **Custom** tiers (e.g. "1.5", admin-only, audited): Level 1 plus a hand-picked
+  set of real Level-2 controls.
+
+Every node has exactly one tier (Non-critical on enrolment; reassignment is
+audited). A tier can be assigned to a **single node** or, in one action, to
+**every member of a Puppet node group** (Tiers page → *Apply a tier*). The
+generated Puppet classes and InSpec controls exist for **all** levels/families —
+the tier simply gates which ones a given node enforces and is scanned against.
+Assigning a tier and then **enforcing** it fully solves the internal referential
+on that target.
+
+### Compliance node groups (distinct from Puppet node groups)
+
+A **compliance group** is a platform-only concept — it binds a set of profiles
+(the standards to scan against) to a set of member nodes, and **never** touches
+the Puppet Node Classifier. A node may belong to several compliance groups.
+Manage them under `/compliance-groups` (kept entirely separate from the Puppet
+`/node-groups`).
+
+### How a scan resolves
+
+```
+compliance group  →  its bound profiles  →  its member nodes
+      per node:  tier decides CIS Levels  →  os.family decides which controls
+                 →  run that subset of the profile's InSpec controls
+```
+
+Each report records the compliance group, profile + version, node, tier at scan
+time, and OS family — so "which servers are scanned against standard X, at what
+tier" is a query. On-demand single-node scans resolve the same way via the
+node's group memberships (falling back to the built-in SABC Baseline when the
+node is in no group); the auto-scan scheduler iterates compliance groups + their
+members.
+
+### Enforce the referential (make everything pass)
+
+To bring a node — or a whole node group — into full compliance, click
+**Enforce referential** (on the node's compliance page, the node group page, or
+the Tiers page). This pushes the generated `sabc_hardening` module to the target
+and runs `puppet apply`, scoped to exactly the controls the target's **tier** and
+**OS family** make applicable — the same set the scan checks — so *enforce → scan*
+converges on 100%. It works whether or not the node is classified on a Puppet
+master, and is idempotent (each control is guarded by its own Validate check).
+
+Enforcement is exposed as `POST /compliance/enforce` (`{node_id | group_id}`) and
+runs as an Ansible job whose output streams in the **Jobs** page. The lighter
+**Remediate** button still runs `puppet agent -t` against whatever catalog the
+master assigns.
+
+### Tiers page
+
+The **Tiers** page (under *Manage*) lists every tier, lets admins create/edit/
+delete custom tiers, assigns a tier to a **node or an entire node group**, and
+enforces the referential on that target in one place. It also hosts the global
+**closed-loop** switch.
 
 ### Closed feedback loop
 
 ```
-Wazuh detects violation
+Detection agent spots a config change (inotify)
         ↓
-Webhook fires to platform backend
+Event posted to the platform (evidence stored: hashes, metadata, content, actor)
         ↓
-Puppet remediation job triggered automatically
+Suppression rules applied (active remediation window? scheduled Puppet run?)
         ↓
-Compliance status updated
+Genuine drift → compliance SCAN always runs (dashboard reflects true posture)
+        ↓
+Closed loop enabled? → Puppet enforcement job; otherwise scan only
+        ↓
+Compliance status updated; event + diff visible on the Detection Events page
 ```
 
 ---
@@ -472,10 +577,10 @@ HOST_IP=10.0.x.x
 
 ## 10. Airgap / offline deployment
 
-For environments with no internet access, bundle the Wazuh images into the backend image:
+For environments with no internet access, bundle the offline installers into the backend image:
 
 ```bash
-# 1. Export Wazuh images on a connected machine (see §6 Wazuh offline above)
+# 1. Place offline installers into backend/packages/ (see backend/packages/README.md)
 
 # 2. Build the bundled image (bakes packages/ into the image):
 ./deploy/ship.sh --bundle
@@ -540,8 +645,8 @@ Copy `backend/.env.example` to `.env` in the project root before starting.
 | `HOST_ADMIN_USER` | _(auto-detect)_ | — | Your SSH admin user on this machine (used as a hint in the UI) |
 | `PUPPET_MASTER_HOST` | — | — | Pre-configure Puppet master host (also settable from UI) |
 | `PUPPET_MASTER_PORT` | `8143` | — | Puppet orchestrator port |
-| `WAZUH_MANAGER_HOST` | — | — | Pre-configure Wazuh manager host (also settable from UI) |
-| `WAZUH_API_PORT` | `55000` | — | Wazuh API port |
+| `DETECTION_WEBHOOK_API_KEY` | — | — | Shared key detection agents present (auto-generated on first agent install) |
+| `DETECTION_WEBHOOK_SOURCE_IP` | — | — | Optional CIDR allowlist for the detection webhook |
 | `CORS_ORIGINS` | _(defaults)_ | — | Comma-separated list of allowed browser origins |
 
 Generate a strong JWT secret:
@@ -573,8 +678,8 @@ SABC-Compliance/
 │   │   ├── infrastructure/ DB adapter (SQLite), SSH adapter, Ansible adapter
 │   │   └── interface/     FastAPI routes, WebSocket manager, middleware
 │   ├── ansible/
-│   │   ├── playbooks/     provision.yml, install_puppet_*.yml, install_wazuh_*.yml
-│   │   └── templates/     Jinja2 templates (wazuh-compose.yml.j2)
+│   │   ├── playbooks/     provision.yml, install_puppet_*.yml, install_detection_agent.yml
+│   │   └── templates/     Jinja2 templates
 │   ├── packages/          Drop airgap archives here (empty by default)
 │   ├── Dockerfile
 │   ├── Dockerfile.bundle  Builds backend image with packages/ baked in

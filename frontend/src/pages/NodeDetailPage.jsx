@@ -1,12 +1,13 @@
-import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight,
+  Activity, AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight,
   Network, RefreshCw, RotateCw, ShieldCheck, Wifi, Wrench, XCircle,
 } from 'lucide-react'
 import {
   getNode, pingNode, updateNode, changeNodeIdentity,
   getNodeCompliance, collectNodeCompliance, triggerRemediation, runClosedLoop,
+  getNodeDetectionStatus,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -16,6 +17,8 @@ import Spinner from '../components/common/Spinner.jsx'
 import StatusDot from '../components/common/StatusDot.jsx'
 import EmptyState from '../components/common/EmptyState.jsx'
 import DnsModal from '../components/nodes/DnsModal.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -44,7 +47,7 @@ function ChangeIdentityModal({ node, onClose, onDone }) {
   const [result, setResult] = useState(null)
 
   const dirty = ip.trim() !== node.ip || hostname.trim() !== node.hostname || applySys
-  const enrolled = node.puppet_enrolled || node.wazuh_enrolled
+  const enrolled = node.puppet_enrolled || node.detection_enrolled
 
   async function apply() {
     setSaving(true)
@@ -193,9 +196,6 @@ function ResultPanel({ result, t }) {
           ))}
         </div>
       )}
-      {result.wazuh_manager_reconfig?.is_wazuh_manager && (
-        <WazuhRepointPanel reconfig={result.wazuh_manager_reconfig} />
-      )}
       {result.warnings?.length > 0 && (
         <div className="px-3 py-2 bg-amber-50 rounded-lg space-y-1">
           {result.warnings.map((w, i) => (
@@ -210,31 +210,87 @@ function ResultPanel({ result, t }) {
   )
 }
 
-// Shown when the changed node is the Wazuh manager: confirms its agents were
-// automatically re-pointed at the new address so they keep reporting.
-function WazuhRepointPanel({ reconfig }) {
-  const a = reconfig.agents || {}
-  const total = a.agents_total ?? 0
-  const ok = a.agents_repointed ?? 0
-  const failed = a.agents_failed ?? 0
-  const allGood = failed === 0
+// ── Detection agent panel ─────────────────────────────────────────────────────
+// Watched-paths status + agent liveness, derived from the events (incl. the
+// 10-minute heartbeat) the node's detection agent reports to the gateway.
+function DetectionPanel({ node, t }) {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const s = await getNodeDetectionStatus(node.id)
+        if (!cancelled) setStatus(s)
+      } catch (_) {}
+      finally { if (!cancelled) setLoading(false) }
+    }
+    load()
+    const timer = setInterval(load, 60000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [node.id])
+
+  const lastSeen = status?.agent_last_seen
+  // The agent heartbeats every 10 min — silent for >25 min means it is likely down.
+  const stale = lastSeen ? (Date.now() - new Date(lastSeen).getTime()) > 25 * 60 * 1000 : true
+  const pager = usePagination(status?.watched_paths || [])
+
   return (
-    <div className={`px-3 py-2 rounded-lg space-y-1.5 ${allGood ? 'bg-green-50' : 'bg-amber-50'}`}>
-      <div className={`flex items-start gap-2 text-[11px] font-medium ${allGood ? 'text-green-700' : 'text-amber-700'}`}>
-        {allGood ? <ShieldCheck size={12} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />}
-        <span>
-          This node is the Wazuh manager. New address{' '}
-          <span className="font-mono">{reconfig.new_address}</span>
-          {' '}propagated{total > 0 ? ` to ${ok}/${total} agent${total === 1 ? '' : 's'}` : ' (no enrolled agents)'}.
-        </span>
+    <div className="bg-white rounded-2xl border border-gray-100 p-5 mt-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-[13px] font-semibold text-gray-900 flex items-center gap-2">
+          <Activity size={15} className="text-brand" />{t('nodeDetail.detection.title')}
+        </h3>
+        <div className="flex items-center gap-2">
+          <span className={badge(lastSeen && !stale ? 'success' : 'gray')}>
+            {lastSeen
+              ? `${t('nodeDetail.detection.lastSeen')} ${fmtDate(lastSeen)}`
+              : t('nodeDetail.detection.neverSeen')}
+          </span>
+          <Link to={`/detection?node=${node.id}`} className="text-[11px] text-brand hover:underline">
+            {t('nodeDetail.detection.viewEvents')}
+          </Link>
+        </div>
       </div>
-      {Array.isArray(a.results) && a.results.some((r) => !r.ok) && (
-        <div className="pl-5 space-y-0.5">
-          {a.results.filter((r) => !r.ok).map((r) => (
-            <div key={r.node_id} className="text-[10px] font-mono text-amber-700">
-              {r.hostname}: {r.error}
-            </div>
-          ))}
+
+      {loading ? (
+        <div className="h-16 rounded-xl bg-gray-50 animate-pulse" />
+      ) : !status || status.watched_paths.length === 0 ? (
+        <p className="text-[12px] text-gray-400">
+          {node.detection_enrolled
+            ? t('nodeDetail.detection.noEvents')
+            : t('nodeDetail.detection.notEnrolled')}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-gray-100">
+                {[
+                  t('nodeDetail.detection.colPath'), t('nodeDetail.detection.colLastEvent'),
+                  t('nodeDetail.detection.colLastChange'), t('nodeDetail.detection.colEvents'),
+                ].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {pager.pageItems.map((p) => (
+                <tr key={p.path} className="hover:bg-gray-50/60">
+                  <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{p.path}</td>
+                  <td className="px-3 py-2">
+                    <span className={badge(p.last_event_type === 'baseline' ? 'gray' : p.last_event_type === 'deleted' ? 'danger' : 'warning')}>
+                      {p.last_event_type}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDate(p.last_event_at)}</td>
+                  <td className="px-3 py-2 text-gray-500 tabular-nums">{p.events}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Pagination {...pager} />
         </div>
       )}
     </div>
@@ -405,7 +461,7 @@ export default function NodeDetailPage() {
     )
   }
 
-  const enrolled = node.puppet_enrolled || node.wazuh_enrolled
+  const enrolled = node.puppet_enrolled || node.detection_enrolled
   const reports = compliance?.reports || []
   const remediations = compliance?.remediations || []
 
@@ -468,9 +524,9 @@ export default function NodeDetailPage() {
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[12px] text-gray-600">Wazuh</span>
-              <span className={badge(node.wazuh_enrolled ? 'success' : 'gray')}>
-                {node.wazuh_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
+              <span className="text-[12px] text-gray-600">{t('nodeDetail.detectionAgent')}</span>
+              <span className={badge(node.detection_enrolled ? 'success' : 'gray')}>
+                {node.detection_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -552,6 +608,9 @@ export default function NodeDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Detection agent */}
+      <DetectionPanel node={node} t={t} />
 
       {/* Compliance */}
       <div className="bg-white rounded-2xl border border-gray-100 p-5 mt-4">

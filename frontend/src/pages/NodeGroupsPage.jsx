@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Plus, Trash2, X, Search, CheckCircle, XCircle, Server, ChevronRight,
   ChevronLeft, ArrowLeft, Pin, GitBranch, Check, ChevronDown, Shield,
-  List, Network, Layers, RefreshCw, RotateCw, UploadCloud,
+  List, Network, Layers, RefreshCw, RotateCw, UploadCloud, Zap,
 } from 'lucide-react'
 import {
   listNodeGroups, createNodeGroup, deleteNodeGroup, listNodes,
@@ -14,6 +14,8 @@ import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 const OPERATORS = ['=', '!=', '~', '>', '>=', '<', '<=']
 
@@ -176,9 +178,8 @@ function CreateWizard({ groups, nodes, facts, onCancel, onCreated, defaultParent
         rules,
         node_ids: pinnedIds,
       })
-      const allSynced = created.wazuh_synced && created.puppet_synced
+      const allSynced = created.puppet_synced
       const parts = [
-        created.wazuh_synced ? 'Wazuh ✓' : 'Wazuh sync failed',
         created.puppet_synced ? 'Puppet ✓' : 'Puppet sync failed',
       ]
       toast(`${t('nodeGroups.created')} — ${parts.join(', ')}`, allSynced ? 'success' : 'warning')
@@ -547,7 +548,6 @@ function TreeNodeRow({ group, allGroups, depth, onDelete, onCreateChild, onClose
 
         {/* sync icons */}
         <span className="flex-shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <SyncIcon ok={group.wazuh_synced} />
           <SyncIcon ok={group.puppet_synced} />
         </span>
 
@@ -736,6 +736,7 @@ export default function NodeGroupsPage() {
     return groups.filter((g) =>
       !q || g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
   }, [groups, query])
+  const pager = usePagination(filtered)
 
   async function handleDelete() {
     if (!deleteTarget) return
@@ -923,20 +924,20 @@ export default function NodeGroupsPage() {
                   {query ? 'No groups match your filter.' : t('nodeGroups.noGroups')}
                 </div>
               ) : (
+                <>
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-gray-100">
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.name')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.environment')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.matchingNodes')}</th>
-                      <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.wazuhSync')}</th>
                       <th className="text-center px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{t('nodeGroups.puppetSync')}</th>
                       <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Created</th>
                       <th className="px-4 py-3" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {filtered.map((g) => (
+                    {pager.pageItems.map((g) => (
                       <tr key={g.id} className="hover:bg-gray-50/50">
                         <td className="px-4 py-3 font-medium text-gray-800">
                           <div className="flex items-center gap-2">
@@ -951,6 +952,14 @@ export default function NodeGroupsPage() {
                                 {t('nodeGroups.systemGroup')}
                               </span>
                             )}
+                            {g.active_response_enabled && (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded font-medium"
+                                title={t('nodeGroups.closedLoopHint')}
+                              >
+                                <Zap size={9} /> {t('nodeGroups.closedLoopActive')}
+                              </span>
+                            )}
                             {g.parent && g.parent !== 'All Nodes' && (
                               <span className="text-[10px] text-gray-400">⤷ {g.parent}</span>
                             )}
@@ -963,7 +972,6 @@ export default function NodeGroupsPage() {
                             <span className="ml-1 text-[10px] text-gray-400">({g.rules.length} rule{g.rules.length !== 1 ? 's' : ''})</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.wazuh_synced} /></span></td>
                         <td className="px-4 py-3 text-center"><span className="inline-flex justify-center"><SyncIcon ok={g.puppet_synced} /></span></td>
                         <td className="px-4 py-3 text-gray-400">{relativeTime(g.created_at)}</td>
                         <td className="px-4 py-3">
@@ -991,6 +999,8 @@ export default function NodeGroupsPage() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination {...pager} />
+                </>
               )
             )}
           </div>

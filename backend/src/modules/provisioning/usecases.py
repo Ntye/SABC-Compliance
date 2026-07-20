@@ -10,6 +10,7 @@ from core.domain.interfaces import (
 )
 from config import get_settings
 from core.errors import ConflictError, NotFoundError, ValidationError
+from infrastructure.ssh.hardening import host_key_opts
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +32,15 @@ class GetInfrastructureStatusUseCase:
         self,
         config_repo: IPlatformConfigRepository,
         puppet_master_host_env: str | None,
-        wazuh_manager_host_env: str | None,
         puppet_port: int,
-        wazuh_port: int,
     ) -> None:
         self._config = config_repo
         self._puppet_env = puppet_master_host_env
-        self._wazuh_env = wazuh_manager_host_env
         self._puppet_port = puppet_port
-        self._wazuh_port = wazuh_port
 
     async def execute(self) -> dict:
         puppet_host = await self._config.get("puppet_master_host") or self._puppet_env
-        wazuh_host = await self._config.get("wazuh_manager_host") or self._wazuh_env
-
-        puppet_reachable, wazuh_reachable = await asyncio.gather(
-            _test_tcp(puppet_host, self._puppet_port) if puppet_host else asyncio.sleep(0, result=None),
-            _test_tcp(wazuh_host, self._wazuh_port) if wazuh_host else asyncio.sleep(0, result=None),
-        )
+        puppet_reachable = await _test_tcp(puppet_host, self._puppet_port) if puppet_host else None
 
         return {
             "puppet": {
@@ -56,12 +48,6 @@ class GetInfrastructureStatusUseCase:
                 "host": puppet_host,
                 "port": self._puppet_port,
                 "reachable": puppet_reachable,
-            },
-            "wazuh": {
-                "configured": bool(wazuh_host),
-                "host": wazuh_host,
-                "port": self._wazuh_port,
-                "reachable": wazuh_reachable,
             },
         }
 
@@ -71,40 +57,21 @@ class SetMasterHostUseCase:
         self,
         config_repo: IPlatformConfigRepository,
         puppet_port: int,
-        wazuh_port: int,
-        repoint_wazuh_agents_uc=None,
     ) -> None:
         self._config = config_repo
         self._puppet_port = puppet_port
-        self._wazuh_port = wazuh_port
-        self._repoint = repoint_wazuh_agents_uc
 
     async def execute(self, service: str, host: str) -> dict:
-        if service not in ("puppet", "wazuh"):
-            raise ValidationError("service must be 'puppet' or 'wazuh'")
+        if service != "puppet":
+            raise ValidationError("service must be 'puppet'")
         host = host.strip()
         if not host:
             raise ValidationError("host is required")
 
-        key = "puppet_master_host" if service == "puppet" else "wazuh_manager_host"
-        port = self._puppet_port if service == "puppet" else self._wazuh_port
+        await self._config.set("puppet_master_host", host)
+        reachable = await _test_tcp(host, self._puppet_port)
 
-        old_host = await self._config.get(key)
-        await self._config.set(key, host)
-        reachable = await _test_tcp(host, port)
-
-        result = {"service": service, "host": host, "port": port, "reachable": reachable}
-
-        # Changing the Wazuh manager address must follow through to every enrolled
-        # agent — otherwise they keep reporting to the old address and go dark.
-        if service == "wazuh" and self._repoint is not None and host != (old_host or ""):
-            try:
-                result["agents"] = await self._repoint.execute(new_addr=host)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Wazuh agent re-point after manager change failed: %s", exc)
-                result["agents_error"] = str(exc)
-
-        return result
+        return {"service": service, "host": host, "port": self._puppet_port, "reachable": reachable}
 
 
 class StartJobUseCase:
@@ -228,43 +195,34 @@ class CancelJobUseCase:
 
 class InstallServiceUseCase:
     """
-    Install puppet-master, wazuh-manager, puppet-agent, or wazuh-agent
-    on a registered node via an Ansible job.
+    Install puppet-master, puppet-agent, or the detection agent on a registered
+    node via an Ansible job.
 
     On success:
-      - puppet_master / wazuh_manager: saves node IP to platform_config
-      - puppet_agent / wazuh_agent: marks node.puppet_enrolled / wazuh_enrolled
+      - puppet_master: saves node IP to platform_config
+      - puppet_agent / detection_agent: marks node.puppet_enrolled /
+        node.detection_enrolled
     """
 
     _PLAYBOOKS = {
         "puppet_master":           "install_puppet_master.yml",
-        "wazuh_manager":           "install_wazuh_manager.yml",
-        "wazuh_manager_colocated": "install_wazuh_manager_colocated.yml",
         "puppet_agent":            "install_puppet_agent.yml",
-        "wazuh_agent":             "install_wazuh_agent.yml",
+        # Custom lightweight detection agent (replaces the old wazuh-agent).
+        "detection_agent":         "install_detection_agent.yml",
         "check_health":            "check_node_health.yml",
-        # Configure the Wazuh→Puppet closed remediation loop on the manager node.
-        "wazuh_remediation":       "configure_wazuh_remediation.yml",
         # One-time: enable the External Node Classifier on a Puppet Core master
         # (node_terminus = exec + external_nodes in puppet.conf, restart server).
         "puppet_core_enc":         "configure_puppet_core_enc.yml",
         # Deploy the sabc_compliance Puppet module to the master + enforce the
         # referential fleet-wide (site-manifest include). Runs on the master node.
         "compliance_module":       "deploy_compliance_module.yml",
-        # Configure Wazuh SCA scanning for the CIS baseline + escalate failed
-        # checks to the webhook (detection half of the loop). Runs on the manager.
-        "wazuh_sca":               "configure_wazuh_sca.yml",
     }
     _CONFIG_KEYS = {
         "puppet_master":           "puppet_master_host",
-        "wazuh_manager":           "wazuh_manager_host",
-        "wazuh_manager_colocated": "wazuh_manager_host",
     }
     _ENROLL_ATTRS = {
         "puppet_agent":            "puppet_enrolled",
-        "wazuh_manager":           "wazuh_enrolled",
-        "wazuh_manager_colocated": "wazuh_enrolled",
-        "wazuh_agent":             "wazuh_enrolled",
+        "detection_agent":         "detection_enrolled",
     }
 
     def __init__(
@@ -307,47 +265,8 @@ class InstallServiceUseCase:
             host = await self._config.get("puppet_master_host")
             if host:
                 extra_vars["puppet_master_host"] = host
-        elif self._service in ("wazuh_manager", "wazuh_manager_colocated"):
-            if dashboard_port is not None:
-                extra_vars["wazuh_dashboard_port"] = dashboard_port
-        elif self._service == "wazuh_agent":
-            host = await self._config.get("wazuh_manager_host")
-            if host:
-                extra_vars["wazuh_manager_host"] = host
-            settings = get_settings()
-            extra_vars["wazuh_api_user"] = settings.wazuh_api_user
-            if settings.wazuh_api_pass:
-                extra_vars["wazuh_api_pass"] = settings.wazuh_api_pass
-            extra_vars["wazuh_api_port"] = settings.wazuh_api_port
-        elif self._service == "wazuh_remediation":
-            import os
-
-            settings = get_settings()
-            secret = settings.wazuh_webhook_secret
-            if not secret:
-                raise ValidationError(
-                    "wazuh_webhook_secret is not configured on the platform. Set it "
-                    "(env WAZUH_WEBHOOK_SECRET) before wiring the remediation loop."
-                )
-            public_host = (
-                os.environ.get("PLATFORM_PUBLIC_HOST", "").strip()
-                or os.environ.get("HOST_IP", "").strip()
-                or settings.host_ip
-            )
-            if not public_host:
-                raise ValidationError(
-                    "Cannot derive the platform webhook URL: set PLATFORM_PUBLIC_HOST "
-                    "(or HOST_IP) so the Wazuh manager can reach the platform."
-                )
-            try:
-                https_port = int(os.environ.get("HTTPS_PORT", "8443") or "8443")
-            except ValueError:
-                https_port = 8443
-            extra_vars["sabc_webhook_url"] = (
-                f"https://{public_host}:{https_port}/api/webhooks/wazuh"
-            )
-            extra_vars["sabc_webhook_secret"] = secret
-            extra_vars["sabc_min_level"] = settings.wazuh_webhook_min_level
+        elif self._service == "detection_agent":
+            extra_vars.update(await self._detection_agent_vars(node))
         elif self._service == "puppet_core_enc":
             settings = get_settings()
             extra_vars["enc_dir"] = settings.puppet_core_enc_dir
@@ -358,18 +277,10 @@ class InstallServiceUseCase:
             # (…/ansible and …/puppet/modules/sabc_compliance share a parent).
             base = _os.path.dirname(_os.path.abspath(settings.ansible_dir or "/app/ansible"))
             extra_vars["sabc_module_src"] = _os.path.join(base, "puppet", "modules", "sabc_compliance")
-        elif self._service == "wazuh_sca":
-            import os as _os
-            settings = get_settings()
-            adir = _os.path.abspath(settings.ansible_dir or "/app/ansible")
-            extra_vars["sabc_sca_src"] = _os.path.join(adir, "files", "wazuh-sca")
         elif self._service == "check_health":
             host = await self._config.get("puppet_master_host")
             if host:
                 extra_vars["puppet_master_host"] = host
-            host = await self._config.get("wazuh_manager_host")
-            if host:
-                extra_vars["wazuh_manager_host"] = host
 
         pe_password_used = extra_vars.get("pe_console_password", "SABCPuppet1!")
 
@@ -394,6 +305,77 @@ class InstallServiceUseCase:
             "extra_vars": extra_vars,
             "on_complete": on_complete,
         })
+
+    async def _detection_agent_vars(self, node: Node) -> dict:
+        """Assemble the variables install_detection_agent.yml needs.
+
+        The gateway URL is derived from PLATFORM_PUBLIC_HOST / HOST_IP just like
+        the compliance module deploy; the shared webhook API key is read from
+        platform_config and auto-generated on first use so the whole flow works
+        without manual secret plumbing.
+        """
+        import os
+        import secrets
+
+        settings = get_settings()
+        public_host = (
+            os.environ.get("PLATFORM_PUBLIC_HOST", "").strip()
+            or os.environ.get("HOST_IP", "").strip()
+            or settings.host_ip
+        )
+        if not public_host:
+            raise ValidationError(
+                "Cannot derive the platform webhook URL: set PLATFORM_PUBLIC_HOST "
+                "(or HOST_IP) so managed nodes can reach the detection gateway."
+            )
+        try:
+            https_port = int(os.environ.get("HTTPS_PORT", "8443") or "8443")
+        except ValueError:
+            https_port = 8443
+
+        api_key = (
+            await self._config.get("detection_webhook_api_key")
+            or settings.detection_webhook_api_key
+        )
+        if not api_key:
+            api_key = "sabcdet_" + secrets.token_urlsafe(32)
+        # Persist so the webhook receiver and every future agent install agree.
+        await self._config.set("detection_webhook_api_key", api_key)
+
+        # Agent sources live in backend/detection-agent (a sibling of the ansible
+        # dir); the Docker image copies them to /app/detection-agent and the dev
+        # compose bind-mounts them to the same path.
+        candidates = [
+            os.path.join(
+                os.path.dirname(os.path.abspath(settings.ansible_dir or "/app/ansible")),
+                "detection-agent",
+            ),
+            "/app/detection-agent",
+        ]
+        src = next((c for c in candidates if os.path.isdir(c)), candidates[-1])
+
+        # Watched folders/files come from the platform-managed watch config so a
+        # freshly installed agent monitors exactly what the operator configured
+        # in the detection plane (falling back to the built-in default set). The
+        # whole agent config is rendered here (not templated in the playbook) so
+        # the dynamic path list can never corrupt the file's YAML.
+        from modules.detection.watch_config import GetWatchConfigUseCase, render_agent_config
+        watch = await GetWatchConfigUseCase(self._config).execute()
+        gateway_url = f"https://{public_host}:{https_port}/api/webhooks/detection"
+        agent_config = render_agent_config(
+            node_hostname=node.hostname, gateway_url=gateway_url, api_key=api_key,
+            paths=watch["paths"], hash_only=watch["hash_only"],
+        )
+
+        return {
+            "detection_gateway_url": gateway_url,
+            "detection_api_key": api_key,
+            "detection_node_hostname": node.hostname,
+            "detection_agent_src": src,
+            "detection_watch_paths": watch["paths"],
+            "detection_hash_only_paths": watch["hash_only"],
+            "detection_config_yaml": agent_config,
+        }
 
 
 class SwitchPuppetEditionUseCase:
@@ -460,12 +442,13 @@ class SwitchPuppetEditionUseCase:
 
 
 class DetectAgentsUseCase:
-    """Launch a read-only Ansible job that detects Puppet / Wazuh enrollment.
+    """Launch a read-only Ansible job that detects Puppet / detection-agent
+    enrollment.
 
-    Requires become: yes on the target to read protected cert directories and
-    Wazuh logs. On success, updates node.puppet_enrolled / wazuh_enrolled by
-    scanning the job log for PUPPET_STATUS=ENROLLED / WAZUH_STATUS=ENROLLED
-    sentinel strings output by detect_agents.yml.
+    Requires become: yes on the target to read protected cert directories. On
+    success, updates node.puppet_enrolled / detection_enrolled by scanning the
+    job log for PUPPET_STATUS=ENROLLED / DETECTION_STATUS=ENROLLED sentinel
+    strings output by detect_agents.yml.
     """
 
     PLAYBOOK = "detect_agents.yml"
@@ -498,8 +481,8 @@ class DetectAgentsUseCase:
             fresh = await node_repo.find_by_id(node_id)
             if not fresh:
                 return
-            fresh.puppet_enrolled = "PUPPET_STATUS=ENROLLED" in all_text
-            fresh.wazuh_enrolled  = "WAZUH_STATUS=ENROLLED"  in all_text
+            fresh.puppet_enrolled    = "PUPPET_STATUS=ENROLLED"    in all_text
+            fresh.detection_enrolled = "DETECTION_STATUS=ENROLLED" in all_text
             fresh.updated_at = datetime.utcnow()
             await node_repo.update(fresh)
 
@@ -589,8 +572,7 @@ class ScanEngineUseCase:
         key = node.ssh_key_path or self._default_key
         args = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *host_key_opts(self._default_key),
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-i", key,

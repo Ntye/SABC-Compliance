@@ -671,7 +671,7 @@ DEPLOY_EOF
 
   echo ""
   echo "══════════════════════════════════════════════════════"
-  echo "  SABC Compliance Platform is running on:"
+  echo "  CRICLO Platform is running on:"
   echo ""
 
   # Detect the public IP of the EC2 instance.

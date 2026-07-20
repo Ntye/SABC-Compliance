@@ -1,8 +1,10 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 
 from core.domain.interfaces import ISSHClient
+from infrastructure.ssh.hardening import host_key_opts
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +15,21 @@ class SshClientAdapter(ISSHClient):
 
     def _base_args(self, ip: str, port: int, user: str, key_path: str | None) -> list[str]:
         key = key_path or self._default_key
+        identities = ["-i", key]
+        # During/after a key rotation the immediately-previous key is kept at
+        # {key}.prev. Offer it as a SECONDARY identity ONLY on default-key calls
+        # (key_path is None), so a node not yet cleaned up isn't locked out. When
+        # a caller passes an explicit key (e.g. the rotation flow verifying the
+        # new key), we use exactly that key so the test stays truthful.
+        if key_path is None:
+            prev = f"{self._default_key}.prev"
+            if os.path.exists(prev):
+                identities += ["-i", prev]
         return [
-            "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *identities,
+            # Trust-on-first-use host-key verification into a shared known_hosts
+            # file — a changed host key is refused (MITM protection).
+            *host_key_opts(self._default_key),
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
             "-p", str(port),

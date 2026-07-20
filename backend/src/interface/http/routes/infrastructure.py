@@ -21,7 +21,6 @@ class ServiceStatus(BaseModel):
 
 class InfrastructureStatusResponse(BaseModel):
     puppet: ServiceStatus
-    wazuh: ServiceStatus
 
 
 class SetHostRequest(BaseModel):
@@ -48,10 +47,6 @@ class InstallRequest(BaseModel):
     node_id: str
 
 
-class WazuhInstallRequest(InstallRequest):
-    dashboard_port: int | None = None
-
-
 class JobRef(BaseModel):
     id: str
     type: str
@@ -64,11 +59,8 @@ class JobRef(BaseModel):
 _get_status_uc = None
 _set_master_uc = None
 _install_puppet_master_uc = None
-_install_wazuh_manager_uc = None
-_install_wazuh_manager_colocated_uc = None
-_configure_wazuh_remediation_uc = None
 _install_puppet_agent_uc = None
-_install_wazuh_agent_uc = None
+_install_detection_agent_uc = None
 _check_health_uc = None
 _scan_engine_uc = None
 _node_repo = None
@@ -78,45 +70,36 @@ _config_repo = None
 _configure_puppet_core_enc_uc = None
 _switch_puppet_edition_uc = None
 _deploy_compliance_module_uc = None
-_configure_wazuh_sca_uc = None
 
 
 def set_use_cases(
     get_status_uc,
     set_master_uc,
     install_puppet_master_uc,
-    install_wazuh_manager_uc,
     install_puppet_agent_uc,
-    install_wazuh_agent_uc,
+    install_detection_agent_uc=None,
     check_health_uc=None,
     scan_engine_uc=None,
     node_repo=None,
     packages_dir: str = "",
-    install_wazuh_manager_colocated_uc=None,
     ssh_client=None,
     config_repo=None,
-    configure_wazuh_remediation_uc=None,
     configure_puppet_core_enc_uc=None,
     switch_puppet_edition_uc=None,
     deploy_compliance_module_uc=None,
-    configure_wazuh_sca_uc=None,
 ) -> None:
     global _get_status_uc, _set_master_uc
-    global _install_puppet_master_uc, _install_wazuh_manager_uc
-    global _install_wazuh_manager_colocated_uc, _configure_wazuh_remediation_uc
-    global _install_puppet_agent_uc, _install_wazuh_agent_uc
+    global _install_puppet_master_uc
+    global _install_puppet_agent_uc, _install_detection_agent_uc
     global _check_health_uc, _scan_engine_uc
     global _node_repo, _packages_dir, _ssh_client, _config_repo
     global _configure_puppet_core_enc_uc, _switch_puppet_edition_uc
-    global _deploy_compliance_module_uc, _configure_wazuh_sca_uc
+    global _deploy_compliance_module_uc
     _get_status_uc = get_status_uc
     _set_master_uc = set_master_uc
     _install_puppet_master_uc = install_puppet_master_uc
-    _install_wazuh_manager_uc = install_wazuh_manager_uc
-    _install_wazuh_manager_colocated_uc = install_wazuh_manager_colocated_uc
-    _configure_wazuh_remediation_uc = configure_wazuh_remediation_uc
     _install_puppet_agent_uc = install_puppet_agent_uc
-    _install_wazuh_agent_uc = install_wazuh_agent_uc
+    _install_detection_agent_uc = install_detection_agent_uc
     _check_health_uc = check_health_uc
     _scan_engine_uc = scan_engine_uc
     _node_repo = node_repo
@@ -126,7 +109,6 @@ def set_use_cases(
     _configure_puppet_core_enc_uc = configure_puppet_core_enc_uc
     _switch_puppet_edition_uc = switch_puppet_edition_uc
     _deploy_compliance_module_uc = deploy_compliance_module_uc
-    _configure_wazuh_sca_uc = configure_wazuh_sca_uc
 
 
 def _puppet_agent_platform(os_family: str | None, os_name: str | None, os_version: str | None) -> str:
@@ -178,11 +160,10 @@ async def puppet_agent_platform_check(
 
 @router.get("/status", response_model=InfrastructureStatusResponse, summary="Get infrastructure status")
 async def get_status(principal: AuthPrincipal = Depends(get_current_principal)):
-    """Returns connectivity status for Puppet master and Wazuh manager."""
+    """Returns connectivity status for the Puppet master."""
     result = await _get_status_uc.execute()
     return InfrastructureStatusResponse(
         puppet=ServiceStatus(**result["puppet"]),
-        wazuh=ServiceStatus(**result["wazuh"]),
     )
 
 
@@ -194,18 +175,6 @@ async def set_puppet_master(
     """Save a Puppet master hostname and test connectivity."""
     try:
         return await _set_master_uc.execute("puppet", body.host)
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-
-@router.post("/wazuh-manager", summary="Connect to an existing Wazuh manager")
-async def set_wazuh_manager(
-    body: SetHostRequest,
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """Save a Wazuh manager hostname and test connectivity."""
-    try:
-        return await _set_master_uc.execute("wazuh", body.host)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -329,24 +298,6 @@ async def deploy_compliance_module(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.post("/configure/wazuh-sca", response_model=JobRef, status_code=202,
-             summary="Configure Wazuh SCA scanning for the CIS baseline (detection half of the loop)")
-async def configure_wazuh_sca(
-    body: InstallRequest,
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """Install the SABC CIS SCA policy on the Wazuh manager (``node_id`` = the
-    manager), distribute it to agents, and escalate failed checks to the webhook
-    so Wazuh detection drives the closed remediation loop."""
-    if _configure_wazuh_sca_uc is None:
-        raise HTTPException(status_code=503, detail="Wazuh SCA configuration not available")
-    try:
-        job = await _configure_wazuh_sca_uc.execute(body.node_id)
-        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-
 @router.post("/install/puppet-master", response_model=JobRef, status_code=202, summary="Install Puppet master on a node")
 async def install_puppet_master(
     body: InstallRequest,
@@ -358,104 +309,6 @@ async def install_puppet_master(
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-
-
-@router.get("/probe-dashboard-port", summary="Find the first available dashboard port on a node")
-async def probe_dashboard_port(
-    node_id: str = Query(...),
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """
-    SSH to the node, list listening ports, and return the first free port
-    from the candidate list [443, 8443, 8444, 9443, 10443].
-    Always returns a result — never raises if SSH fails.
-    """
-    if _node_repo is None or _ssh_client is None:
-        return {"suggested_port": 443, "occupied_ports": [], "occupied_candidates": []}
-
-    node = await _node_repo.find_by_id(node_id)
-    if not node:
-        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
-
-    used_ports: set[int] = set()
-    try:
-        stdout, _, _ = await _ssh_client.run_command(
-            node.ip,
-            node.ssh_port,
-            node.ssh_user,
-            node.ssh_key_path,
-            "ss -tlnp 2>/dev/null | awk 'NR>1{print $4}' | grep -oE '[0-9]+$' | sort -nu || true"
-        )
-        for line in (stdout or "").splitlines():
-            line = line.strip()
-            if line.isdigit():
-                used_ports.add(int(line))
-    except Exception:
-        pass  # SSH unreachable — return defaults
-
-    candidates = [443, 8443, 8444, 9443, 10443]
-    suggested = next((p for p in candidates if p not in used_ports), 8443)
-    occupied_candidates = [p for p in candidates if p in used_ports]
-
-    return {
-        "suggested_port": suggested,
-        "occupied_ports": sorted(used_ports),
-        "occupied_candidates": occupied_candidates,
-    }
-
-
-@router.post("/install/wazuh-manager", response_model=JobRef, status_code=202, summary="Install Wazuh manager on a node")
-async def install_wazuh_manager(
-    body: WazuhInstallRequest,
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """Start an Ansible job to install Wazuh manager on the specified node."""
-    try:
-        job = await _install_wazuh_manager_uc.execute(body.node_id, dashboard_port=body.dashboard_port)
-        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-
-@router.post("/install/wazuh-manager-colocated", response_model=JobRef, status_code=202, summary="Install Wazuh manager alongside an existing Puppet Primary Server")
-async def install_wazuh_manager_colocated(
-    body: WazuhInstallRequest,
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """Start a Puppet-safe Ansible job to install Wazuh on a node that already
-    runs Puppet Server or Puppet Enterprise.  The job verifies Puppet health
-    before and after installation and automatically resolves port conflicts
-    (e.g. Puppet Enterprise :443 vs Wazuh dashboard :443).
-    """
-    if _install_wazuh_manager_colocated_uc is None:
-        raise HTTPException(status_code=503, detail="Colocated Wazuh install use case not configured")
-    try:
-        job = await _install_wazuh_manager_colocated_uc.execute(body.node_id, dashboard_port=body.dashboard_port)
-        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-
-@router.post("/configure/wazuh-remediation", response_model=JobRef, status_code=202, summary="Wire the Wazuh→Puppet closed remediation loop on the manager node")
-async def configure_wazuh_remediation(
-    body: InstallRequest,
-    principal: AuthPrincipal = Depends(require_operator),
-):
-    """Install the `custom-sabc` integration on the Wazuh manager so it forwards
-    alerts to the platform webhook, closing the detection → remediation loop.
-
-    Derives the webhook URL from PLATFORM_PUBLIC_HOST/HTTPS_PORT and the shared
-    secret from the platform's wazuh_webhook_secret — both must be configured.
-    """
-    if _configure_wazuh_remediation_uc is None:
-        raise HTTPException(status_code=503, detail="Remediation configuration use case not configured")
-    try:
-        job = await _configure_wazuh_remediation_uc.execute(body.node_id)
-        return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/install/puppet-agent", response_model=JobRef, status_code=202, summary="Install Puppet agent on a node")
@@ -471,17 +324,23 @@ async def install_puppet_agent(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.post("/install/wazuh-agent", response_model=JobRef, status_code=202, summary="Install Wazuh agent on a node")
-async def install_wazuh_agent(
+@router.post("/install/detection-agent", response_model=JobRef, status_code=202, summary="Install the compliance detection agent on a node")
+async def install_detection_agent(
     body: InstallRequest,
     principal: AuthPrincipal = Depends(require_operator),
 ):
-    """Start an Ansible job to install and enroll the Wazuh agent on the specified node."""
+    """Start an Ansible job that installs the custom lightweight detection agent
+    (file-integrity watch on the compliance-critical paths) and points it at
+    this platform's detection webhook."""
+    if _install_detection_agent_uc is None:
+        raise HTTPException(status_code=503, detail="Detection agent install use case not configured")
     try:
-        job = await _install_wazuh_agent_uc.execute(body.node_id)
+        job = await _install_detection_agent_uc.execute(body.node_id)
         return JobRef(id=job.id, type=job.type, status=job.status, node_id=job.node_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/check-health", response_model=JobRef, status_code=202, summary="Run a read-only node health check")
@@ -489,7 +348,7 @@ async def check_node_health(
     body: InstallRequest,
     principal: AuthPrincipal = Depends(require_operator),
 ):
-    """Start a read-only Ansible diagnostic job that reports Puppet/Wazuh/network state."""
+    """Start a read-only Ansible diagnostic job that reports Puppet/detection-agent/network state."""
     if _check_health_uc is None:
         raise HTTPException(status_code=503, detail="Health check use case not configured")
     try:

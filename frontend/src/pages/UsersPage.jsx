@@ -6,6 +6,8 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { badge } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function relativeTime(iso, t) {
   if (!iso) return '—'
@@ -85,6 +87,7 @@ export default function UsersPage() {
       return true
     })
   }, [users, query, statusFilter])
+  const pager = usePagination(filtered)
 
   function openCreate() {
     setNewUsername(''); setNewPassword(''); setNewConfirm('')
@@ -253,6 +256,7 @@ export default function UsersPage() {
               {users.length === 0 ? t('iam.noUsers') : 'No users match the filters.'}
             </div>
           ) : (
+            <>
             <table className="w-full text-[12px]">
               <thead>
                 <tr className="border-b border-gray-100">
@@ -266,7 +270,7 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {filtered.map((u) => (
+                {pager.pageItems.map((u) => (
                   <tr key={u.id} className="hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium text-gray-800">{u.username}</td>
                     <td className="px-4 py-3">
@@ -315,6 +319,8 @@ export default function UsersPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
+            </>
           )
         )}
       </div>

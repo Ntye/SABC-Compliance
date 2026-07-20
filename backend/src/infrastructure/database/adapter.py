@@ -6,18 +6,23 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import (
-    Column, Integer, MetaData, String, Table, Text, select, delete, update, func, text
+    Column, Integer, LargeBinary, MetaData, String, Table, Text,
+    and_, or_, select, delete, update, func, text
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from core.domain.entities import (
-    ApiKey, ComplianceReport, Job, Node, NodeGroup, Profile, ProfileControl,
-    RemediationEvent, Rule, User, UserGroup,
+    ApiKey, ComplianceGroup, ComplianceReport, ConfigChangeEvent, Job, Node,
+    NodeGroup, Notification, Profile, ProfileControl, RemediationEvent, Rule,
+    Tier, User, UserGroup,
 )
 from core.domain.interfaces import (
-    IApiKeyRepository, IAuditRepository, IComplianceRepository,
-    IJobRepository, INodeGroupRepository, INodeRepository, IPlatformConfigRepository,
-    IProfileRepository, IRuleRepository, IUserRepository, IUserGroupRepository,
+    IApiKeyRepository, IAuditRepository, IComplianceGroupRepository,
+    IComplianceRepository, IDetectionRepository, IJobRepository,
+    INodeGroupRepository, INodeRepository, INotificationRepository,
+    IPlatformConfigRepository, IProfileRepository, IRuleRepository,
+    ITierRepository, IUserRepository, IUserGroupRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,8 +46,9 @@ nodes_table = Table(
     Column("tags", Text, default="[]"),
     Column("status", Text, default="registered"),
     Column("puppet_enrolled", Integer, default=0),
-    Column("wazuh_enrolled", Integer, default=0),
+    Column("detection_enrolled", Integer, default=0),
     Column("scan_ready", Integer, default=0),
+    Column("tier_id", Text),
     Column("last_seen", Text),
     Column("created_at", Text),
     Column("updated_at", Text),
@@ -77,6 +83,22 @@ job_logs_table = Table(
     Column("line", Text),
 )
 
+# In-platform notifications (header bell) — written when a background chain
+# (e.g. enforcement job → follow-up scan) finishes so the outcome is visible
+# even to operators who weren't watching the job stream.
+notifications_table = Table(
+    "notifications", metadata,
+    Column("id", Text, primary_key=True),
+    Column("title", Text, nullable=False),
+    Column("message", Text),
+    Column("kind", Text, default="info"),
+    Column("severity", Text, default="info"),
+    Column("node_id", Text),
+    Column("job_id", Text),
+    Column("is_read", Integer, default=0),
+    Column("created_at", Text),
+)
+
 compliance_reports_table = Table(
     "compliance_reports", metadata,
     Column("id", Text, primary_key=True),
@@ -91,6 +113,13 @@ compliance_reports_table = Table(
     Column("profile", Text),
     Column("duration", Text),
     Column("skipped_checks", Integer, default=0),
+    # ── Scan context (compliance-group / tier / family at scan time) ──────────
+    Column("compliance_group_id", Text),
+    Column("profile_id", Text),
+    Column("profile_version", Text),
+    Column("tier_id", Text),
+    Column("tier_name", Text),
+    Column("os_family", Text),
     Column("collected_at", Text),
     # ── De-duplication (keyframe / confirmation) ──────────────────────────────
     # content_hash: hash of the normalized control state (control_id+status),
@@ -109,12 +138,47 @@ remediation_events_table = Table(
     "remediation_events", metadata,
     Column("id", Text, primary_key=True),
     Column("node_id", Text, nullable=False),
-    Column("wazuh_alert_id", Text),
+    # Renamed from wazuh_alert_id when the detection plane was replaced by the
+    # custom agent — links to the config_change_events row that triggered this.
+    Column("detection_event_id", Text),
     Column("puppet_job_id", Text),
     Column("triggered_at", Text),
     Column("completed_at", Text),
     Column("outcome", Text, default="pending"),
     Column("resources_fixed", Integer, default=0),
+)
+
+# One row per event reported by a node's detection agent (evidence trail).
+# suppressed=1 records the gateway's feedback-storm decision: the event was
+# stored but did NOT trigger remediation (see suppress_reason).
+config_change_events_table = Table(
+    "config_change_events", metadata,
+    Column("id", Text, primary_key=True),
+    Column("node_id", Text, nullable=False, index=True),
+    Column("path", Text, nullable=False),
+    Column("event_type", Text, nullable=False),
+    Column("timestamp", Text),
+    Column("prev_hash", Text),
+    Column("new_hash", Text),
+    Column("file_meta", Text),                 # JSON {mode, uid, gid, size, mtime}
+    Column("puppet_running", Integer, default=0),
+    Column("actor", Text),                     # JSON {auid, uid, exe, comm, username} or NULL
+    Column("suppressed", Integer, default=0),
+    Column("suppress_reason", Text),
+    Column("remediation_event_id", Text),      # FK → remediation_events.id (nullable)
+    Column("violation", Integer),              # NULL=unassessed, 0=benign, 1=violation
+    Column("violation_detail", Text),          # short summary of the controls that regressed
+    Column("created_at", Text, index=True),
+)
+
+# Content-addressed snapshot storage: one row per distinct file content,
+# deduplicated by SHA-256 (insert-or-ignore on conflict).
+config_blobs_table = Table(
+    "config_blobs", metadata,
+    Column("sha256", Text, primary_key=True),
+    Column("content", LargeBinary),
+    Column("size", Integer, default=0),
+    Column("first_seen_at", Text),
 )
 
 api_keys_table = Table(
@@ -127,6 +191,9 @@ api_keys_table = Table(
     Column("last_used", Text),
     Column("active", Integer, default=1),
     Column("user_id", Text),
+    # Temporal validity window (ISO-8601 strings). NULL = unbounded on that side.
+    Column("starts_at", Text),
+    Column("expires_at", Text),
 )
 
 users_table = Table(
@@ -152,6 +219,18 @@ audit_log_table = Table(
     Column("user_agent", Text),
     Column("duration_ms", Integer),
     Column("api_key_name", Text),
+    # ── Attribution + structured action metadata (WHO did WHAT) ────────────────
+    # Populated for every request from the resolved principal, and enriched with
+    # action/resource fields for explicit events such as exports.
+    Column("user_id", Text),
+    Column("user_name", Text),
+    Column("user_role", Text),
+    Column("action", Text),           # e.g. "export"
+    Column("resource_type", Text),    # e.g. "profile" | "fleet" | "node"
+    Column("resource_id", Text),
+    Column("resource_name", Text),
+    Column("format", Text),           # csv | json | pdf
+    Column("detail", Text),           # free-form JSON (row counts, filenames, …)
 )
 
 platform_config_table = Table(
@@ -186,6 +265,7 @@ profiles_table = Table(
     Column("version", Text, default="1.0.0"),
     Column("source", Text, default="custom"),
     Column("framework", Text),            # "cis" | "internal" | NULL (custom)
+    Column("is_system", Integer, default=0),  # undeletable system profile
     Column("created_at", Text),
     Column("updated_at", Text),
 )
@@ -200,6 +280,19 @@ profile_controls_table = Table(
     Column("title", Text, nullable=False),
     Column("position", Integer, default=0),
     Column("kind", Text, default="control"),
+    # ── Unified referential identity + scoping ────────────────────────────────
+    Column("control_id", Text),                 # THE key (internal referential id)
+    Column("control_key", Text),                # auto-derived slug
+    Column("applies_to", Text, default="debian;redhat"),
+    Column("cis_level", Integer, default=1),
+    Column("framework_reference", Text),        # provenance text only
+    Column("status", Text, default="active"),   # active | retired
+    # ── Per-family guidance ───────────────────────────────────────────────────
+    Column("validate_debian", Text),
+    Column("configure_debian", Text),
+    Column("validate_redhat", Text),
+    Column("configure_redhat", Text),
+    # ── Shared / legacy display fields ────────────────────────────────────────
     Column("cis_id", Text),
     Column("description", Text),
     Column("recommended_value", Text),
@@ -214,6 +307,52 @@ profile_controls_table = Table(
     Column("enabled", Integer, default=1),
     Column("created_at", Text),
     Column("updated_at", Text),
+)
+
+# ── Tiers (platform criticality classification) ───────────────────────────────
+tiers_table = Table(
+    "tiers", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    # Axis 1 — validation scope (Level 1 vs Level 1+2).
+    Column("includes_level_2", Integer, default=0),
+    # Axis 2 — enforcement (auto-remediate drift vs validation only).
+    Column("enforce", Integer, default=0),
+    Column("is_system", Integer, default=0),
+    Column("created_by", Text),
+    Column("created_at", Text),
+)
+
+tier_extra_controls_table = Table(
+    "tier_extra_controls", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tier_id", Text, nullable=False),
+    Column("control_id", Text, nullable=False),   # a real CIS Level-2 control_id
+)
+
+# ── Compliance node groups (platform-only; NEVER Puppet NC) ───────────────────
+compliance_groups_table = Table(
+    "compliance_groups", metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("description", Text),
+    Column("created_at", Text),
+    Column("updated_at", Text),
+)
+
+compliance_group_profiles_table = Table(
+    "compliance_group_profiles", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("profile_id", Text, nullable=False),
+)
+
+compliance_group_members_table = Table(
+    "compliance_group_members", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("group_id", Text, nullable=False),
+    Column("node_id", Text, nullable=False),
 )
 
 profile_control_history_table = Table(
@@ -255,7 +394,6 @@ node_groups_table = Table(
     Column("match_type", Text),
     Column("rules", Text),
     Column("puppet_group_id", Text),
-    Column("wazuh_synced", Integer, default=0),
     Column("puppet_synced", Integer, default=0),
     Column("group_type", Text, default="user"),
     Column("inspec_profile_id", Text),
@@ -318,11 +456,37 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             # SQLite does not support IF NOT EXISTS on ADD COLUMN, so we use
             # try/except. Each statement is independent; a duplicate-column
             # error does NOT abort the SQLite transaction.
+            #
+            # Wazuh → custom detection agent migration (renames, data kept):
+            #   nodes.wazuh_enrolled            → nodes.detection_enrolled
+            #   remediation_events.wazuh_alert_id → remediation_events.detection_event_id
+            #   platform_config 'wazuh_webhook_source_ip' → 'detection_webhook_source_ip'
+            for stmt in [
+                "ALTER TABLE nodes RENAME COLUMN wazuh_enrolled TO detection_enrolled",
+                "ALTER TABLE remediation_events RENAME COLUMN wazuh_alert_id TO detection_event_id",
+                "UPDATE platform_config SET key = 'detection_webhook_source_ip' "
+                "WHERE key = 'wazuh_webhook_source_ip' AND NOT EXISTS "
+                "(SELECT 1 FROM platform_config WHERE key = 'detection_webhook_source_ip')",
+                "DELETE FROM platform_config WHERE key IN "
+                "('wazuh_webhook_source_ip', 'wazuh_manager_host')",
+            ]:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception:
+                    pass
             for col, typ in [("fqdn", "TEXT"), ("dns_resolves", "INTEGER")]:
                 try:
                     await conn.execute(text(f"ALTER TABLE nodes ADD COLUMN {col} {typ}"))
                 except Exception:
                     pass
+            try:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN starts_at TEXT"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN expires_at TEXT"))
+            except Exception:
+                pass
             try:
                 await conn.execute(text("ALTER TABLE api_keys ADD COLUMN user_id TEXT"))
             except Exception:
@@ -331,6 +495,48 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
                 await conn.execute(text("ALTER TABLE profile_controls ADD COLUMN check_command TEXT"))
             except Exception:
                 pass
+            # Unified multi-OS referential columns on profile_controls.
+            for col, typ in [
+                ("control_id", "TEXT"), ("control_key", "TEXT"),
+                ("applies_to", "TEXT DEFAULT 'debian;redhat'"),
+                ("cis_level", "INTEGER DEFAULT 1"),
+                ("framework_reference", "TEXT"),
+                ("status", "TEXT DEFAULT 'active'"),
+                ("validate_debian", "TEXT"), ("configure_debian", "TEXT"),
+                ("validate_redhat", "TEXT"), ("configure_redhat", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE profile_controls ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+            # Audit-log attribution + action metadata (who exported what).
+            for col, typ in [
+                ("user_id", "TEXT"), ("user_name", "TEXT"), ("user_role", "TEXT"),
+                ("action", "TEXT"), ("resource_type", "TEXT"),
+                ("resource_id", "TEXT"), ("resource_name", "TEXT"),
+                ("format", "TEXT"), ("detail", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+            try:
+                await conn.execute(text("ALTER TABLE nodes ADD COLUMN tier_id TEXT"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE profiles ADD COLUMN is_system INTEGER DEFAULT 0"))
+            except Exception:
+                pass
+            for col, typ in [
+                ("compliance_group_id", "TEXT"), ("profile_id", "TEXT"),
+                ("profile_version", "TEXT"), ("tier_id", "TEXT"),
+                ("tier_name", "TEXT"), ("os_family", "TEXT"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE compliance_reports ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
             for col, typ in [("description", "TEXT"), ("role", "TEXT"),
                              ("permissions", "TEXT"), ("is_default", "INTEGER")]:
                 try:
@@ -377,12 +583,21 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             except Exception:
                 pass
             try:
+                await conn.execute(text("ALTER TABLE tiers ADD COLUMN enforce INTEGER DEFAULT 0"))
+            except Exception:
+                pass
+            try:
                 await conn.execute(text(
                     "UPDATE profiles SET framework = 'internal' "
                     "WHERE id = 'sabc-linux-baseline' AND (framework IS NULL OR framework = '')"
                 ))
             except Exception:
                 pass
+            for col, typ in [("violation", "INTEGER"), ("violation_detail", "TEXT")]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE config_change_events ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
 
     if not is_sqlite:
         # ── PostgreSQL idempotent column migrations ───────────────────────────
@@ -391,12 +606,49 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
         # failure (e.g. column already exists — impossible with IF NOT EXISTS,
         # but harmless) never aborts the other migrations.
         # IF NOT EXISTS is supported since PostgreSQL 9.6 (released 2016).
+        #
+        # Wazuh → custom detection agent migration (renames, data kept). Each
+        # statement fails harmlessly when the old column/key no longer exists.
+        for stmt in [
+            "ALTER TABLE nodes RENAME COLUMN wazuh_enrolled TO detection_enrolled",
+            "ALTER TABLE remediation_events RENAME COLUMN wazuh_alert_id TO detection_event_id",
+            "UPDATE platform_config SET key = 'detection_webhook_source_ip' "
+            "WHERE key = 'wazuh_webhook_source_ip' AND NOT EXISTS "
+            "(SELECT 1 FROM platform_config WHERE key = 'detection_webhook_source_ip')",
+            "DELETE FROM platform_config WHERE key IN "
+            "('wazuh_webhook_source_ip', 'wazuh_manager_host')",
+        ]:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(stmt))
+            except Exception:
+                pass
         pg_cols = [
             ("nodes",              "fqdn",                  "TEXT"),
             ("nodes",              "dns_resolves",          "BOOLEAN"),
             ("nodes",              "scan_ready",            "BOOLEAN DEFAULT false"),
             ("api_keys",           "user_id",               "TEXT"),
+            ("api_keys",           "starts_at",             "TEXT"),
+            ("api_keys",           "expires_at",            "TEXT"),
+            ("nodes",              "tier_id",               "TEXT"),
+            ("profiles",           "is_system",             "INTEGER DEFAULT 0"),
             ("profile_controls",   "check_command",         "TEXT"),
+            ("profile_controls",   "control_id",            "TEXT"),
+            ("profile_controls",   "control_key",           "TEXT"),
+            ("profile_controls",   "applies_to",            "TEXT DEFAULT 'debian;redhat'"),
+            ("profile_controls",   "cis_level",             "INTEGER DEFAULT 1"),
+            ("profile_controls",   "framework_reference",   "TEXT"),
+            ("profile_controls",   "status",                "TEXT DEFAULT 'active'"),
+            ("profile_controls",   "validate_debian",       "TEXT"),
+            ("profile_controls",   "configure_debian",      "TEXT"),
+            ("profile_controls",   "validate_redhat",       "TEXT"),
+            ("profile_controls",   "configure_redhat",      "TEXT"),
+            ("compliance_reports", "compliance_group_id",   "TEXT"),
+            ("compliance_reports", "profile_id",            "TEXT"),
+            ("compliance_reports", "profile_version",       "TEXT"),
+            ("compliance_reports", "tier_id",               "TEXT"),
+            ("compliance_reports", "tier_name",             "TEXT"),
+            ("compliance_reports", "os_family",             "TEXT"),
             ("user_groups",        "description",           "TEXT"),
             ("user_groups",        "role",                  "TEXT"),
             ("user_groups",        "permissions",           "TEXT DEFAULT '[]'"),
@@ -418,6 +670,18 @@ async def create_db(db_path: str, database_url: str = "") -> tuple[AsyncEngine, 
             ("compliance_reports", "keyframe_id",           "TEXT"),
             ("rules",              "scan_blocks",           "TEXT DEFAULT '{}'"),
             ("profiles",           "framework",             "TEXT"),
+            ("tiers",              "enforce",               "INTEGER DEFAULT 0"),
+            ("config_change_events", "violation",           "INTEGER"),
+            ("config_change_events", "violation_detail",    "TEXT"),
+            ("audit_log",          "user_id",               "TEXT"),
+            ("audit_log",          "user_name",             "TEXT"),
+            ("audit_log",          "user_role",             "TEXT"),
+            ("audit_log",          "action",                "TEXT"),
+            ("audit_log",          "resource_type",         "TEXT"),
+            ("audit_log",          "resource_id",           "TEXT"),
+            ("audit_log",          "resource_name",         "TEXT"),
+            ("audit_log",          "format",                "TEXT"),
+            ("audit_log",          "detail",                "TEXT"),
         ]
         for table, col, typedef in pg_cols:
             try:
@@ -463,8 +727,9 @@ class NodeRepository(INodeRepository):
             tags=json.loads(row.tags or "[]"),
             status=row.status or "registered",
             puppet_enrolled=bool(row.puppet_enrolled),
-            wazuh_enrolled=bool(row.wazuh_enrolled),
+            detection_enrolled=bool(row.detection_enrolled),
             scan_ready=bool(getattr(row, 'scan_ready', None) or getattr(row, 'inspec_installed', None)),
+            tier_id=getattr(row, 'tier_id', None),
             last_seen=_dt(row.last_seen),
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -487,8 +752,9 @@ class NodeRepository(INodeRepository):
             "tags": json.dumps(node.tags),
             "status": node.status,
             "puppet_enrolled": int(node.puppet_enrolled),
-            "wazuh_enrolled": int(node.wazuh_enrolled),
+            "detection_enrolled": int(node.detection_enrolled),
             "scan_ready": int(node.scan_ready),
+            "tier_id": node.tier_id,
             "last_seen": _ts(node.last_seen),
             "created_at": _ts(node.created_at),
             "updated_at": _ts(node.updated_at),
@@ -639,7 +905,12 @@ class ComplianceRepository(IComplianceRepository):
             (str(d.get("control_id")), str(d.get("status")))
             for d in (details or [])
         )
-        blob = json.dumps(norm, separators=(",", ":"))
+        # The leading token versions the details *schema* (not the pass/fail
+        # state). Bump it when the stored detail dict gains fields — e.g. the
+        # referential section grouping — so the next scan refreshes each node's
+        # keyframe and persists the enriched details instead of de-duplicating
+        # against a pre-schema keyframe.
+        blob = json.dumps(["v2-sections", norm], separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -682,6 +953,12 @@ class ComplianceRepository(IComplianceRepository):
             profile=getattr(row, "profile", None),
             duration=(float(row.duration) if getattr(row, "duration", None) else None),
             skipped_checks=getattr(row, "skipped_checks", None) or 0,
+            compliance_group_id=getattr(row, "compliance_group_id", None),
+            profile_id=getattr(row, "profile_id", None),
+            profile_version=getattr(row, "profile_version", None),
+            tier_id=getattr(row, "tier_id", None),
+            tier_name=getattr(row, "tier_name", None),
+            os_family=getattr(row, "os_family", None),
             collected_at=_dt(row.collected_at) or datetime.utcnow(),
         )
 
@@ -689,7 +966,7 @@ class ComplianceRepository(IComplianceRepository):
         return RemediationEvent(
             id=row.id,
             node_id=row.node_id,
-            wazuh_alert_id=row.wazuh_alert_id,
+            detection_event_id=row.detection_event_id,
             puppet_job_id=row.puppet_job_id or "",
             triggered_at=_dt(row.triggered_at) or datetime.utcnow(),
             completed_at=_dt(row.completed_at),
@@ -716,12 +993,17 @@ class ComplianceRepository(IComplianceRepository):
         state_hash = self._state_hash(report.details)
         c = compliance_reports_table.c
         async with self._session() as s:
-            latest = (await s.execute(
+            # De-dup scope: (node, source, profile). Adding profile_id keeps two
+            # profiles scanned for the same node from sharing a keyframe.
+            q = (
                 select(compliance_reports_table)
                 .where(c.node_id == report.node_id)
                 .where(c.source == report.source)
-                .order_by(c.collected_at.desc())
-                .limit(1)
+            )
+            if report.profile_id is not None:
+                q = q.where(c.profile_id == report.profile_id)
+            latest = (await s.execute(
+                q.order_by(c.collected_at.desc()).limit(1)
             )).first()
 
             make_keyframe = True
@@ -749,6 +1031,12 @@ class ComplianceRepository(IComplianceRepository):
                 profile=report.profile,
                 duration=(str(report.duration) if report.duration is not None else None),
                 skipped_checks=report.skipped_checks,
+                compliance_group_id=report.compliance_group_id,
+                profile_id=report.profile_id,
+                profile_version=report.profile_version,
+                tier_id=report.tier_id,
+                tier_name=report.tier_name,
+                os_family=report.os_family,
                 collected_at=_ts(report.collected_at),
                 content_hash=state_hash,
                 is_keyframe=(1 if make_keyframe else 0),
@@ -767,9 +1055,70 @@ class ComplianceRepository(IComplianceRepository):
             kf_details = await self._hydrate(s, rows)
             return [self._report_to_entity(r, kf_details) for r in rows]
 
+    async def find_history(
+        self, node_id: str | None = None, since: str | None = None,
+        until: str | None = None, limit: int = 1000,
+    ) -> list[dict]:
+        """Lightweight scan-history rows (no details) for the History tab —
+        one per scan, newest first, optionally scoped to a node and a
+        collected_at window. collected_at is stored as sortable ISO-8601 text,
+        so the range compares lexicographically."""
+        c = compliance_reports_table.c
+        async with self._session() as s:
+            q = select(
+                c.id, c.node_id, c.source, c.framework,
+                c.passed_checks, c.failed_checks, c.total_checks, c.skipped_checks,
+                c.profile, c.profile_id, c.profile_version, c.tier_name,
+                c.compliance_group_id, c.os_family, c.collected_at,
+            )
+            if node_id:
+                q = q.where(c.node_id == node_id)
+            if since:
+                q = q.where(c.collected_at >= since)
+            if until:
+                q = q.where(c.collected_at <= until)
+            q = q.order_by(c.collected_at.desc()).limit(max(1, min(int(limit or 1000), 5000)))
+            rows = (await s.execute(q)).all()
+
+        out: list[dict] = []
+        for r in rows:
+            total = r.total_checks or 0
+            score = round((r.passed_checks or 0) / total * 100) if total else 0
+            out.append({
+                "id": r.id, "node_id": r.node_id, "source": r.source or "puppet",
+                "framework": r.framework or "cis", "score": score,
+                "passed_checks": r.passed_checks or 0, "failed_checks": r.failed_checks or 0,
+                "total_checks": total, "skipped_checks": r.skipped_checks or 0,
+                "profile": r.profile, "profile_id": r.profile_id,
+                "profile_version": r.profile_version, "tier_name": r.tier_name,
+                "compliance_group_id": r.compliance_group_id, "os_family": r.os_family,
+                "collected_at": _dt(r.collected_at).isoformat() if _dt(r.collected_at) else r.collected_at,
+            })
+        return out
+
+    async def find_report(self, report_id: str) -> ComplianceReport | None:
+        """One scan report by id, with its details hydrated (following the
+        keyframe pointer for confirmation rows) — for viewing/exporting a
+        specific historical scan."""
+        c = compliance_reports_table.c
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_reports_table).where(c.id == report_id)
+            )).first()
+            if row is None:
+                return None
+            kf_details = await self._hydrate(s, [row])
+            return self._report_to_entity(row, kf_details)
+
     async def find_summary(self) -> list[dict]:
         async with self._session() as s:
             node_rows = (await s.execute(select(nodes_table))).all()
+            # Tier lookup (id → name + enforce flag) so each fleet row can show
+            # the node's tier and whether that tier auto-enforces drift.
+            tier_map = {
+                r.id: (r.name, bool(getattr(r, "enforce", 0)))
+                for r in (await s.execute(select(tiers_table))).all()
+            }
             results = []
             for node_row in node_rows:
                 reports_task = s.execute(
@@ -791,6 +1140,7 @@ class ComplianceRepository(IComplianceRepository):
                 remediations = [self._remediation_to_entity(r) for r in remediations_result.all()]
 
                 node = NodeRepository(self._session)._to_entity(node_row)
+                tier_name, tier_enforce = tier_map.get(node.tier_id, (None, False))
                 results.append({
                     "node_id": node.id,
                     "hostname": node.hostname,
@@ -798,8 +1148,13 @@ class ComplianceRepository(IComplianceRepository):
                     "os_family": node.os_family,
                     "status": node.status,
                     "puppet_enrolled": node.puppet_enrolled,
-                    "wazuh_enrolled": node.wazuh_enrolled,
+                    "detection_enrolled": node.detection_enrolled,
                     "scan_ready": node.scan_ready,
+                    "tier_id": node.tier_id,
+                    "tier_name": tier_name,
+                    # Enforcement is welded to the tier (Tier 3/4 enforce) — the
+                    # canonical "does this node auto-remediate drift" signal.
+                    "enforce": tier_enforce,
                     "reports": [
                         {
                             "id": r.id, "source": r.source, "framework": r.framework,
@@ -817,7 +1172,7 @@ class ComplianceRepository(IComplianceRepository):
                             "resources_fixed": r.resources_fixed,
                             "triggered_at": r.triggered_at.isoformat(),
                             "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                            "wazuh_alert_id": r.wazuh_alert_id,
+                            "detection_event_id": r.detection_event_id,
                             "puppet_job_id": r.puppet_job_id,
                         }
                         for r in remediations
@@ -828,7 +1183,7 @@ class ComplianceRepository(IComplianceRepository):
     async def save_remediation(self, event: RemediationEvent) -> None:
         async with self._session() as s:
             await s.execute(remediation_events_table.insert().values(
-                id=event.id, node_id=event.node_id, wazuh_alert_id=event.wazuh_alert_id,
+                id=event.id, node_id=event.node_id, detection_event_id=event.detection_event_id,
                 puppet_job_id=event.puppet_job_id, triggered_at=_ts(event.triggered_at),
                 completed_at=_ts(event.completed_at), outcome=event.outcome,
                 resources_fixed=event.resources_fixed,
@@ -860,6 +1215,19 @@ class ComplianceRepository(IComplianceRepository):
             )).first()
             return self._remediation_to_entity(row) if row else None
 
+    async def find_pending_remediation(self, node_id: str) -> RemediationEvent | None:
+        """Most recent remediation for this node still in the active window
+        (outcome=pending). Drives detection-event suppression rule (a)."""
+        async with self._session() as s:
+            row = (await s.execute(
+                select(remediation_events_table)
+                .where(remediation_events_table.c.node_id == node_id)
+                .where(remediation_events_table.c.outcome == "pending")
+                .order_by(remediation_events_table.c.triggered_at.desc())
+                .limit(1)
+            )).first()
+            return self._remediation_to_entity(row) if row else None
+
     async def update_remediation(self, event: RemediationEvent) -> None:
         async with self._session() as s:
             await s.execute(
@@ -872,6 +1240,196 @@ class ComplianceRepository(IComplianceRepository):
                 )
             )
             await s.commit()
+
+
+# ── Detection Repository ──────────────────────────────────────────────────────
+
+class DetectionRepository(IDetectionRepository):
+    """Evidence store for the detection plane.
+
+    Events are append-only; blobs are content-addressed (sha256 PK) with
+    insert-or-ignore semantics so identical file contents are stored once no
+    matter how many nodes or events reference them.
+    """
+
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    def _to_entity(self, row) -> ConfigChangeEvent:
+        return ConfigChangeEvent(
+            id=row.id,
+            node_id=row.node_id,
+            path=row.path,
+            event_type=row.event_type,
+            timestamp=_dt(row.timestamp) or datetime.utcnow(),
+            prev_hash=row.prev_hash,
+            new_hash=row.new_hash,
+            file_meta=json.loads(row.file_meta) if row.file_meta else None,
+            puppet_running=bool(row.puppet_running),
+            actor=json.loads(row.actor) if row.actor else None,
+            suppressed=bool(row.suppressed),
+            suppress_reason=row.suppress_reason,
+            remediation_event_id=row.remediation_event_id,
+            violation=(None if getattr(row, "violation", None) is None else bool(row.violation)),
+            violation_detail=getattr(row, "violation_detail", None),
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    def _to_dict(self, e: ConfigChangeEvent) -> dict:
+        return {
+            "id": e.id,
+            "node_id": e.node_id,
+            "path": e.path,
+            "event_type": e.event_type,
+            "timestamp": _ts(e.timestamp),
+            "prev_hash": e.prev_hash,
+            "new_hash": e.new_hash,
+            "file_meta": json.dumps(e.file_meta) if e.file_meta is not None else None,
+            "puppet_running": int(e.puppet_running),
+            "actor": json.dumps(e.actor) if e.actor is not None else None,
+            "suppressed": int(e.suppressed),
+            "suppress_reason": e.suppress_reason,
+            "remediation_event_id": e.remediation_event_id,
+            "violation": (None if e.violation is None else int(e.violation)),
+            "violation_detail": e.violation_detail,
+            "created_at": _ts(e.created_at),
+        }
+
+    async def save_event(self, event: ConfigChangeEvent) -> None:
+        async with self._session() as s:
+            await s.execute(config_change_events_table.insert().values(**self._to_dict(event)))
+            await s.commit()
+
+    async def update_violation(self, event_id: str, violation: bool | None, detail: str | None) -> None:
+        """Record the compliance impact of a change once it has been re-scanned."""
+        c = config_change_events_table.c
+        async with self._session() as s:
+            await s.execute(
+                update(config_change_events_table)
+                .where(c.id == event_id)
+                .values(violation=(None if violation is None else int(violation)),
+                        violation_detail=detail)
+            )
+            await s.commit()
+
+    async def save_heartbeat(self, event: ConfigChangeEvent) -> None:
+        """Keep only the latest heartbeat per node — liveness, not history."""
+        c = config_change_events_table.c
+        async with self._session() as s:
+            await s.execute(
+                delete(config_change_events_table)
+                .where(c.node_id == event.node_id)
+                .where(c.event_type == "heartbeat")
+            )
+            await s.execute(config_change_events_table.insert().values(**self._to_dict(event)))
+            await s.commit()
+
+    async def save_blob(self, sha256: str, content: bytes) -> bool:
+        """Insert-or-ignore by hash. Returns True when a new blob was stored."""
+        async with self._session() as s:
+            existing = (await s.execute(
+                select(config_blobs_table.c.sha256)
+                .where(config_blobs_table.c.sha256 == sha256)
+            )).first()
+            if existing:
+                return False
+            try:
+                await s.execute(config_blobs_table.insert().values(
+                    sha256=sha256,
+                    content=content,
+                    size=len(content),
+                    first_seen_at=datetime.utcnow().isoformat(),
+                ))
+                await s.commit()
+                return True
+            except IntegrityError:
+                # Raced with a concurrent insert of the same content — fine.
+                await s.rollback()
+                return False
+
+    async def find_events(
+        self, node_id: str | None = None, limit: int = 100,
+        include_heartbeats: bool = False,
+    ) -> list[ConfigChangeEvent]:
+        c = config_change_events_table.c
+        async with self._session() as s:
+            q = select(config_change_events_table)
+            if node_id:
+                q = q.where(c.node_id == node_id)
+            if not include_heartbeats:
+                q = q.where(c.event_type != "heartbeat")
+            q = q.order_by(c.created_at.desc()).limit(limit)
+            rows = (await s.execute(q)).all()
+            return [self._to_entity(r) for r in rows]
+
+    async def find_event(self, id: str) -> ConfigChangeEvent | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(config_change_events_table)
+                .where(config_change_events_table.c.id == id)
+            )).first()
+            return self._to_entity(row) if row else None
+
+    async def find_blob(self, sha256: str) -> dict | None:
+        """Fetch a content-addressed snapshot by hash for the diff view.
+
+        Returns ``{sha256, content (bytes), size, first_seen_at}`` or None.
+        The raw bytes are decoded to text at the API boundary — this stays
+        content-type-agnostic so binary snapshots don't blow up here.
+        """
+        async with self._session() as s:
+            row = (await s.execute(
+                select(config_blobs_table)
+                .where(config_blobs_table.c.sha256 == sha256)
+            )).first()
+            if not row:
+                return None
+            return {
+                "sha256": row.sha256,
+                "content": bytes(row.content) if row.content is not None else b"",
+                "size": row.size,
+                "first_seen_at": row.first_seen_at,
+            }
+
+    async def node_status(self, node_id: str) -> dict:
+        """Agent liveness + per-path watch status for the node detail page.
+
+        last_seen = most recent event of any type (heartbeats included);
+        watched_paths = one entry per distinct path with its latest event.
+        """
+        c = config_change_events_table.c
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(config_change_events_table)
+                .where(c.node_id == node_id)
+                .order_by(c.created_at.desc())
+                .limit(500)
+            )).all()
+
+        events = [self._to_entity(r) for r in rows]
+        last_seen = max((e.created_at for e in events), default=None)
+
+        paths: dict[str, dict] = {}
+        for e in events:  # newest first — first sighting of a path wins
+            if e.event_type == "heartbeat" or not e.path:
+                continue
+            if e.path not in paths:
+                paths[e.path] = {
+                    "path": e.path,
+                    "last_event_type": e.event_type,
+                    "last_event_at": e.created_at.isoformat(),
+                    "last_hash": e.new_hash,
+                    "suppressed": e.suppressed,
+                    "events": 0,
+                }
+            paths[e.path]["events"] += 1
+
+        return {
+            "node_id": node_id,
+            "agent_last_seen": last_seen.isoformat() if last_seen else None,
+            "watched_paths": sorted(paths.values(), key=lambda p: p["path"]),
+            "recent_events": len(events),
+        }
 
 
 # ── ApiKey Repository ─────────────────────────────────────────────────────────
@@ -890,6 +1448,8 @@ class ApiKeyRepository(IApiKeyRepository):
             last_used=_dt(row.last_used),
             active=bool(row.active),
             user_id=getattr(row, 'user_id', None),
+            starts_at=_dt(getattr(row, 'starts_at', None)),
+            expires_at=_dt(getattr(row, 'expires_at', None)),
         )
 
     async def save(self, key: ApiKey) -> None:
@@ -898,6 +1458,7 @@ class ApiKeyRepository(IApiKeyRepository):
                 id=key.id, name=key.name, key_hash=key.key_hash, role=key.role,
                 created_at=_ts(key.created_at), last_used=_ts(key.last_used),
                 active=int(key.active), user_id=key.user_id,
+                starts_at=_ts(key.starts_at), expires_at=_ts(key.expires_at),
             ))
             await s.commit()
 
@@ -1005,12 +1566,17 @@ class UserRepository(IUserRepository):
 # ── Audit Repository ──────────────────────────────────────────────────────────
 
 class AuditRepository(IAuditRepository):
+    _COLUMNS = {c.name for c in audit_log_table.columns}
+
     def __init__(self, session: async_sessionmaker) -> None:
         self._session = session
 
     async def save(self, entry: dict) -> None:
+        # Only pass keys that map to real columns so a caller with extra metadata
+        # never breaks the insert.
+        values = {k: v for k, v in entry.items() if k in self._COLUMNS and k != "id"}
         async with self._session() as s:
-            await s.execute(audit_log_table.insert().values(**entry))
+            await s.execute(audit_log_table.insert().values(**values))
             await s.commit()
 
     async def find_recent(self, limit: int) -> list[dict]:
@@ -1019,6 +1585,73 @@ class AuditRepository(IAuditRepository):
                 select(audit_log_table).order_by(audit_log_table.c.id.desc()).limit(limit)
             )).all()
             return [dict(r._mapping) for r in rows]
+
+    async def find(
+        self,
+        *,
+        action: str | None = None,
+        user: str | None = None,
+        resource_type: str | None = None,
+        q: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """Filtered, paginated audit query. Returns (rows, total_matching)."""
+        t = audit_log_table
+        conds = []
+        if action:
+            conds.append(t.c.action == action)
+        if resource_type:
+            conds.append(t.c.resource_type == resource_type)
+        if user:
+            like = f"%{user}%"
+            conds.append(or_(t.c.user_name.ilike(like),
+                             t.c.user_id.ilike(like),
+                             t.c.api_key_name.ilike(like)))
+        if q:
+            like = f"%{q}%"
+            conds.append(or_(t.c.resource_name.ilike(like),
+                             t.c.resource_id.ilike(like),
+                             t.c.path.ilike(like),
+                             t.c.detail.ilike(like)))
+        if date_from:
+            conds.append(t.c.ts >= date_from)
+        if date_to:
+            conds.append(t.c.ts <= date_to)
+        where = and_(*conds) if conds else None
+
+        base = select(t)
+        cnt = select(func.count()).select_from(t)
+        if where is not None:
+            base = base.where(where)
+            cnt = cnt.where(where)
+        async with self._session() as s:
+            total = (await s.execute(cnt)).scalar_one()
+            rows = (await s.execute(
+                base.order_by(t.c.id.desc()).limit(limit).offset(offset)
+            )).all()
+            return [dict(r._mapping) for r in rows], int(total)
+
+    async def facets(self) -> dict:
+        """Distinct values for the filter dropdowns (users / actions / types)."""
+        t = audit_log_table
+        async with self._session() as s:
+            users = (await s.execute(
+                select(t.c.user_name).where(t.c.user_name.isnot(None)).distinct()
+            )).scalars().all()
+            actions = (await s.execute(
+                select(t.c.action).where(t.c.action.isnot(None)).distinct()
+            )).scalars().all()
+            rtypes = (await s.execute(
+                select(t.c.resource_type).where(t.c.resource_type.isnot(None)).distinct()
+            )).scalars().all()
+        return {
+            "users": sorted({u for u in users if u}),
+            "actions": sorted({a for a in actions if a}),
+            "resource_types": sorted({r for r in rtypes if r}),
+        }
 
 
 # ── Rule Repository ───────────────────────────────────────────────────────────
@@ -1097,6 +1730,7 @@ class ProfileRepository(IProfileRepository):
 
     # ── mapping ──
     def _control_to_entity(self, row) -> ProfileControl:
+        lvl = getattr(row, "cis_level", None)
         return ProfileControl(
             id=row.id,
             profile_id=row.profile_id,
@@ -1105,6 +1739,16 @@ class ProfileRepository(IProfileRepository):
             title=row.title,
             position=row.position or 0,
             kind=getattr(row, "kind", None) or "control",
+            control_id=getattr(row, "control_id", None),
+            control_key=getattr(row, "control_key", None),
+            applies_to=getattr(row, "applies_to", None) or "debian;redhat",
+            cis_level=int(lvl) if lvl else 1,
+            framework_reference=getattr(row, "framework_reference", None),
+            status=getattr(row, "status", None) or "active",
+            validate_debian=getattr(row, "validate_debian", None),
+            configure_debian=getattr(row, "configure_debian", None),
+            validate_redhat=getattr(row, "validate_redhat", None),
+            configure_redhat=getattr(row, "configure_redhat", None),
             cis_id=row.cis_id,
             description=row.description,
             recommended_value=row.recommended_value,
@@ -1125,7 +1769,13 @@ class ProfileRepository(IProfileRepository):
         return {
             "id": c.id, "profile_id": c.profile_id, "section_id": c.section_id,
             "section": c.section, "title": c.title, "position": c.position,
-            "kind": c.kind, "cis_id": c.cis_id, "description": c.description,
+            "kind": c.kind,
+            "control_id": c.control_id, "control_key": c.control_key,
+            "applies_to": c.applies_to, "cis_level": c.cis_level,
+            "framework_reference": c.framework_reference, "status": c.status,
+            "validate_debian": c.validate_debian, "configure_debian": c.configure_debian,
+            "validate_redhat": c.validate_redhat, "configure_redhat": c.configure_redhat,
+            "cis_id": c.cis_id, "description": c.description,
             "recommended_value": c.recommended_value, "agreed_value": c.agreed_value,
             "risk_profile": c.risk_profile, "rationale": c.rationale,
             "validate_guideline": c.validate_guideline,
@@ -1145,6 +1795,7 @@ class ProfileRepository(IProfileRepository):
             version=row.version or "1.0.0",
             source=row.source or "custom",
             framework=getattr(row, "framework", None),
+            is_system=bool(getattr(row, "is_system", 0)),
             controls=controls,
             created_at=_dt(row.created_at) or datetime.utcnow(),
             updated_at=_dt(row.updated_at) or datetime.utcnow(),
@@ -1154,7 +1805,7 @@ class ProfileRepository(IProfileRepository):
         return {
             "id": p.id, "name": p.name, "description": p.description,
             "os_family": p.os_family, "version": p.version, "source": p.source,
-            "framework": p.framework,
+            "framework": p.framework, "is_system": int(p.is_system),
             "created_at": _ts(p.created_at), "updated_at": _ts(p.updated_at),
         }
 
@@ -1273,18 +1924,33 @@ class ProfileRepository(IProfileRepository):
 
 # ── Platform Config Repository ────────────────────────────────────────────────
 
+# Config keys whose values are secrets and must be encrypted at rest when a
+# SecretBox is configured. Reads decrypt transparently (and legacy plaintext
+# passes through), so enabling encryption is backward-compatible.
+SECRET_CONFIG_KEYS = {
+    "pe_console_password",          # Puppet Enterprise console password
+    "detection_webhook_api_key",    # shared detection-agent webhook key
+    "jwt_secret_auto",              # auto-generated JWT signing secret
+}
+
+
 class PlatformConfigRepository(IPlatformConfigRepository):
-    def __init__(self, session: async_sessionmaker) -> None:
+    def __init__(self, session: async_sessionmaker, secret_box=None) -> None:
         self._session = session
+        self._box = secret_box  # infrastructure.security.crypto.SecretBox | None
 
     async def get(self, key: str) -> str | None:
         async with self._session() as s:
             row = (await s.execute(
                 select(platform_config_table).where(platform_config_table.c.key == key)
             )).first()
-            return row.value if row else None
+            value = row.value if row else None
+        return self._box.decrypt(value) if self._box else value
 
     async def set(self, key: str, value: str) -> None:
+        stored = value
+        if self._box is not None and key in SECRET_CONFIG_KEYS:
+            stored = self._box.encrypt(value)
         async with self._session() as s:
             existing = (await s.execute(
                 select(platform_config_table).where(platform_config_table.c.key == key)
@@ -1294,18 +1960,20 @@ class PlatformConfigRepository(IPlatformConfigRepository):
                 await s.execute(
                     update(platform_config_table)
                     .where(platform_config_table.c.key == key)
-                    .values(value=value, updated_at=ts)
+                    .values(value=stored, updated_at=ts)
                 )
             else:
                 await s.execute(
-                    platform_config_table.insert().values(key=key, value=value, updated_at=ts)
+                    platform_config_table.insert().values(key=key, value=stored, updated_at=ts)
                 )
             await s.commit()
 
     async def get_all(self) -> dict[str, str]:
         async with self._session() as s:
             rows = (await s.execute(select(platform_config_table))).all()
+        if self._box is None:
             return {r.key: r.value for r in rows}
+        return {r.key: self._box.decrypt(r.value) for r in rows}
 
 
 # ── UserGroup Repository ──────────────────────────────────────────────────────
@@ -1432,7 +2100,6 @@ class NodeGroupRepository(INodeGroupRepository):
             rules=json.loads(getattr(row, "rules", None) or "[]"),
             node_ids=node_ids or [],
             puppet_group_id=row.puppet_group_id,
-            wazuh_synced=bool(row.wazuh_synced),
             puppet_synced=bool(row.puppet_synced),
             group_type=getattr(row, "group_type", None) or "user",
             inspec_profile_id=getattr(row, "inspec_profile_id", None),
@@ -1450,7 +2117,6 @@ class NodeGroupRepository(INodeGroupRepository):
                 is_environment_group=int(g.is_environment_group),
                 match_type=g.match_type, rules=json.dumps(g.rules),
                 puppet_group_id=g.puppet_group_id,
-                wazuh_synced=int(g.wazuh_synced),
                 puppet_synced=int(g.puppet_synced),
                 group_type=g.group_type,
                 inspec_profile_id=g.inspec_profile_id,
@@ -1495,7 +2161,6 @@ class NodeGroupRepository(INodeGroupRepository):
                     is_environment_group=int(g.is_environment_group),
                     match_type=g.match_type, rules=json.dumps(g.rules),
                     puppet_group_id=g.puppet_group_id,
-                    wazuh_synced=int(g.wazuh_synced),
                     puppet_synced=int(g.puppet_synced),
                     group_type=g.group_type,
                     inspec_profile_id=g.inspec_profile_id,
@@ -1530,4 +2195,273 @@ class NodeGroupRepository(INodeGroupRepository):
                 .where(node_group_nodes_table.c.group_id == group_id)
                 .where(node_group_nodes_table.c.node_id == node_id)
             )
+            await s.commit()
+
+
+# ── Tier Repository ───────────────────────────────────────────────────────────
+
+class TierRepository(ITierRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _extra(self, session, tier_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(tier_extra_controls_table.c.control_id)
+            .where(tier_extra_controls_table.c.tier_id == tier_id)
+        )).all()
+        return [r.control_id for r in rows]
+
+    def _to_entity(self, row, extra: list[str] | None = None) -> Tier:
+        return Tier(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            includes_level_2=bool(row.includes_level_2),
+            enforce=bool(getattr(row, "enforce", 0)),
+            is_system=bool(row.is_system),
+            created_by=getattr(row, "created_by", None),
+            extra_control_ids=extra or [],
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    async def save(self, tier: Tier) -> None:
+        async with self._session() as s:
+            await s.execute(tiers_table.insert().values(
+                id=tier.id, name=tier.name, description=tier.description,
+                includes_level_2=int(tier.includes_level_2),
+                enforce=int(tier.enforce),
+                is_system=int(tier.is_system), created_by=tier.created_by,
+                created_at=_ts(tier.created_at),
+            ))
+            for cid in tier.extra_control_ids:
+                await s.execute(tier_extra_controls_table.insert().values(
+                    tier_id=tier.id, control_id=cid))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> Tier | None:
+        async with self._session() as s:
+            row = (await s.execute(select(tiers_table).where(tiers_table.c.id == id))).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._extra(s, id))
+
+    async def find_by_name(self, name: str) -> Tier | None:
+        async with self._session() as s:
+            row = (await s.execute(select(tiers_table).where(tiers_table.c.name == name))).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._extra(s, row.id))
+
+    async def find_all(self) -> list[Tier]:
+        async with self._session() as s:
+            rows = (await s.execute(select(tiers_table).order_by(tiers_table.c.created_at))).all()
+            out = []
+            for row in rows:
+                out.append(self._to_entity(row, await self._extra(s, row.id)))
+            return out
+
+    async def update(self, tier: Tier) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(tiers_table).where(tiers_table.c.id == tier.id).values(
+                    name=tier.name, description=tier.description,
+                    includes_level_2=int(tier.includes_level_2),
+                    enforce=int(tier.enforce),
+                )
+            )
+            # Replace the extra-controls set wholesale.
+            await s.execute(delete(tier_extra_controls_table)
+                            .where(tier_extra_controls_table.c.tier_id == tier.id))
+            for cid in tier.extra_control_ids:
+                await s.execute(tier_extra_controls_table.insert().values(
+                    tier_id=tier.id, control_id=cid))
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(tier_extra_controls_table)
+                            .where(tier_extra_controls_table.c.tier_id == id))
+            await s.execute(delete(tiers_table).where(tiers_table.c.id == id))
+            await s.commit()
+
+
+class NotificationRepository(INotificationRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    def _to_entity(self, row) -> Notification:
+        return Notification(
+            id=row.id,
+            title=row.title,
+            message=row.message,
+            kind=row.kind or "info",
+            severity=row.severity or "info",
+            node_id=row.node_id,
+            job_id=row.job_id,
+            is_read=bool(row.is_read),
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+        )
+
+    async def save(self, n: Notification) -> None:
+        async with self._session() as s:
+            await s.execute(notifications_table.insert().values(
+                id=n.id, title=n.title, message=n.message, kind=n.kind,
+                severity=n.severity, node_id=n.node_id, job_id=n.job_id,
+                is_read=int(n.is_read), created_at=_ts(n.created_at),
+            ))
+            await s.commit()
+
+    async def find_all(self, limit: int = 50, unread_only: bool = False) -> list[Notification]:
+        async with self._session() as s:
+            q = select(notifications_table)
+            if unread_only:
+                q = q.where(notifications_table.c.is_read == 0)
+            q = q.order_by(notifications_table.c.created_at.desc()).limit(limit)
+            rows = (await s.execute(q)).all()
+            return [self._to_entity(r) for r in rows]
+
+    async def unread_count(self) -> int:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(func.count()).select_from(notifications_table)
+                .where(notifications_table.c.is_read == 0)
+            )).scalar()
+            return int(row or 0)
+
+    async def mark_read(self, id: str) -> bool:
+        async with self._session() as s:
+            res = await s.execute(
+                update(notifications_table)
+                .where(notifications_table.c.id == id)
+                .values(is_read=1)
+            )
+            await s.commit()
+            return bool(res.rowcount)
+
+    async def mark_all_read(self) -> int:
+        async with self._session() as s:
+            res = await s.execute(
+                update(notifications_table)
+                .where(notifications_table.c.is_read == 0)
+                .values(is_read=1)
+            )
+            await s.commit()
+            return int(res.rowcount or 0)
+
+
+# ── Compliance Group Repository (platform-only; never Puppet NC) ──────────────
+
+class ComplianceGroupRepository(IComplianceGroupRepository):
+    def __init__(self, session: async_sessionmaker) -> None:
+        self._session = session
+
+    async def _profiles(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(compliance_group_profiles_table.c.profile_id)
+            .where(compliance_group_profiles_table.c.group_id == group_id)
+        )).all()
+        return [r.profile_id for r in rows]
+
+    async def _members(self, session, group_id: str) -> list[str]:
+        rows = (await session.execute(
+            select(compliance_group_members_table.c.node_id)
+            .where(compliance_group_members_table.c.group_id == group_id)
+        )).all()
+        return [r.node_id for r in rows]
+
+    def _to_entity(self, row, profile_ids=None, node_ids=None) -> ComplianceGroup:
+        return ComplianceGroup(
+            id=row.id, name=row.name, description=row.description,
+            profile_ids=profile_ids or [], node_ids=node_ids or [],
+            created_at=_dt(row.created_at) or datetime.utcnow(),
+            updated_at=_dt(row.updated_at) or datetime.utcnow(),
+        )
+
+    async def save(self, g: ComplianceGroup) -> None:
+        async with self._session() as s:
+            await s.execute(compliance_groups_table.insert().values(
+                id=g.id, name=g.name, description=g.description,
+                created_at=_ts(g.created_at), updated_at=_ts(g.updated_at),
+            ))
+            for pid in g.profile_ids:
+                await s.execute(compliance_group_profiles_table.insert().values(
+                    group_id=g.id, profile_id=pid))
+            for nid in g.node_ids:
+                await s.execute(compliance_group_members_table.insert().values(
+                    group_id=g.id, node_id=nid))
+            await s.commit()
+
+    async def find_by_id(self, id: str) -> ComplianceGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_groups_table).where(compliance_groups_table.c.id == id)
+            )).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._profiles(s, id), await self._members(s, id))
+
+    async def find_by_name(self, name: str) -> ComplianceGroup | None:
+        async with self._session() as s:
+            row = (await s.execute(
+                select(compliance_groups_table).where(compliance_groups_table.c.name == name)
+            )).first()
+            if not row:
+                return None
+            return self._to_entity(row, await self._profiles(s, row.id), await self._members(s, row.id))
+
+    async def find_all(self) -> list[ComplianceGroup]:
+        async with self._session() as s:
+            rows = (await s.execute(
+                select(compliance_groups_table).order_by(compliance_groups_table.c.created_at)
+            )).all()
+            out = []
+            for row in rows:
+                out.append(self._to_entity(
+                    row, await self._profiles(s, row.id), await self._members(s, row.id)))
+            return out
+
+    async def find_for_node(self, node_id: str) -> list[ComplianceGroup]:
+        """Every compliance group the node is a member of."""
+        async with self._session() as s:
+            gids = (await s.execute(
+                select(compliance_group_members_table.c.group_id)
+                .where(compliance_group_members_table.c.node_id == node_id)
+            )).all()
+            out = []
+            for (gid,) in [(r.group_id,) for r in gids]:
+                row = (await s.execute(
+                    select(compliance_groups_table).where(compliance_groups_table.c.id == gid)
+                )).first()
+                if row:
+                    out.append(self._to_entity(
+                        row, await self._profiles(s, gid), await self._members(s, gid)))
+            return out
+
+    async def update(self, g: ComplianceGroup) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(compliance_groups_table)
+                .where(compliance_groups_table.c.id == g.id)
+                .values(name=g.name, description=g.description, updated_at=_ts(g.updated_at))
+            )
+            await s.execute(delete(compliance_group_profiles_table)
+                            .where(compliance_group_profiles_table.c.group_id == g.id))
+            for pid in g.profile_ids:
+                await s.execute(compliance_group_profiles_table.insert().values(
+                    group_id=g.id, profile_id=pid))
+            await s.execute(delete(compliance_group_members_table)
+                            .where(compliance_group_members_table.c.group_id == g.id))
+            for nid in g.node_ids:
+                await s.execute(compliance_group_members_table.insert().values(
+                    group_id=g.id, node_id=nid))
+            await s.commit()
+
+    async def delete(self, id: str) -> None:
+        async with self._session() as s:
+            await s.execute(delete(compliance_group_profiles_table)
+                            .where(compliance_group_profiles_table.c.group_id == id))
+            await s.execute(delete(compliance_group_members_table)
+                            .where(compliance_group_members_table.c.group_id == id))
+            await s.execute(delete(compliance_groups_table)
+                            .where(compliance_groups_table.c.id == id))
             await s.commit()

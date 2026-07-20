@@ -5,8 +5,8 @@ import {
 } from 'lucide-react'
 import {
   getInfrastructureStatus, installService, listNodes,
-  setPuppetMasterHost, setWazuhManagerHost, setPuppetCredentials, jobWsUrl,
-  checkPuppetAgentPlatform, probeWazuhDashboardPort,
+  setPuppetMasterHost, setPuppetCredentials, jobWsUrl,
+  checkPuppetAgentPlatform,
   getScanEngineStatus, installScanEngineOnController, verifyScanEngineAllNodes, verifyScanEngineNode,
   checkNodeHealth, getPuppetEdition, switchPuppetEdition,
 } from '../lib/api.js'
@@ -14,6 +14,8 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useT } from '../context/LangContext.jsx'
 import { btn, btnSm, logLineClass } from '../lib/tw.js'
 import Spinner from '../components/common/Spinner.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,8 +150,7 @@ function ConnectForm({ service, onSave, onCancel, t }) {
     if (!host.trim()) return
     setSaving(true)
     try {
-      const fn = service === 'puppet' ? setPuppetMasterHost : setWazuhManagerHost
-      const result = await fn(host.trim())
+      const result = await setPuppetMasterHost(host.trim())
       toast(
         result.reachable
           ? t('infra.saveDone', { host: result.host, port: result.port })
@@ -164,8 +165,8 @@ function ConnectForm({ service, onSave, onCancel, t }) {
     }
   }
 
-  const label       = service === 'puppet' ? t('infra.connectToPuppet')  : t('infra.connectToWazuh')
-  const placeholder = service === 'puppet' ? 'puppet.example.com' : 'wazuh.example.com'
+  const label       = t('infra.connectToPuppet')
+  const placeholder = 'puppet.example.com'
 
   return (
     <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
@@ -250,54 +251,31 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
   const [starting, setStarting]         = useState(false)
   const [platformCheck, setPlatformCheck]     = useState(null)
   const [checkingPlatform, setCheckingPlatform] = useState(false)
-  const [dashboardPort, setDashboardPort] = useState(443)
-  const [portProbe, setPortProbe]         = useState(null)   // { suggested_port, occupied_candidates }
-  const [probingPort, setProbingPort]     = useState(false)
   const toast = useToast()
 
   const serviceLabels = {
     'puppet-master': t('infra.installPuppetMaster'),
-    'wazuh-manager': t('infra.installWazuhManager'),
   }
   const label = serviceLabels[service] || service
 
   async function handleNodeChange(nodeId) {
     setSelectedNode(nodeId)
     setPlatformCheck(null)
-    setPortProbe(null)
-    setDashboardPort(443)
     if (!nodeId) return
 
-    // Always run the platform check
     setCheckingPlatform(true)
     try {
       const result = await checkPuppetAgentPlatform(nodeId)
       setPlatformCheck(result)
     } catch (_) {}
     finally { setCheckingPlatform(false) }
-
-    // For Wazuh Manager: probe for a free dashboard port
-    if (service === 'wazuh-manager') {
-      setProbingPort(true)
-      try {
-        const probe = await probeWazuhDashboardPort(nodeId)
-        setPortProbe(probe)
-        setDashboardPort(probe.suggested_port)
-      } catch (_) {
-        setPortProbe({ suggested_port: 443, occupied_candidates: [] })
-        setDashboardPort(443)
-      } finally {
-        setProbingPort(false)
-      }
-    }
   }
 
   async function handleStart() {
     if (!selectedNode) return
     setStarting(true)
     try {
-      const options = service === 'wazuh-manager' ? { dashboard_port: dashboardPort } : {}
-      const job = await installService(service, selectedNode, options)
+      const job = await installService(service, selectedNode)
       onJobStarted(job)
       onClose()
     } catch (err) {
@@ -332,45 +310,6 @@ function InstallModal({ service, nodes, onClose, onJobStarted, t }) {
               ))}
             </select>
           </div>
-          {service === 'wazuh-manager' && selectedNode && (
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1.5">
-                Wazuh dashboard port (HTTPS)
-              </label>
-              {probingPort ? (
-                <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                  <Spinner size={11} /> Scanning ports on node…
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      max={65535}
-                      value={dashboardPort}
-                      onChange={(e) => setDashboardPort(Number(e.target.value))}
-                      className="w-32 px-3 py-2 text-[13px] font-mono border border-gray-200 rounded-lg outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
-                    />
-                    {portProbe && portProbe.occupied_candidates.length === 0 && (
-                      <span className="text-[11px] text-green-700 bg-green-50 px-2 py-1 rounded-lg">
-                        Port {dashboardPort} is free
-                      </span>
-                    )}
-                  </div>
-                  {portProbe && portProbe.occupied_candidates.length > 0 && (
-                    <p className="mt-1.5 text-[11px] text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
-                      Port{portProbe.occupied_candidates.length > 1 ? 's' : ''}{' '}
-                      <span className="font-mono font-semibold">{portProbe.occupied_candidates.join(', ')}</span>{' '}
-                      {portProbe.occupied_candidates.length > 1 ? 'are' : 'is'} already in use on this node.
-                      Using <span className="font-mono font-semibold">{portProbe.suggested_port}</span> instead.
-                      Change if needed.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          )}
           {nodes.length === 0 && (
             <p className="text-[11px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
               {t('infra.noNodes')}
@@ -504,7 +443,7 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
   const [showCreds,   setShowCreds]     = useState(false)
   const [showEdition, setShowEdition]   = useState(false)
   const isPuppet      = service === 'puppet'
-  const masterService = isPuppet ? 'puppet-master' : 'wazuh-manager'
+  const masterService = 'puppet-master'
 
   return (
     <>
@@ -516,10 +455,10 @@ function MasterCard({ service, status, nodes, onJobStarted, t }) {
             </div>
             <div>
               <h3 className="text-[14px] font-semibold text-gray-900">
-                {isPuppet ? t('infra.puppetMaster') : t('infra.wazuhManager')}
+                {t('infra.puppetMaster')}
               </h3>
               <p className="text-[11px] text-gray-400">
-                {isPuppet ? t('infra.puppetDesc') : t('infra.wazuhDesc')}
+                {t('infra.puppetDesc')}
               </p>
             </div>
           </div>
@@ -621,13 +560,6 @@ function MastersTab({ status, nodes, onRefresh, t }) {
           onJobStarted={(job) => { setActiveJob(job); setTimeout(onRefresh, 8000) }}
           t={t}
         />
-        <MasterCard
-          service="wazuh"
-          status={status?.wazuh}
-          nodes={nodes}
-          onJobStarted={(job) => { setActiveJob(job); setTimeout(onRefresh, 8000) }}
-          t={t}
-        />
       </div>
 
       <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl">
@@ -651,12 +583,13 @@ function MastersTab({ status, nodes, onRefresh, t }) {
 
 function AgentsTab({ nodes, onRefresh, t }) {
   const [selectedNode, setSelectedNode] = useState('')
-  const [agentSel, setAgentSel]         = useState({ puppet: true, wazuh: true })
+  const [agentSel, setAgentSel]         = useState({ puppet: true, detection: true })
   const [platformCheck, setPlatformCheck]     = useState(null)
   const [checkingPlatform, setCheckingPlatform] = useState(false)
   const [launching, setLaunching]       = useState(false)
   const [activeJob, setActiveJob]       = useState(null)
   const toast = useToast()
+  const pager = usePagination(nodes)
 
   const enrollable = nodes.filter((n) => n.status === 'reachable' || n.status === 'provisioned')
 
@@ -667,9 +600,9 @@ function AgentsTab({ nodes, onRefresh, t }) {
     // Pre-deselect agents that are already enrolled on this node
     const chosen = nodes.find((n) => n.id === nodeId)
     if (chosen) {
-      const puppet = !chosen.puppet_enrolled
-      const wazuh  = !chosen.wazuh_enrolled
-      setAgentSel(puppet || wazuh ? { puppet, wazuh } : { puppet: true, wazuh: true })
+      const puppet    = !chosen.puppet_enrolled
+      const detection = !chosen.detection_enrolled
+      setAgentSel(puppet || detection ? { puppet, detection } : { puppet: true, detection: true })
     }
     setCheckingPlatform(true)
     try {
@@ -682,7 +615,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
   function toggleAgent(key) {
     setAgentSel((prev) => {
       const next = { ...prev, [key]: !prev[key] }
-      if (!next.puppet && !next.wazuh) return prev
+      if (!next.puppet && !next.detection) return prev
       return next
     })
   }
@@ -690,8 +623,8 @@ function AgentsTab({ nodes, onRefresh, t }) {
   async function handleLaunch() {
     if (!selectedNode) return
     const toInstall = [
-      agentSel.puppet && 'puppet-agent',
-      agentSel.wazuh  && 'wazuh-agent',
+      agentSel.puppet    && 'puppet-agent',
+      agentSel.detection && 'detection-agent',
     ].filter(Boolean)
     if (!toInstall.length) return
 
@@ -711,12 +644,12 @@ function AgentsTab({ nodes, onRefresh, t }) {
   const node = nodes.find((n) => n.id === selectedNode)
   // canLaunch: node selected AND at least one non-enrolled agent is checked
   const canLaunch = !!selectedNode && (
-    (agentSel.puppet && !node?.puppet_enrolled) ||
-    (agentSel.wazuh  && !node?.wazuh_enrolled)
+    (agentSel.puppet    && !node?.puppet_enrolled) ||
+    (agentSel.detection && !node?.detection_enrolled)
   )
 
   // Per-node coverage
-  const enrolled = nodes.filter((n) => n.puppet_enrolled || n.wazuh_enrolled).length
+  const enrolled = nodes.filter((n) => n.puppet_enrolled || n.detection_enrolled).length
 
   return (
     <>
@@ -779,8 +712,8 @@ function AgentsTab({ nodes, onRefresh, t }) {
               </div>
               <div className="space-y-2">
                 {[
-                  { key: 'puppet', enrolledFlag: 'puppet_enrolled', label: t('infra.puppetAgentLabel'), desc: t('infra.puppetAgentDesc') },
-                  { key: 'wazuh',  enrolledFlag: 'wazuh_enrolled',  label: t('infra.wazuhAgentLabel'),  desc: t('infra.wazuhAgentDesc')  },
+                  { key: 'puppet',    enrolledFlag: 'puppet_enrolled',    label: t('infra.puppetAgentLabel'),    desc: t('infra.puppetAgentDesc')    },
+                  { key: 'detection', enrolledFlag: 'detection_enrolled', label: t('infra.detectionAgentLabel'), desc: t('infra.detectionAgentDesc') },
                 ].map(({ key, enrolledFlag, label, desc }) => {
                   const alreadyEnrolled = node ? !!node[enrolledFlag] : false
                   return (
@@ -823,9 +756,9 @@ function AgentsTab({ nodes, onRefresh, t }) {
 
               <div className="flex gap-2 mt-2">
                 {[
-                  { label: t('infra.selectBoth'),  fn: () => setAgentSel({ puppet: true, wazuh: true }) },
-                  { label: t('infra.puppetOnly'),  fn: () => setAgentSel({ puppet: true, wazuh: false }) },
-                  { label: t('infra.wazuhOnly'),   fn: () => setAgentSel({ puppet: false, wazuh: true }) },
+                  { label: t('infra.selectBoth'),     fn: () => setAgentSel({ puppet: true, detection: true }) },
+                  { label: t('infra.puppetOnly'),     fn: () => setAgentSel({ puppet: true, detection: false }) },
+                  { label: t('infra.detectionOnly'),  fn: () => setAgentSel({ puppet: false, detection: true }) },
                 ].map(({ label, fn }) => (
                   <button key={label} onClick={fn}
                     className="px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
@@ -858,9 +791,9 @@ function AgentsTab({ nodes, onRefresh, t }) {
                         Puppet agent
                       </span>
                     )}
-                    {agentSel.wazuh && (
+                    {agentSel.detection && (
                       <span className="px-2 py-1 text-[11px] font-medium text-brand bg-brand/10 rounded-full">
-                        Wazuh agent
+                        {t('infra.detectionAgentLabel')}
                       </span>
                     )}
                   </div>
@@ -901,12 +834,12 @@ function AgentsTab({ nodes, onRefresh, t }) {
               <tr className="border-b border-gray-100">
                 <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('infra.colNode')}</th>
                 <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('infra.colPuppetAgent')}</th>
-                <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('infra.colWazuhAgent')}</th>
+                <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t('infra.colDetectionAgent')}</th>
                 <th className="px-5 py-2.5" />
               </tr>
             </thead>
             <tbody>
-              {nodes.map((n) => (
+              {pager.pageItems.map((n) => (
                 <tr key={n.id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-5 py-3">
                     <p className="font-medium text-gray-800">{n.hostname}</p>
@@ -916,10 +849,10 @@ function AgentsTab({ nodes, onRefresh, t }) {
                     <Pip ok={n.puppet_enrolled || false} label={n.puppet_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
                   </td>
                   <td className="px-5 py-3">
-                    <Pip ok={n.wazuh_enrolled || false} label={n.wazuh_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
+                    <Pip ok={n.detection_enrolled || false} label={n.detection_enrolled ? t('infra.enrolled') : t('infra.notEnrolled')} />
                   </td>
                   <td className="px-5 py-3 text-right">
-                    {n.puppet_enrolled && n.wazuh_enrolled ? (
+                    {n.puppet_enrolled && n.detection_enrolled ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-green-700 bg-green-50">
                         <CheckCircle size={10} /> {t('infra.enrolled')}
                       </span>
@@ -937,6 +870,7 @@ function AgentsTab({ nodes, onRefresh, t }) {
             </tbody>
           </table>
         )}
+        <Pagination {...pager} />
       </div>
 
       {activeJob && (
@@ -959,6 +893,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
   const [activeJob, setActiveJob]     = useState(null)
   const [results, setResults]     = useState(null)
   const toast = useToast()
+  const pager = usePagination(nodes)
 
   async function loadStatus() {
     try {
@@ -1143,7 +1078,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
               </tr>
             </thead>
             <tbody>
-              {nodes.map((n) => (
+              {pager.pageItems.map((n) => (
                 <tr key={n.id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-5 py-3">
                     <p className="font-medium text-gray-800">{n.hostname}</p>
@@ -1189,6 +1124,7 @@ function VerifyTab({ nodes, onRefresh, t }) {
             </tbody>
           </table>
         )}
+        <Pagination {...pager} />
       </div>
 
       {activeJob && (
@@ -1227,7 +1163,7 @@ export default function InfrastructurePage() {
     load()
   }
 
-  const enrolledCount = nodes.filter((n) => n.puppet_enrolled || n.wazuh_enrolled).length
+  const enrolledCount = nodes.filter((n) => n.puppet_enrolled || n.detection_enrolled).length
 
   const TABS = [
     { key: 'masters', label: t('infra.tabMasters') },

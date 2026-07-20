@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ChevronRight, RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, ChevronRight, PlusCircle, RefreshCw, Server, Trash2, Wifi } from 'lucide-react'
 import { deleteNode, listNodes, pingAllNodes, pingNode } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useToast } from '../context/ToastContext.jsx'
@@ -11,6 +11,8 @@ import EmptyState from '../components/common/EmptyState.jsx'
 import Spinner from '../components/common/Spinner.jsx'
 import StatusDot from '../components/common/StatusDot.jsx'
 import DnsModal from '../components/nodes/DnsModal.jsx'
+import Pagination from '../components/Pagination.jsx'
+import { usePagination } from '../hooks/usePagination.js'
 
 function Skeleton() {
   return (
@@ -52,6 +54,7 @@ export default function NodesPage() {
     () => listNodes({ status: statusFilter || undefined, os_family: osFamilyFilter || undefined }),
     { deps: [statusFilter, osFamilyFilter] }
   )
+  const pager = usePagination(nodes)
 
   async function handlePingAll() {
     setPingingAll(true)
@@ -113,7 +116,7 @@ export default function NodesPage() {
     t('nodes.colOs'),
     t('nodes.colSshPort'),
     t('nodes.colPuppet'),
-    t('nodes.colWazuh'),
+    t('nodes.colDetection'),
     t('nodes.colLastSeen'),
     t('nodes.colActions'),
   ]
@@ -152,6 +155,10 @@ export default function NodesPage() {
             <RefreshCw size={11} />
             {t('common.refresh')}
           </button>
+          <button onClick={() => navigate('/add-server')} className={btnSm(true)}>
+            <PlusCircle size={12} />
+            {t('nodes.addServer')}
+          </button>
         </div>
       </div>
 
@@ -182,7 +189,7 @@ export default function NodesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {nodes.map((node) => (
+                {pager.pageItems.map((node) => (
                   <tr
                     key={node.id}
                     onClick={() => navigate(`/nodes/${node.id}`)}
@@ -246,10 +253,10 @@ export default function NodesPage() {
                       </span>
                     </td>
 
-                    {/* Wazuh */}
+                    {/* Detection agent */}
                     <td className="px-4 py-3">
-                      <span className={badge(node.wazuh_enrolled ? 'success' : 'gray')}>
-                        {node.wazuh_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
+                      <span className={badge(node.detection_enrolled ? 'success' : 'gray')}>
+                        {node.detection_enrolled ? t('common.enrolled') : t('common.notEnrolled')}
                       </span>
                     </td>
 
@@ -290,6 +297,7 @@ export default function NodesPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...pager} />
           </div>
         )}
       </div>

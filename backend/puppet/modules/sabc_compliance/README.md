@@ -1,7 +1,7 @@
 # sabc_compliance — Puppet enforcement of the SABC internal referential
 
 This Puppet module is the **enforcement half of the platform's closed
-remediation loop**. Wazuh (or an operator) detects compliance drift against the
+remediation loop**. The detection agent (or an operator) detects compliance drift against the
 internal referential — a CIS Linux Benchmark — and the platform runs
 `puppet agent -t`; the classes here bring the node back into compliance.
 

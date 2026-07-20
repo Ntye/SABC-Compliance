@@ -1,0 +1,323 @@
+"""Per-family artifact generation — extraction, family branching, pending reporting."""
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from core.domain.entities import Profile, ProfileControl
+from modules.profiles.artifact_generator import (
+    extract_shell, generate_inspec_profile, generate_puppet_module,
+)
+
+
+# ── Shell extraction (the correctness keystone) ───────────────────────────────
+
+class TestExtractShell:
+    def test_prompt_block_keeps_command_drops_expected_output(self) -> None:
+        g = (
+            "Verify it is installed.\n```\n"
+            "# dpkg-query -W apparmor\n\n"
+            "apparmor install ok installed\n```"
+        )
+        out = extract_shell(g)
+        assert out == "dpkg-query -W apparmor"      # output line dropped
+
+    def test_bare_command_block_kept_and_apt_made_noninteractive(self) -> None:
+        # apt mutations otherwise stop at "Do you want to continue? [Y/n]" and
+        # abort when run from an exec with no tty.
+        out = extract_shell("Fix:\n```\napt purge autofs\n```")
+        assert out == "DEBIAN_FRONTEND=noninteractive apt-get -y purge autofs"
+
+    def test_script_block_kept_verbatim(self) -> None:
+        g = "```\n#!/usr/bin/env bash\nfor x in a b; do echo $x; done\n```"
+        out = extract_shell(g)
+        assert out.startswith("#!/usr/bin/env bash")
+        assert "for x in a b" in out
+
+    def test_prose_only_returns_empty(self) -> None:
+        assert extract_shell("Use visudo to edit the sudoers file.") == ""
+
+    def test_empty_returns_empty(self) -> None:
+        assert extract_shell("") == "" and extract_shell(None) == ""
+
+    def test_provenance_banner_stripped(self) -> None:
+        g = "# [SABC] derived...\n```\ndnf install -y firewalld\n```"
+        assert extract_shell(g) == "dnf install -y firewalld"
+
+    def test_broken_redirect_artifact_repaired(self) -> None:
+        # "2>&1; then" arrives as "2> then" in several referential cells — that
+        # redirects stderr to a file named "then" and breaks the if-statement.
+        g = "```\nif command -v dpkg-query > /dev/null 2> then\nl_pq=1\nfi\ndone_marker\n```"
+        out = extract_shell(g)
+        assert "2>&1; then" in out and "2> then" not in out
+
+    def test_placeholder_template_is_pending_not_command(self) -> None:
+        # fstab template lines / <placeholders> are guidance, not commands.
+        assert extract_shell("```\n# <device> /tmp <fstype> defaults,nosuid 0 0\n```") == ""
+        assert extract_shell("```\n# usermod -s $(which nologin) <user>\n```") == ""
+
+    def test_config_content_is_pending_not_command(self) -> None:
+        assert extract_shell("```\n# Defaults use_pty\n```") == ""
+        assert extract_shell("```\nrestrict -4 default kod nomodify\nrestrict -6 default kod\n```") == ""
+        assert extract_shell("```\ntmpfs /dev/shm tmpfs defaults,rw,nosuid 0 0\n```") == ""
+
+    def test_interactive_command_is_pending(self) -> None:
+        assert extract_shell("```\n# crontab -u root -e\n```") == ""
+        assert extract_shell("```\n# grub-mkpasswd-pbkdf2\n```") == ""
+
+    def test_config_line_with_keyword_substring_not_treated_as_script(self) -> None:
+        # "Defaults logfile=..." must NOT be mistaken for a script because
+        # "logfile" contains "fi" — that bug bypassed the config filter and ran
+        # sudoers content as a command.
+        assert extract_shell('```\nDefaults logfile="/var/log/sudo.log"\n```') == ""
+
+    def test_limits_conf_and_key_value_config_are_pending(self) -> None:
+        assert extract_shell("```\n* hard core 0\n```") == ""
+        assert extract_shell("```\n[Time]\nNTP=time.nist.gov\nFallbackNTP=a.b.c\n```") == ""
+
+    def test_real_bash_script_still_detected(self) -> None:
+        # The word-bounded detector must still recognise genuine scripts.
+        s = extract_shell("```\nmodule_fix()\n{\n modprobe -r x\n}\nfor m in a b; do module_fix; done\n```")
+        assert "module_fix()" in s and "for m in a b" in s
+
+    def test_multiline_quoted_prompt_command_kept_whole(self) -> None:
+        # A prompted printf whose quoted argument spans lines must not be cut
+        # at the first line ('printf "' alone is a syntax error).
+        g = '```\n# printf "\nnet.ipv4.ip_forward = 0\n" >> /etc/sysctl.d/60-sabc.conf\n```'
+        out = extract_shell(g)
+        assert out.startswith('printf "')
+        assert 'net.ipv4.ip_forward = 0' in out
+        assert out.rstrip().endswith('60-sabc.conf')
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+def control(cid, *, applies="debian;redhat", level=1,
+            vdeb="```\n# test -f /x\n```", cdeb="```\n# touch /x\n```",
+            vrh="```\n# test -f /y\n```", crh="```\n# touch /y\n```") -> ProfileControl:
+    return ProfileControl(
+        id=cid, profile_id="p", section_id="s", section="Sec", title=f"Ctl {cid}",
+        kind="control", control_id=cid, control_key=cid.lower().replace(".", "_"),
+        applies_to=applies, cis_level=level,
+        validate_debian=vdeb, configure_debian=cdeb,
+        validate_redhat=vrh, configure_redhat=crh,
+    )
+
+
+def profile(controls) -> Profile:
+    return Profile(id="p", name="P", source="builtin", is_system=True,
+                   version="1.0.0", controls=controls)
+
+
+# ── Puppet generation ─────────────────────────────────────────────────────────
+
+class TestPuppet:
+    def test_one_class_per_control_branching_on_family(self, tmp_path) -> None:
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        pp = (tmp_path / "manifests" / "jr2_c_1.pp").read_text()
+        assert "class sabc_hardening::jr2_c_1" in pp
+        assert "$facts['os']['family'] == 'Debian'" in pp
+        assert "$facts['os']['family'] == 'RedHat'" in pp
+        # enforcement guarded by the control's own validate (idempotent)
+        assert "unless" in pp
+
+    def test_scripts_shipped_as_module_files_run_with_bash(self, tmp_path) -> None:
+        # The CIS bodies are bash-only; they must run as real bash script files
+        # (never /bin/sh -c strings) with stdin closed so nothing can hang.
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        pp = (tmp_path / "manifests" / "jr2_c_1.pp").read_text()
+        assert "find_file('sabc_hardening/jr2_c_1_debian_cfg.sh')" in pp
+        assert "/bin/bash" in pp and "</dev/null" in pp
+        cfg = (tmp_path / "files" / "jr2_c_1_debian_cfg.sh").read_text()
+        chk = (tmp_path / "files" / "jr2_c_1_debian_chk.sh").read_text()
+        assert cfg.startswith("#!/usr/bin/env bash")
+        assert "touch /x" in cfg and "test -f /x" in chk
+
+    def test_debian_only_control_emits_only_debian_branch(self, tmp_path) -> None:
+        generate_puppet_module(profile([control("JR2.C.2", applies="debian")]), str(tmp_path))
+        pp = (tmp_path / "manifests" / "jr2_c_2.pp").read_text()
+        assert "'Debian'" in pp and "'RedHat'" not in pp
+        assert not (tmp_path / "files" / "jr2_c_2_redhat_cfg.sh").exists()
+
+    def test_empty_family_guidance_reported_pending_not_generated(self, tmp_path) -> None:
+        c = control("JR2.C.3", crh="")   # redhat configure prose-only/empty
+        res = generate_puppet_module(profile([c]), str(tmp_path))
+        assert any("JR2.C.3/redhat" in p for p in res.pending)
+        pp = (tmp_path / "manifests" / "jr2_c_3.pp").read_text()
+        assert "'Debian'" in pp                 # debian still generated
+        assert "sabc_jr2_c_3_redhat" not in pp  # redhat NOT generated
+
+    def test_stale_script_files_removed_on_regeneration(self, tmp_path) -> None:
+        (tmp_path / "files").mkdir()
+        (tmp_path / "files" / "old_retired_cfg.sh").write_text("echo old")
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        assert not (tmp_path / "files" / "old_retired_cfg.sh").exists()
+
+    def test_init_includes_all_control_keys_by_default(self, tmp_path) -> None:
+        generate_puppet_module(profile([control("JR2.C.1"), control("JR2.C.2")]), str(tmp_path))
+        init = (tmp_path / "manifests" / "init.pp").read_text()
+        assert "class sabc_hardening" in init
+        assert "'jr2_c_1'" in init and "'jr2_c_2'" in init
+        assert "$controls" in init              # tier passes the applicable subset
+
+    def test_level_not_a_code_concern_both_levels_emitted(self, tmp_path) -> None:
+        generate_puppet_module(
+            profile([control("L1", level=1), control("L2", level=2)]), str(tmp_path))
+        assert (tmp_path / "manifests" / "l1.pp").exists()
+        assert (tmp_path / "manifests" / "l2.pp").exists()
+
+    def test_not_installed_guard_polarity_is_corrected(self, tmp_path) -> None:
+        # `dpkg-query -W pkg` / `rpm -q pkg` exit 0 exactly when the FORBIDDEN
+        # package is installed — used raw as the exec's `unless`, remediation
+        # would be skipped precisely when it must run. The generator must ship
+        # a polarity-correct install-state guard instead.
+        c = control(
+            "JR2.C.9", vdeb="```\n# dpkg-query -W avahi-daemon\n```",
+            cdeb="```\n# apt purge avahi-daemon\n```",
+            vrh="```\n# rpm -q avahi\n```", crh="```\n# dnf remove -y avahi\n```",
+        )
+        c.title = "Ensure Avahi Server is not installed."
+        generate_puppet_module(profile([c]), str(tmp_path))
+        deb = (tmp_path / "files" / "jr2_c_9_debian_chk.sh").read_text()
+        rh = (tmp_path / "files" / "jr2_c_9_redhat_chk.sh").read_text()
+        for chk in (deb, rh):
+            # installed → exit 1 (non-compliant, run configure); absent → exit 0
+            assert "pkg_installed" in chk and "exit 1" in chk and "exit 0" in chk
+            # the raw query must NOT be the whole guard body
+            assert not chk.rstrip().endswith("rpm -q avahi")
+            assert not chk.rstrip().endswith("dpkg-query -W avahi-daemon")
+        # dpkg's exit code lies for known-but-removed packages: the guard must
+        # check the real install state, not the query's exit code.
+        assert "Status-Status" in deb
+
+    def test_installed_required_guard_checks_real_state(self, tmp_path) -> None:
+        c = control(
+            "JR2.C.10", vdeb="```\n# dpkg-query -W sudo\n```",
+            cdeb="```\n# apt install sudo\n```",
+            vrh="```\n# rpm -q sudo\n```", crh="```\n# dnf install -y sudo\n```",
+        )
+        c.title = "Ensure sudo is installed."
+        generate_puppet_module(profile([c]), str(tmp_path))
+        chk = (tmp_path / "files" / "jr2_c_10_debian_chk.sh").read_text()
+        # absent → exit 1 (run configure); installed → exit 0 (skip)
+        assert "pkg_installed" in chk and "Status-Status" in chk
+
+    def test_unless_treats_na_exit_code_as_satisfied(self, tmp_path) -> None:
+        # A Validate that exits 101 (control not applicable on this node) must
+        # NOT trigger Configure — enforcing a GDM fix on a headless server or
+        # nftables chains on a ufw host would be wrong. `\$?` keeps the shell's
+        # $? out of Puppet string interpolation.
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        pp = (tmp_path / "manifests" / "jr2_c_1.pp").read_text()
+        assert "|| [ \\$? -eq 101 ]" in pp
+
+    def test_metadata_has_keys_puppet_requires(self, tmp_path) -> None:
+        # When metadata.json exists, Puppet's module loader raises MissingMetadata
+        # ("No source module metadata provided for sabc_hardening") unless
+        # source/author/version are ALL present — which excludes the module and
+        # makes `class sabc_hardening` unresolvable at apply time.
+        import json
+        generate_puppet_module(profile([control("JR2.C.1")]), str(tmp_path))
+        meta = json.loads((tmp_path / "metadata.json").read_text())
+        for key in ("source", "author", "version", "name"):
+            assert meta.get(key), f"metadata.json missing required key: {key}"
+
+
+# ── InSpec generation ─────────────────────────────────────────────────────────
+
+class TestInspec:
+    def test_control_guarded_by_os_family(self, tmp_path) -> None:
+        # Guards use os.redhat?/os.debian? so the whole family matches — incl.
+        # Amazon Linux, where InSpec reports os[:family] == 'amazon' and the
+        # old literal 'redhat' test skipped every control.
+        generate_inspec_profile(profile([control("JR2.C.1")]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_1.rb").read_text()
+        assert "control 'JR2.C.1'" in rb
+        assert "os.debian?" in rb
+        assert "os.redhat?" in rb
+        assert "os[:family] ==" not in rb        # no brittle literal string test
+        assert "exit_status" in rb
+
+    def test_redhat_only_control_guards_only_redhat(self, tmp_path) -> None:
+        generate_inspec_profile(profile([control("R", applies="redhat")]), str(tmp_path))
+        rb = (tmp_path / "controls" / "r.rb").read_text()
+        assert "os.redhat?" in rb
+        assert "os.debian?" not in rb
+
+    def test_empty_validate_reported_pending(self, tmp_path) -> None:
+        res = generate_inspec_profile(
+            profile([control("JR2.C.9", vrh="")]), str(tmp_path))
+        assert any("JR2.C.9/redhat" in p for p in res.pending)
+
+    def test_not_installed_package_audit_uses_negated_package_resource(self, tmp_path) -> None:
+        # `dpkg-query -W cups` exits 0 when cups IS installed, so judging it by
+        # exit_status==0 inverts every "not installed" control — a compliant
+        # (purged) node fails the scan. Must use the package resource instead.
+        c = control("JR2.C.2.2.2",
+                    vdeb="```\n# dpkg-query -W -f='${binary:Package}' cups\n```",
+                    vrh="```\n# rpm -q cups\n```")
+        c.title = "Ensure CUPS is not installed."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_2_2_2.rb").read_text()
+        assert "package('cups')" in rb
+        assert "should_not be_installed" in rb
+        assert "exit_status" not in rb
+
+    def test_installed_package_audit_uses_positive_package_resource(self, tmp_path) -> None:
+        c = control("JR2.C.3.4.1.1", vdeb="```\n# dpkg-query -W ufw\n```",
+                    vrh="```\n# rpm -q ufw\n```")
+        c.title = "Ensure ufw is installed."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_3_4_1_1.rb").read_text()
+        assert "package('ufw')" in rb and "should be_installed" in rb
+        assert "should_not" not in rb
+
+    def test_multiline_validate_still_uses_exit_code_command(self, tmp_path) -> None:
+        c = control("JR2.C.X", vdeb="```\n# systemctl is-enabled autofs\n# lsmod | grep autofs\n```")
+        c.title = "Disable Automounting."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_x.rb").read_text()
+        assert "exit_status" in rb and "package(" not in rb
+
+    def test_disable_title_package_audit_negates(self, tmp_path) -> None:
+        # CIS "Disable Automounting" audits `dpkg-query -W autofs` — absent is
+        # the COMPLIANT state, so the package resource must be negated (the
+        # positive reading failed exactly the compliant nodes).
+        c = control("JR2.C.1.1.1", vdeb="```\n# dpkg-query -W autofs\n```",
+                    vrh="```\n# rpm -q autofs\n```")
+        c.title = "Disable Automounting."
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_1_1_1.rb").read_text()
+        assert "package('autofs')" in rb and "should_not be_installed" in rb
+
+    def test_validate_runs_under_real_bash_not_sh(self, tmp_path) -> None:
+        # train executes command() strings with /bin/sh (dash on Debian); the
+        # CIS validate bodies are bash-only and were dying with exit 2 before
+        # checking anything (false FAILs on every GDM control). The generated
+        # control must hand the body to real bash via a POSIX heredoc.
+        c = control("JR2.C.11", vdeb="```\n#!/usr/bin/env bash\n[[ -f /x ]]\n```")
+        generate_inspec_profile(profile([c]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_11.rb").read_text()
+        assert "/bin/bash <<'SABC_BASH_EOF'" in rb
+        assert "SABC_BASH_EOF" in rb.split("/bin/bash", 1)[1]
+        # NEVER `exec /bin/bash`: with --sudo train prefixes `sudo -- ` and
+        # exec is a shell builtin sudo cannot run — every check would fail
+        # with "sudo: exec: command not found" (live: 0/182 on RHEL).
+        assert "exec /bin/bash" not in rb
+
+    def test_validate_exit_101_reported_as_not_applicable_skip(self, tmp_path) -> None:
+        # Authored validates exit 101 when their prerequisite is absent (GDM on
+        # a headless server, ntp on a chrony host). The generated check must
+        # branch: 101 → skip 'Not applicable…', anything else → assert exit 0.
+        generate_inspec_profile(profile([control("JR2.C.1.7.9")]), str(tmp_path))
+        rb = (tmp_path / "controls" / "jr2_c_1_7_9.rb").read_text()
+        assert "exit_status == 101" in rb
+        assert "skip 'Not applicable on this node" in rb
+        assert "should cmp 0" in rb              # the normal path still asserts
+
+    def test_inspec_yml_supports_both_families(self, tmp_path) -> None:
+        generate_inspec_profile(profile([control("JR2.C.1")]), str(tmp_path))
+        yml = (tmp_path / "inspec.yml").read_text()
+        assert "platform-family: debian" in yml
+        assert "platform-family: redhat" in yml

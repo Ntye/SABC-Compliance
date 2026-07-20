@@ -414,7 +414,43 @@
         executable: /bin/bash
       delegate_to: pe_master_dynamic
       register: classifier_result
-      changed_when: "'Classified PE Master' in classifier_result.stdout"
+      changed_when: "'Classified PE Master' in (classifier_result.stdout | default(''))"
+      # Never fatal here: when pe-console-services is down the API refuses
+      # connections, but if the platform repo is ALREADY built and served the
+      # agent install does not need the classifier at all. The two tasks below
+      # decide — warn-and-continue vs abort-with-remediation.
+      failed_when: false
+
+    - name: Warn — classifier API unavailable, continuing (platform repo already served)
+      debug:
+        msg: >-
+          Could not reach the PE classifier API on the primary
+          (https://localhost:4433 — connection refused usually means the
+          pe-console-services service is not running). The
+          {{ pe_repo_class }} class was NOT added, but the platform repo
+          metadata for {{ pe_platform | trim }} is already built and served
+          from the primary, so this agent installation proceeds. To restore
+          the classifier for future platforms, run on the Puppet primary:
+          'sudo systemctl start pe-console-services' and check
+          'sudo /opt/puppetlabs/bin/puppet infrastructure status'.
+      when:
+        - classifier_result.rc | default(0) != 0
+        - repo_built | bool
+
+    - name: Abort — classifier API unavailable and platform repo not built
+      fail:
+        msg: >-
+          The PE classifier API on the primary is unreachable
+          (https://localhost:4433, connection refused — the pe-console-services
+          service is not running), and the {{ pe_platform | trim }} package
+          repo has not been built yet, so the {{ pe_repo_class }} class cannot
+          be added and pe_repo cannot stage the agent packages. On the Puppet
+          primary run 'sudo systemctl start pe-console-services' (verify with
+          'sudo /opt/puppetlabs/bin/puppet infrastructure status'), then re-run
+          this installation.
+      when:
+        - classifier_result.rc | default(0) != 0
+        - not (repo_built | bool)
 
     # Run puppet on the primary to let pe_repo build/refresh the repo metadata.
     # Needed when (a) the class was just added, OR (b) we just extracted a tarball
@@ -463,14 +499,85 @@
           → https://{{ puppet_master }}:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
       when: packages_probe is not skipped
 
-    - name: Restart pe-puppetserver to reload static packages route (probe returned 404)
+    # The endpoint is not serving. The most common cause of a PERSISTENT 404
+    # (repodata on disk but 8140 won't serve it) is that the pe_repo static
+    # /packages mount / staging was never (re)applied on the primary — the
+    # earlier "Run puppet agent on primary" step is skipped whenever the class
+    # is already classified AND the repo dir already exists, which is exactly
+    # this stuck state. Force a full catalog run on the primary here to
+    # re-assert the pe_repo classes (mount + platform staging) before we
+    # restart and re-probe. Best-effort: an unrelated catalog error must not
+    # abort enrollment.
+    - name: Repair — run puppet on primary to re-assert pe_repo (endpoint not 200)
+      command: /opt/puppetlabs/bin/puppet agent --test --onetime --no-daemonize
+      delegate_to: pe_master_dynamic
+      register: primary_puppet_repair
+      changed_when: primary_puppet_repair.rc == 2
+      failed_when: false
+      timeout: 600
+      when: >-
+        packages_probe is not skipped
+        and (packages_probe.stdout | default('')) != '200'
+
+    - name: Show pe_repo repair run result
+      debug:
+        msg: "{{ (primary_puppet_repair.stdout_lines | default([]))[-15:] }}"
+      when: primary_puppet_repair is not skipped
+
+    # A recursive find can report repo_built=true when repomd.xml exists at a
+    # NESTED path (e.g. .../el-8-x86_64/x86_64/repodata/) rather than the
+    # canonical .../el-8-x86_64/repodata/ that the URL maps to — which 404s
+    # forever while the disk check keeps passing. If the canonical repomd.xml is
+    # absent but RPMs are present under the platform dir, flatten them to the
+    # canonical dir and (re)build the metadata there. No-op when the canonical
+    # file already exists (then it is a mount problem, handled above/below).
+    - name: Ensure repodata exists at the canonical platform path (el-, endpoint not 200)
+      shell: |
+        set -e
+        PKG_DIR="/opt/puppetlabs/server/data/packages/public/{{ pe_version }}/{{ pe_platform | trim }}"
+        if [ -f "$PKG_DIR/repodata/repomd.xml" ]; then
+          echo "CANONICAL_OK: $PKG_DIR/repodata/repomd.xml already present"; exit 0
+        fi
+        RPMS=$(find "$PKG_DIR" -name '*.rpm' 2>/dev/null | wc -l)
+        echo "canonical repomd.xml missing; RPMs under platform dir: $RPMS"
+        if [ "$RPMS" -eq 0 ]; then echo "NO_RPMS: nothing to build from"; exit 0; fi
+        # Flatten any nested RPMs up to the canonical dir (no overwrite of newer).
+        find "$PKG_DIR" -mindepth 2 -name '*.rpm' -exec cp -fn {} "$PKG_DIR/" \; 2>/dev/null || true
+        CR=""
+        for p in /opt/puppetlabs/puppet/bin/createrepo_c /opt/puppetlabs/server/bin/createrepo_c \
+                 /usr/bin/createrepo_c /usr/bin/createrepo; do
+          [ -x "$p" ] && { CR="$p"; break; }
+        done
+        [ -z "$CR" ] && CR=$(find /opt/puppetlabs -name createrepo_c -type f -perm /111 2>/dev/null | head -1)
+        if [ -z "$CR" ]; then echo "NO_CREATEREPO: cannot build metadata"; exit 0; fi
+        echo "Running: $CR $PKG_DIR"
+        "$CR" "$PKG_DIR"
+        ls -la "$PKG_DIR/repodata/" 2>&1 | head -10
+        echo "CANONICAL_REBUILT"
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: canonical_repo
+      changed_when: "'CANONICAL_REBUILT' in (canonical_repo.stdout | default(''))"
+      failed_when: false
+      when: >-
+        packages_probe is not skipped
+        and (packages_probe.stdout | default('')) != '200'
+        and (pe_platform | trim | regex_search('^el-')) is not none
+
+    - name: Show canonical repodata rebuild result
+      debug:
+        msg: "{{ canonical_repo.stdout_lines | default([]) }}"
+      when: canonical_repo is not skipped
+
+    - name: Restart pe-puppetserver to reload static packages route (probe not 200)
       service:
         name: pe-puppetserver
         state: restarted
       delegate_to: pe_master_dynamic
       when: >-
         packages_probe is not skipped
-        and (packages_probe.stdout | default('')) == '404'
+        and (packages_probe.stdout | default('')) != '200'
 
     - name: Wait for pe-puppetserver to be ready after restart
       wait_for:
@@ -482,7 +589,7 @@
       become: no
       when: >-
         packages_probe is not skipped
-        and (packages_probe.stdout | default('')) == '404'
+        and (packages_probe.stdout | default('')) != '200'
 
     # ── Final gate: the repo metadata MUST exist before install.bash runs ─────
     # If it still doesn't, install.bash will 404 on repomd.xml — fail here with a
@@ -535,6 +642,98 @@
         delay: 5
       delegate_to: localhost
       become: no
+
+    # ── Final readiness gate: the packages HTTP ROUTE must serve 200 ──────────
+    # TCP port 8140 opening does NOT mean the static /packages route is ready:
+    # pe-puppetserver accepts connections before it finishes loading its
+    # webserver handlers, so install.bash can still 404 on repomd.xml right
+    # after a restart even though the repodata is already on disk (this is the
+    # "pe_repo 404" enrollment failure). The disk re-check above has already
+    # proven the metadata EXISTS, so a non-200 here is purely a route-not-ready
+    # condition — poll the ACTUAL metadata URL from the primary until it serves
+    # 200 before downloading install.bash.
+    - name: Wait until the pe_repo metadata endpoint serves 200 (el- platforms)
+      shell: >-
+        curl -sk -o /dev/null -w "%{http_code}"
+        https://localhost:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: packages_ready
+      retries: 30
+      delay: 10
+      until: packages_ready.stdout == '200'
+      changed_when: false
+      failed_when: false
+      when: pe_version is defined and (pe_platform | trim | regex_search('^el-')) is not none
+
+    # Still not serving after repair + restart + poll. Gather the facts that
+    # explain WHY straight from the primary — disk layout, the exact HTTP
+    # responses (versioned path, the 'current' symlink path, and install.bash),
+    # the puppetserver static /packages mount config, and service status — so
+    # the root cause is visible in this job's log without SSHing to the master.
+    - name: Gather pe_repo diagnostics from the primary (endpoint still not 200)
+      shell: |
+        base=/opt/puppetlabs/server/data/packages/public
+        plat={{ pe_platform | trim }}
+        ver={{ pe_version }}
+        echo "=== disk: public version dirs ($base) ==="
+        ls -la "$base/" 2>&1 | head -30
+        echo
+        echo "=== disk: platform dir $ver/$plat ==="
+        ls -la "$base/$ver/$plat/" 2>&1 | head -40
+        echo "--- repodata/ ---"
+        ls -la "$base/$ver/$plat/repodata/" 2>&1 | head -20
+        echo
+        echo "=== disk: every repomd.xml under $ver/$plat ==="
+        find "$base/$ver/$plat" -name repomd.xml 2>&1
+        echo
+        echo "=== http: versioned metadata URL (headers) ==="
+        curl -skI "https://localhost:8140/packages/$ver/$plat/repodata/repomd.xml" 2>&1 | head -15
+        echo "=== http: comparison codes ==="
+        curl -sk -o /dev/null -w "versioned repomd -> %{http_code}\n" "https://localhost:8140/packages/$ver/$plat/repodata/repomd.xml" 2>&1
+        curl -sk -o /dev/null -w "current   repomd -> %{http_code}\n" "https://localhost:8140/packages/current/$plat/repodata/repomd.xml" 2>&1
+        curl -sk -o /dev/null -w "install.bash      -> %{http_code}\n" "https://localhost:8140/packages/current/install.bash" 2>&1
+        echo
+        echo "=== puppetserver static /packages mount config ==="
+        grep -rniE "packages|mount|static-content|static_content" /etc/puppetlabs/puppetserver/conf.d/ 2>/dev/null | head -25
+        echo
+        echo "=== pe-puppetserver status ==="
+        systemctl status pe-puppetserver --no-pager 2>&1 | head -12
+      args:
+        executable: /bin/bash
+      delegate_to: pe_master_dynamic
+      register: pe_repo_diag
+      changed_when: false
+      failed_when: false
+      when: >-
+        packages_ready is not skipped
+        and (packages_ready.stdout | default('')) != '200'
+
+    - name: Show pe_repo diagnostics from the primary
+      debug:
+        msg: "{{ pe_repo_diag.stdout_lines | default([]) }}"
+      when: pe_repo_diag is not skipped
+
+    - name: Fail if the pe_repo metadata endpoint never became ready
+      fail:
+        msg: >-
+          The pe_repo metadata endpoint for '{{ pe_platform | trim }}' never
+          returned 200 from the primary ({{ puppet_master }}) after a repair
+          puppet run, a pe-puppetserver restart and ~5 minutes of polling
+          (last HTTP {{ packages_ready.stdout | default('n/a') }}):
+          https://{{ puppet_master }}:8140/packages/{{ pe_version }}/{{ pe_platform | trim }}/repodata/repomd.xml
+          The repodata exists on disk but pe-puppetserver is not serving it.
+          See the "pe_repo diagnostics from the primary" output above — in
+          particular whether the versioned vs 'current' URL differ (points to a
+          version-path mismatch) and whether a static /packages mount is
+          configured under /etc/puppetlabs/puppetserver/conf.d/ (if absent, the
+          primary's PE Master catalog has not established the packages mount —
+          run `puppet agent -t` on the master and check for catalog errors).
+          Also check the logs under /var/log/puppetlabs/puppetserver/.
+      when: >-
+        packages_ready is not skipped
+        and (packages_ready.stdout | default('')) != '200'
 
     # ── Install agent via the PE master's install script ─────────────────────
     # install.bash uses the PE master's FQDN (its certname) in all URLs.

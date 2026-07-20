@@ -62,6 +62,10 @@ services:
       - backend-keys:/app/keys
       # Airgap packages — bind-mount so you can drop files in without rebuild.
       - ./backend/packages:/app/packages
+      # NOTE: the detection agent (/app/detection-agent) and the referential seed
+      # (/app/platform) are baked into the image (see backend/Dockerfile). They are
+      # NOT bind-mounted here — a ship.sh deploy has no source tree on the server,
+      # so a source mount would shadow the image content with an empty directory.
       # Frontend TLS cert/key — same volume the frontend serves from.
       - frontend-certs:/app/certs
     depends_on:

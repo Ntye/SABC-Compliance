@@ -1,101 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts'
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  LineChart, Line,
-} from 'recharts'
-import {
-  ArrowLeft, Play, Wrench, CheckCircle2, XCircle, MinusCircle, ChevronDown,
-  Download, ShieldAlert,
+  ArrowLeft, CheckCircle2, XCircle, MinusCircle, ChevronDown,
+  Download, ShieldAlert, ShieldCheck, Zap,
 } from 'lucide-react'
 import {
-  getNodeCompliance, collectNodeCompliance, triggerRemediation,
-  getScanEngineStatus, installScanEngineOnController,
+  getNodeCompliance, collectNodeCompliance,
+  getScanEngineStatus, installScanEngineOnController, enforceReferential,
+  getClosedLoopSetting, listNodeGroups,
 } from '../lib/api.js'
 import { useApi } from '../hooks/useApi.js'
 import { useT } from '../context/LangContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { badge, scoreColor, scoreBarColor } from '../lib/tw.js'
+import RunScanButton from '../components/RunScanButton.jsx'
+import ComplianceHistory from '../components/ComplianceHistory.jsx'
+import { exportControlsJson, exportControlsCsv, exportControlsPdf } from '../lib/complianceExport.js'
 
-// ── Export helpers ────────────────────────────────────────────────────────────
+// ── Export menu (posture tab) ─────────────────────────────────────────────────
+// Exports the currently filtered controls, so whatever status/framework filter
+// is active is reflected in the JSON, CSV and PDF alike (same column set).
 
-function downloadBlob(content, type, filename) {
-  const blob = new Blob([content], { type })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
-}
-
-function exportNodeJson(data, report) {
-  const payload = {
-    exported_at: new Date().toISOString(),
-    node: { hostname: data.hostname, ip: data.ip, os_family: data.os_family },
-    report: {
-      score: report.score, passed_checks: report.passed_checks,
-      failed_checks: report.failed_checks, skipped_checks: report.skipped_checks,
-      source: report.source, collected_at: report.collected_at, profile: report.profile,
-      controls: report.details || [],
-    },
-  }
-  downloadBlob(JSON.stringify(payload, null, 2), 'application/json',
-    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.json`)
-}
-
-function exportNodeCsv(data, report) {
-  const rows = [['Control ID', 'Title', 'Status', 'Severity', 'Section', 'Description', 'Failure Detail']]
-  for (const ctrl of (report.details || [])) {
-    rows.push([ctrl.control_id, ctrl.title, ctrl.status, ctrl.severity || '',
-      ctrl.section || '', ctrl.desc || '', ctrl.message || ''])
-  }
-  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-  downloadBlob(csv, 'text/csv',
-    `sabc-scan-${data.hostname}-${new Date().toISOString().slice(0, 10)}.csv`)
-}
-
-function exportNodePdf(data, report) {
-  const rows = (report.details || []).map((ctrl) => {
-    const color = ctrl.status === 'fail' ? '#dc2626' : ctrl.status === 'pass' ? '#16a34a' : '#6b7280'
-    const bg = ctrl.status === 'fail' ? '#fff5f5' : ''
-    return `<tr style="background:${bg}">
-      <td>${ctrl.control_id}</td>
-      <td>${ctrl.title}</td>
-      <td style="color:${color};font-weight:600">${ctrl.status}</td>
-      <td>${ctrl.severity || ''}</td>
-      <td>${ctrl.section || ''}</td>
-    </tr>`
-  }).join('')
-  const scoreColor = report.score >= 90 ? '#16a34a' : report.score >= 70 ? '#f59e0b' : '#dc2626'
-  const html = `<!DOCTYPE html><html><head><title>SABC — ${data.hostname}</title>
-<style>
-  body{font-family:sans-serif;font-size:11px;margin:24px}
-  h2{margin:0 0 4px}.meta{color:#555;margin-bottom:16px}
-  .score{font-size:22px;font-weight:700;color:${scoreColor}}
-  table{width:100%;border-collapse:collapse;margin-top:12px}
-  th,td{border:1px solid #e5e7eb;padding:5px 8px;text-align:left;vertical-align:top}
-  th{background:#f9fafb;font-size:10px;font-weight:600;text-transform:uppercase}
-  @media print{body{margin:0}}
-</style></head><body>
-<h2>SABC Compliance Report — ${data.hostname}</h2>
-<div class="meta">
-  IP: ${data.ip} · OS: ${data.os_family} ·
-  Score: <span class="score">${report.score}%</span> ·
-  ${report.passed_checks} passed · ${report.failed_checks} failed ·
-  Scanned: ${new Date(report.collected_at).toLocaleString()}
-</div>
-<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Severity</th><th>Section</th></tr></thead>
-<tbody>${rows}</tbody></table></body></html>`
-  const win = window.open('', '_blank')
-  if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 400) }
-}
-
-function ExportMenu({ nodeData, report, t }) {
+function ExportMenu({ controls, meta, t }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-  function close() { setOpen(false) }
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50"
@@ -106,11 +36,17 @@ function ExportMenu({ nodeData, report, t }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={close} />
-          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-36 py-1 text-[12px]">
-            <button onClick={() => { exportNodeJson(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportJson')}</button>
-            <button onClick={() => { exportNodeCsv(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportCsv')}</button>
-            <button onClick={() => { exportNodePdf(nodeData, report); close() }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700">{t('compliance.exportPdf')}</button>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg z-20 w-40 py-1 text-[12px]">
+            {[['json', exportControlsJson], ['csv', exportControlsCsv], ['pdf', exportControlsPdf]].map(([fmt, fn]) => (
+              <button
+                key={fmt}
+                onClick={() => { fn(controls, meta); setOpen(false) }}
+                className="w-full text-left px-4 py-2 hover:bg-gray-50 text-gray-700"
+              >
+                {t(`compliance.export${fmt.charAt(0).toUpperCase() + fmt.slice(1)}`)}
+              </button>
+            ))}
           </div>
         </>
       )}
@@ -131,12 +67,6 @@ const CIS_SECTIONS = {
 const FRAMEWORKS = [
   { key: 'all', label: 'All' },
   { key: 'cis', label: 'CIS' },
-]
-
-const PROFILE_OPTIONS = [
-  { id: null,                  labelKey: 'compliance.allProfiles' },
-  { id: 'cis-benchmark',       labelKey: 'compliance.cisBenchmark' },
-  { id: 'sabc-linux-baseline', labelKey: 'compliance.internalRef' },
 ]
 
 function sectionOf(ctrl) {
@@ -208,15 +138,21 @@ function buildComplianceTree(controls) {
     if (!topMap.has(topName)) topMap.set(topName, { name: topName, secMap: new Map() })
     const top = topMap.get(topName)
 
+    // Folder labels carry the referential's section names ("1.1 · Filesystem
+    // Configuration"), from the section_titles the scan attaches per control,
+    // falling back to the bare number when a heading has no name.
+    const st = ctrl.section_titles || {}
+    const folderLabel = (key) => (key === '__flat' ? '' : (st[key] ? `${key} · ${st[key]}` : key))
+
     const parts = numParts(ctrl.control_id)
     const secKey = parts.length >= 3 ? parts.slice(0, 2).join('.') : '__flat'
     if (!top.secMap.has(secKey))
-      top.secMap.set(secKey, { key: secKey, label: secKey === '__flat' ? '' : secKey, ssMap: new Map() })
+      top.secMap.set(secKey, { key: secKey, label: folderLabel(secKey), ssMap: new Map() })
     const sec = top.secMap.get(secKey)
 
     const ssKey = parts.length >= 4 ? parts.slice(0, 3).join('.') : '__flat'
     if (!sec.ssMap.has(ssKey))
-      sec.ssMap.set(ssKey, { key: ssKey, label: ssKey === '__flat' ? '' : ssKey, controls: [] })
+      sec.ssMap.set(ssKey, { key: ssKey, label: folderLabel(ssKey), controls: [] })
     sec.ssMap.get(ssKey).controls.push(ctrl)
   }
 
@@ -289,6 +225,11 @@ function ControlRow({ ctrl, t }) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {ctrl.status === 'skip' && (
+            <span className="inline-flex items-center px-2 py-[3px] rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
+              {t('compliance.skippedTag')}
+            </span>
+          )}
           {fwKeys.map((k) => (
             <span key={k} className={badge(k)}>
               {k.toUpperCase()} {fw[k]}
@@ -308,10 +249,20 @@ function ControlRow({ ctrl, t }) {
       {open && (
         <div className="px-5 pb-3 pl-[42px] space-y-1.5">
           {ctrl.desc && <p className="text-[12px] text-gray-500">{ctrl.desc}</p>}
-          {ctrl.message && (
-            <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">
-              {ctrl.message}
-            </pre>
+          {ctrl.status === 'skip' ? (
+            <div className="flex items-start gap-1.5 text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2">
+              <MinusCircle size={13} className="text-gray-400 mt-0.5 flex-shrink-0" />
+              <span>
+                <b className="text-gray-700">{t('compliance.whySkipped')}: </b>
+                {ctrl.message || t('compliance.skippedGeneric')}
+              </span>
+            </div>
+          ) : (
+            ctrl.message && (
+              <pre className="text-[11px] text-gray-600 bg-gray-50 border border-gray-100 rounded-md p-2 whitespace-pre-wrap font-mono">
+                {ctrl.message}
+              </pre>
+            )
           )}
         </div>
       )}
@@ -473,6 +424,8 @@ export default function NodeCompliancePage() {
   const toast = useToast()
   const { data, loading, refetch } = useApi(() => getNodeCompliance(id), { deps: [id] })
   const { data: scanEngineStatus, refetch: refetchScanEngine } = useApi(getScanEngineStatus)
+  const { data: closedLoopSetting } = useApi(getClosedLoopSetting)
+  const { data: allGroups } = useApi(listNodeGroups)
   const [scanning,    setScanning]    = useState(false)
   const [scanPct,     setScanPct]     = useState(0)
   const scanStartRef = useRef(null)
@@ -497,36 +450,14 @@ export default function NodeCompliancePage() {
     return () => clearInterval(scanTimerRef.current)
   }, [scanning])
   const [installing,     setInstalling]    = useState(false)
-  const [remediating,    setRemediating]   = useState(false)
+  const [enforcing,      setEnforcing]     = useState(false)
   const [filter,         setFilter]        = useState('all')
   const [fwFilter,       setFwFilter]      = useState('all')
   const [sortMode,       setSortMode]      = useState('section')  // 'section' | 'risk'
-  const [scanProfileId,  setScanProfileId] = useState(null)       // null = all profiles
+  const [tab,            setTab]           = useState('posture')  // 'posture' | 'history'
 
   const scanEngineInstalled = scanEngineStatus?.installed
   const report = useMemo(() => (data ? primaryReport(data.reports || []) : null), [data])
-
-  const history = useMemo(() => {
-    if (!data) return []
-    return (data.reports || [])
-      .filter((r) => r.source === 'scan' || r.source === 'cis-ssh')
-      .map((r) => ({
-        ts: new Date(r.collected_at).getTime(),
-        date: new Date(r.collected_at).toLocaleDateString(),
-        score: r.score,
-      }))
-      .sort((a, b) => a.ts - b.ts)
-  }, [data])
-
-  const severityBars = useMemo(() => {
-    const sc = report?.severity_counts || {}
-    return [
-      { name: t('compliance.high'), key: 'high', value: sc.high || 0 },
-      { name: t('compliance.medium'), key: 'medium', value: sc.medium || 0 },
-      { name: t('compliance.low'), key: 'low', value: sc.low || 0 },
-      { name: t('compliance.info'), key: 'info', value: sc.info || 0 },
-    ]
-  }, [report, t])
 
   const distribution = useMemo(() => {
     if (!report) return []
@@ -537,13 +468,66 @@ export default function NodeCompliancePage() {
     ].filter((d) => d.value > 0)
   }, [report, t])
 
-  const complianceTree = useMemo(() => {
+  // Failed and skipped controls broken down by severity, computed from the
+  // per-control details so only buckets that actually have controls render
+  // (no "Low 0 / Info 0" noise) and skipped controls are surfaced too.
+  const sevBreakdown = useMemo(() => {
+    const empty = () => ({ high: 0, medium: 0, low: 0, info: 0 })
+    const fail = empty(), skip = empty()
+    for (const d of report?.details || []) {
+      const s = SEV[d.severity] ? d.severity : 'info'
+      if (d.status === 'fail') fail[s] += 1
+      else if (d.status === 'skip') skip[s] += 1
+    }
+    return { fail, skip }
+  }, [report])
+
+  // Is the closed remediation loop active for THIS node? Either the platform-
+  // wide switch is on, or a node group the server belongs to has active
+  // response enabled. Enforcement itself is available once Puppet is enrolled.
+  const closedLoop = useMemo(() => {
+    if (closedLoopSetting?.enabled) return { active: true, via: t('compliance.clPlatform') }
+    const nid = data?.node_id
+    const g = nid && (allGroups || []).find(
+      (grp) => grp.active_response_enabled && (grp.matching_node_ids || []).includes(nid),
+    )
+    if (g) return { active: true, via: t('compliance.clGroup', { name: g.name }) }
+    return { active: false, via: null }
+  }, [closedLoopSetting, allGroups, data, t])
+
+  // Controls after the active status + framework filters — the exact set the
+  // tree renders and the exporters write, so exports honour the active filters.
+  const filteredControls = useMemo(() => {
     let details = report?.details || []
     if (filter === 'failed') details = details.filter((d) => d.status === 'fail')
     else if (filter === 'passed') details = details.filter((d) => d.status === 'pass')
+    else if (filter === 'skipped') details = details.filter((d) => d.status === 'skip')
     if (fwFilter !== 'all') details = details.filter((d) => (d.frameworks || {})[fwFilter])
-    return sortMode === 'risk' ? buildRiskTree(details) : buildComplianceTree(details)
-  }, [report, filter, fwFilter, sortMode])
+    return details
+  }, [report, filter, fwFilter])
+
+  const complianceTree = useMemo(
+    () => (sortMode === 'risk' ? buildRiskTree(filteredControls) : buildComplianceTree(filteredControls)),
+    [filteredControls, sortMode],
+  )
+
+  const filterLabel = useMemo(() => {
+    const parts = []
+    if (filter === 'failed') parts.push(t('compliance.filterFailed'))
+    else if (filter === 'passed') parts.push(t('compliance.filterPassed'))
+    else if (filter === 'skipped') parts.push(t('compliance.filterSkipped'))
+    if (fwFilter !== 'all') parts.push(fwFilter.toUpperCase())
+    return parts.length ? parts.join(' · ') : null
+  }, [filter, fwFilter, t])
+
+  const exportMeta = useMemo(() => (data && report ? {
+    hostname: data.hostname, ip: data.ip, os_family: data.os_family,
+    score: report.score, passed_checks: report.passed_checks, failed_checks: report.failed_checks,
+    skipped_checks: report.skipped_checks, total_checks: report.total_checks,
+    source: report.source, profile: report.profile, collected_at: report.collected_at,
+    resourceType: 'node', resourceId: data.node_id || data.id, resourceName: data.hostname,
+    filterLabel,
+  } : null), [data, report, filterLabel])
 
   const totalShown = useMemo(
     () =>
@@ -556,10 +540,10 @@ export default function NodeCompliancePage() {
     [complianceTree, sortMode],
   )
 
-  async function runScan() {
+  async function runScan(profileId = null) {
     setScanning(true)
     try {
-      const res = await collectNodeCompliance(id, scanProfileId)
+      const res = await collectNodeCompliance(id, profileId)
       toast(t('compliance.scanned', { n: res.collected?.length || 0 }), 'success')
       await Promise.all([refetch(), refetchScanEngine()])
     } catch (err) {
@@ -586,16 +570,15 @@ export default function NodeCompliancePage() {
     }
   }
 
-  async function remediate() {
-    setRemediating(true)
+  async function enforce() {
+    setEnforcing(true)
     try {
-      await triggerRemediation(id)
-      toast(t('compliance.remediated'), 'success')
-      await refetch()
+      const res = await enforceReferential({ nodeId: id })
+      toast(t('tiers.enforceLaunched', { n: res.launched ?? (res.jobs?.length || 0) }), 'success')
     } catch (err) {
       toast(err.message, 'error')
     } finally {
-      setRemediating(false)
+      setEnforcing(false)
     }
   }
 
@@ -609,41 +592,58 @@ export default function NodeCompliancePage() {
           </Link>
           <h2 className="text-[18px] font-semibold text-gray-900">{data?.hostname || id}</h2>
           {data && <p className="text-[12px] text-gray-400">{data.ip} · {data.os_family}</p>}
+          {data && (
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-medium ${
+                  closedLoop.active ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-500'
+                }`}
+                title={closedLoop.active ? t('compliance.clActiveHint') : t('compliance.clOffHint')}
+              >
+                <Zap size={10} />
+                {closedLoop.active ? t('compliance.clActive') : t('compliance.clOff')}
+                {closedLoop.via && <span className="opacity-70">· {closedLoop.via}</span>}
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-medium ${
+                  data.puppet_enrolled ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-400'
+                }`}
+                title={data.puppet_enrolled ? t('compliance.enforceReadyHint') : t('compliance.puppetFirst')}
+              >
+                <ShieldCheck size={10} />
+                {data.puppet_enrolled ? t('compliance.enforceReady') : t('compliance.enforceUnavailable')}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {report && data && <ExportMenu nodeData={data} report={report} t={t} />}
-          {/* Profile selector */}
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {PROFILE_OPTIONS.map((p) => (
-              <button
-                key={String(p.id)}
-                onClick={() => setScanProfileId(p.id)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${
-                  scanProfileId === p.id ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {t(p.labelKey)}
-              </button>
-            ))}
-          </div>
+          {tab === 'posture' && exportMeta && <ExportMenu controls={filteredControls} meta={exportMeta} t={t} />}
+          <RunScanButton onRun={runScan} running={scanning} t={t} />
           <button
-            onClick={runScan}
-            disabled={scanning}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand text-white text-[13px] font-medium hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Play size={14} className={scanning ? 'animate-pulse' : ''} />
-            {scanning ? t('compliance.scanning') : t('compliance.runScan')}
-          </button>
-          <button
-            onClick={remediate}
-            disabled={remediating || !data?.puppet_enrolled}
-            title={!data?.puppet_enrolled ? t('compliance.puppetFirst') : ''}
+            onClick={enforce}
+            disabled={enforcing || !data?.puppet_enrolled}
+            title={!data?.puppet_enrolled ? t('compliance.puppetFirst') : t('tiers.enforceHint')}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Wrench size={14} />
-            {remediating ? t('compliance.remediating') : t('compliance.remediate')}
+            <ShieldCheck size={14} />
+            {enforcing ? t('compliance.enforcing') : t('tiers.enforce')}
           </button>
         </div>
+      </div>
+
+      {/* Tabs — Compliance posture (primary) + History */}
+      <div className="flex items-center gap-1 border-b border-gray-100">
+        {[['posture', 'compliance.postureTab'], ['history', 'compliance.historyTab']].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`px-4 py-2 text-[13px] font-medium border-b-2 -mb-px transition ${
+              tab === key ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t(label)}
+          </button>
+        ))}
       </div>
 
       {/* Scan progress bar */}
@@ -670,7 +670,7 @@ export default function NodeCompliancePage() {
       )}
 
       {/* Scan engine not installed on the platform — offer to install it right here */}
-      {scanEngineStatus && !scanEngineInstalled && (
+      {tab === 'posture' && scanEngineStatus && !scanEngineInstalled && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
           <ShieldAlert size={17} className="text-blue-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -688,7 +688,9 @@ export default function NodeCompliancePage() {
         </div>
       )}
 
-      {loading && !data ? (
+      {tab === 'history' ? (
+        <ComplianceHistory nodeId={id} nodeName={data?.hostname} />
+      ) : loading && !data ? (
         <div className="space-y-3">
           {[1, 2].map((i) => <div key={i} className="h-32 bg-gray-100 animate-pulse rounded-xl" />)}
         </div>
@@ -699,8 +701,8 @@ export default function NodeCompliancePage() {
         </div>
       ) : (
         <>
-          {/* Top row: score donut + breakdown + severity */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Top row: score donut + results breakdown */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Panel title={t('compliance.overallScore')}>
               <div className="relative">
                 <ResponsiveContainer width="100%" height={200}>
@@ -727,37 +729,67 @@ export default function NodeCompliancePage() {
               </div>
             </Panel>
 
-            <Panel title={t('compliance.severityBreakdown')}>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={severityBars} margin={{ left: -16, right: 8 }}>
-                  <CartesianGrid vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip cursor={{ fill: '#f8fafc' }} />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]} barSize={34}>
-                    {severityBars.map((b) => <Cell key={b.key} fill={SEV[b.key]} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel title={t('compliance.scoreHistory')}>
-              {history.length > 1 ? (
-                <ResponsiveContainer width="100%" height={200}>
-                  <LineChart data={history} margin={{ left: -16, right: 8 }}>
-                    <CartesianGrid vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                    <Tooltip formatter={(v) => [`${v}%`, t('compliance.score')]} />
-                    <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-[200px] flex flex-col items-center justify-center gap-2 text-center">
-                  <span className={`text-[40px] font-bold leading-none ${scoreColor(report.score)}`}>{report.score}%</span>
-                  <span className="text-[11px] text-gray-400">{t('compliance.noChartData')}</span>
+            <Panel title={t('compliance.resultsBreakdown')}>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  ['pass', t('compliance.passed'), report.passed_checks, 'text-green-600'],
+                  ['fail', t('compliance.failed'), report.failed_checks, 'text-red-600'],
+                  ['skip', t('compliance.skipped'), report.skipped_checks || 0, 'text-gray-500'],
+                ].map(([key, label, value, color]) => (
+                  <div key={key} className="rounded-lg border border-gray-100 bg-gray-50/40 px-3 py-3 text-center">
+                    <div className={`text-[24px] font-bold leading-none ${color}`}>{value}</div>
+                    <div className="text-[11px] text-gray-400 mt-1">{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.failuresBySeverity')}</div>
+                  {report.failed_checks > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {['high', 'medium', 'low', 'info']
+                        .filter((k) => sevBreakdown.fail[k] > 0)
+                        .map((k) => (
+                          <span
+                            key={k}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium"
+                            style={{ background: `${SEV[k]}18`, color: SEV[k] }}
+                          >
+                            {t(`compliance.${k}`)} <b>{sevBreakdown.fail[k]}</b>
+                          </span>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-green-600 flex items-center gap-1">
+                      <CheckCircle2 size={12} /> {t('compliance.noFailures')}
+                    </p>
+                  )}
                 </div>
-              )}
+                {(report.skipped_checks || 0) > 0 && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-2">{t('compliance.skippedBySeverity')}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {['high', 'medium', 'low', 'info']
+                        .filter((k) => sevBreakdown.skip[k] > 0)
+                        .map((k) => (
+                          <span
+                            key={k}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-100 text-gray-500"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: SEV[k] }} />
+                            {t(`compliance.${k}`)} <b>{sevBreakdown.skip[k]}</b>
+                          </span>
+                        ))}
+                    </div>
+                    <button
+                      onClick={() => setFilter('skipped')}
+                      className="text-[11px] text-brand hover:underline mt-1.5"
+                    >
+                      {t('compliance.viewSkipped')}
+                    </button>
+                  </div>
+                )}
+              </div>
             </Panel>
           </div>
 
@@ -789,7 +821,7 @@ export default function NodeCompliancePage() {
                   ))}
                 </div>
                 <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                  {['all', 'failed', 'passed'].map((f) => (
+                  {['all', 'failed', 'passed', 'skipped'].map((f) => (
                     <button
                       key={f}
                       onClick={() => setFilter(f)}

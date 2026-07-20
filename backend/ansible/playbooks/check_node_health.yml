@@ -5,7 +5,6 @@
 #
 # Vars injected from platform config:
 #   puppet_master_host  (optional)
-#   wazuh_manager_host  (optional)
 #
 - name: Node Health Check
   hosts: target
@@ -14,7 +13,6 @@
 
   vars:
     _puppet_master: "{{ puppet_master_host | default('') }}"
-    _wazuh_manager: "{{ wazuh_manager_host | default('') }}"
 
   tasks:
 
@@ -89,36 +87,34 @@
       debug:
         msg: "{{ _puppet.stdout_lines }}"
 
-    # ── Wazuh Agent ──────────────────────────────────────────────────────────
-    - name: Gather Wazuh agent state
+    # ── Detection agent ──────────────────────────────────────────────────────
+    - name: Gather detection agent state
       shell: |
-        if [ ! -f /var/ossec/bin/wazuh-agentd ]; then
+        AGENT=/usr/local/lib/compliance-agent/agent.py
+        CONF=/etc/compliance-agent/config.yaml
+        UNIT=compliance-detection-agent
+        if [ ! -f "${AGENT}" ]; then
           echo "Status  : NOT INSTALLED"
         else
-          VER=$(/var/ossec/bin/wazuh-control info 2>/dev/null | grep -i '^wazuh' | head -1 || echo 'version unknown')
-          echo "Status  : INSTALLED (${VER})"
-          AGENTD=$(/var/ossec/bin/wazuh-control status 2>/dev/null | grep wazuh-agentd | awk '{print $NF}')
-          echo "Daemon  : ${AGENTD:-unknown}"
-          MGR=$(grep -oP '(?<=<address>)[^<]+' /var/ossec/etc/ossec.conf 2>/dev/null | head -1)
-          echo "Manager : ${MGR:-not set}"
-          AGENT_ID=$(awk '{print $1}' /var/ossec/etc/client.keys 2>/dev/null | head -1)
-          echo "Agent ID: ${AGENT_ID:-none (not enrolled)}"
-          if grep -aq 'Connected to the server' /var/ossec/logs/ossec.log 2>/dev/null; then
-            echo "Connected: YES"
-            grep 'Connected to the server' /var/ossec/logs/ossec.log 2>/dev/null | tail -1 | sed 's/^/  Last: /'
+          echo "Status  : INSTALLED"
+          echo "Service : $(systemctl is-active ${UNIT} 2>/dev/null || echo unknown)"
+          GW=$(grep -E '^[[:space:]]*url:' "${CONF}" 2>/dev/null | head -1 | awk '{print $2}')
+          echo "Gateway : ${GW:-not configured}"
+          SPOOL=/var/spool/compliance-agent/events.spool
+          if [ -s "${SPOOL}" ]; then
+            echo "Spool   : $(wc -l < ${SPOOL}) queued event(s) — gateway unreachable?"
           else
-            echo "Connected: NO"
-            # Show last 3 relevant log lines for diagnosis
-            grep -E 'ERROR|WARNING|Connecting|Duplicate|refused|denied' /var/ossec/logs/ossec.log 2>/dev/null | tail -3 | sed 's/^/  Log: /'
+            echo "Spool   : empty (events delivered)"
           fi
+          journalctl -u "${UNIT}" -n 3 --no-pager 2>/dev/null | sed 's/^/  Log: /'
         fi
-      register: _wazuh
+      register: _detection
       changed_when: false
       failed_when: false
 
-    - name: "── WAZUH AGENT ──────────────────────────────────────────────────"
+    - name: "── DETECTION AGENT ──────────────────────────────────────────────"
       debug:
-        msg: "{{ _wazuh.stdout_lines }}"
+        msg: "{{ _detection.stdout_lines }}"
 
     # ── Network connectivity ──────────────────────────────────────────────────
     - name: Test connectivity to Puppet master
@@ -138,31 +134,14 @@
       changed_when: false
       failed_when: false
 
-    - name: Test connectivity to Wazuh manager
-      shell: |
-        HOST="{{ _wazuh_manager }}"
-        if [ -z "${HOST}" ]; then
-          echo "Wazuh manager: not configured on this platform"
-        else
-          echo "Wazuh manager: ${HOST}"
-          for port in 1514 1515 55000; do
-            timeout 3 bash -c "echo >/dev/tcp/${HOST}/${port}" 2>/dev/null \
-              && echo "  port ${port}: OPEN" \
-              || echo "  port ${port}: UNREACHABLE (firewall or service down)"
-          done
-        fi
-      register: _wazuh_net
-      changed_when: false
-      failed_when: false
-
     - name: "── NETWORK CONNECTIVITY ─────────────────────────────────────────"
       debug:
-        msg: "{{ _puppet_net.stdout_lines + _wazuh_net.stdout_lines }}"
+        msg: "{{ _puppet_net.stdout_lines }}"
 
     # ── DNS resolution ────────────────────────────────────────────────────────
     - name: Check DNS resolution for master hostnames
       shell: |
-        for h in "{{ _puppet_master }}" "{{ _wazuh_manager }}"; do
+        for h in "{{ _puppet_master }}"; do
           [ -z "${h}" ] && continue
           ip=$(getent hosts "${h}" 2>/dev/null | awk '{print $1}')
           if [ -n "${ip}" ]; then

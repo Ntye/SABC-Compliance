@@ -2,7 +2,7 @@
 #
 # Enforces the SABC internal referential — a CIS Linux Benchmark — on a managed
 # node. This is the "enforcement" half of the platform's closed remediation
-# loop: Wazuh (or the operator) detects drift, the platform runs
+# loop: the detection agent (or the operator) detects drift, the platform runs
 # `puppet agent -t`, and the classes below bring the node back into compliance.
 #
 # Design principles (read before changing a default):

@@ -8,6 +8,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from interface.http.net import client_ip
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,10 +25,19 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if audit_repo is None:
             return response
 
+        # A route may have already written a rich, explicit audit entry for this
+        # request (e.g. an export). Don't also write a generic duplicate.
+        if getattr(request.state, "audit_handled", False):
+            return response
+
         api_key_name = None
         x_key = request.headers.get("X-API-Key", "")
         if x_key:
             api_key_name = f"{x_key[:8]}..."
+
+        # The auth dependency stashes the resolved principal on request.state so
+        # every audited request is attributable to a real user (API key or JWT).
+        principal = getattr(request.state, "principal", None)
 
         entry = {
             "ts": datetime.utcnow().isoformat(),
@@ -37,6 +48,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
             "user_agent": request.headers.get("user-agent"),
             "duration_ms": duration_ms,
             "api_key_name": api_key_name,
+            "user_id": getattr(principal, "id", None),
+            "user_name": getattr(principal, "name", None),
+            "user_role": getattr(principal, "role", None),
         }
         asyncio.create_task(audit_repo.save(entry))
         return response
@@ -61,7 +75,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._cleaner_started = True
             asyncio.create_task(self._clear_loop())
 
-        ip = request.client.host if request.client else "unknown"
+        ip = client_ip(request)
         async with self._lock:
             self._counts[ip] = self._counts.get(ip, 0) + 1
             count = self._counts[ip]
