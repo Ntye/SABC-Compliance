@@ -54,6 +54,8 @@ class FamilyTimingStats(BaseModel):
     os_family: str
     detection: TimingStats
     enforcement: TimingStats
+    # End-to-end: agent observed the change → linked remediation succeeded.
+    closed_loop: TimingStats = TimingStats()
 
 
 class DetectionTimingStatsResponse(BaseModel):

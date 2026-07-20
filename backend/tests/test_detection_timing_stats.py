@@ -28,14 +28,17 @@ def _event(node_id, seen_offset_s, ingest_offset_s, event_type="modified"):
     )
 
 
-def _remediation(node_id, duration_s):
+def _remediation(node_id, duration_s, detection_event_id=None, outcome=None,
+                 triggered_offset_s=0):
     return RemediationEvent(
-        id=f"r-{node_id}-{duration_s}",
+        id=f"r-{node_id}-{duration_s}-{detection_event_id}",
         node_id=node_id,
         puppet_job_id="job",
-        triggered_at=T0,
-        completed_at=None if duration_s is None else T0 + timedelta(seconds=duration_s),
-        outcome="pending" if duration_s is None else "success",
+        triggered_at=T0 + timedelta(seconds=triggered_offset_s),
+        completed_at=(None if duration_s is None
+                      else T0 + timedelta(seconds=triggered_offset_s + duration_s)),
+        outcome=outcome or ("pending" if duration_s is None else "success"),
+        detection_event_id=detection_event_id,
     )
 
 
@@ -92,6 +95,29 @@ async def test_stats_bucketed_by_os_family():
     assert by_fam["RedHat"]["detection"]["max_s"] == 1.0
     assert out["overall"]["detection"]["count"] == 3
     assert out["overall"]["enforcement"]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_closed_loop_spans_observation_to_successful_remediation():
+    nodes = [Node(id="deb", hostname="deb1", ip="10.0.0.1", os_family="Debian")]
+    # Change observed at t=0; remediation triggered at t=10 (after ingest +
+    # re-scan), finished 50s later → closed loop = 60s end-to-end.
+    trigger = _event("deb", 0, 2)
+    events = [trigger]
+    remediations = [
+        _remediation("deb", 50, detection_event_id=trigger.id, triggered_offset_s=10),
+        # Excluded from the closed loop: failed, unlinked, and ghost-event runs.
+        _remediation("deb", 5, detection_event_id=trigger.id, outcome="failed"),
+        _remediation("deb", 7),
+        _remediation("deb", 9, detection_event_id="no-such-event"),
+    ]
+
+    out = await _uc(nodes, events, remediations).execute()
+
+    fam = out["families"][0]
+    assert fam["closed_loop"] == {"count": 1, "min_s": 60.0, "max_s": 60.0, "avg_s": 60.0}
+    assert fam["enforcement"]["count"] == 4          # durations still all count
+    assert out["overall"]["closed_loop"]["count"] == 1
 
 
 @pytest.mark.asyncio

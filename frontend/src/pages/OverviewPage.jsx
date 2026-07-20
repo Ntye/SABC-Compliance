@@ -56,7 +56,7 @@ function ResponseTimesCard({ t }) {
 
   const rows = stats?.families || []
   const overall = stats?.overall
-  const hasAny = rows.some((r) => r.detection.count > 0 || r.enforcement.count > 0)
+  const hasAny = rows.some((r) => r.detection.count > 0 || r.enforcement.count > 0 || r.closed_loop?.count > 0)
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4">
@@ -81,9 +81,13 @@ function ResponseTimesCard({ t }) {
                     className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50 cursor-help">{t('dash.rtEnforcement')}</th>
                 <th rowSpan={2} title={t('dash.rtSamplesEnforcementHint')}
                     className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom cursor-help">{t('dash.rtSamples')}</th>
+                <th colSpan={3} title={t('dash.rtClosedLoopHint')}
+                    className="text-center px-4 py-1.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-l border-gray-50 cursor-help">{t('dash.rtClosedLoop')}</th>
+                <th rowSpan={2} title={t('dash.rtSamplesClosedLoopHint')}
+                    className="text-right px-4 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider align-bottom cursor-help">{t('dash.rtSamples')}</th>
               </tr>
               <tr className="border-b border-gray-100">
-                {['rtMin', 'rtAvg', 'rtMax', 'rtMin', 'rtAvg', 'rtMax'].map((k, i) => (
+                {['rtMin', 'rtAvg', 'rtMax', 'rtMin', 'rtAvg', 'rtMax', 'rtMin', 'rtAvg', 'rtMax'].map((k, i) => (
                   <th key={i} title={t(`dash.${k}Hint`)}
                       className={`text-right px-4 py-1.5 text-[10px] font-medium text-gray-400 uppercase tracking-wider cursor-help ${i % 3 === 0 ? 'border-l border-gray-50' : ''}`}>
                     {t(`dash.${k}`)}
@@ -102,6 +106,8 @@ function ResponseTimesCard({ t }) {
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.detection.count || '—'}</td>
                   <TimingCells stats={r.enforcement} />
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.enforcement.count || '—'}</td>
+                  <TimingCells stats={r.closed_loop} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{r.closed_loop?.count || '—'}</td>
                 </tr>
               ))}
               {overall && rows.length > 1 && (
@@ -111,6 +117,8 @@ function ResponseTimesCard({ t }) {
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.detection.count || '—'}</td>
                   <TimingCells stats={overall.enforcement} />
                   <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.enforcement.count || '—'}</td>
+                  <TimingCells stats={overall.closed_loop} />
+                  <td className="px-4 py-2.5 text-right text-[11px] text-gray-400">{overall.closed_loop?.count || '—'}</td>
                 </tr>
               )}
             </tbody>

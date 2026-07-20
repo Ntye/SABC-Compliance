@@ -675,6 +675,13 @@ class GetDetectionTimingStatsUseCase:
     Enforcement time — how long a closed-loop correction took: the gap between
     ``triggered_at`` and ``completed_at`` on finished remediation events
     (outcome success/failed/skipped; pending runs have no duration yet).
+
+    Closed-loop time — the end-to-end figure: from the agent observing a
+    genuine change (event ``timestamp``) to its SUCCESSFUL automatic
+    correction (the linked remediation's ``completed_at``). This spans
+    detection + ingest + re-scan/assessment + scoped enforcement, so it is
+    the platform's real time-to-repair; only remediations that link back to
+    their triggering event (``detection_event_id``) and succeeded count.
     """
 
     _SAMPLE_LIMIT = 500
@@ -706,8 +713,11 @@ class GetDetectionTimingStatsUseCase:
             for n in await self._nodes.find_all({})
         }
 
+        events = await self._repo.find_events(limit=self._SAMPLE_LIMIT)
+        event_by_id = {e.id: e for e in events}
+
         detect: dict[str, list[float]] = {}
-        for e in await self._repo.find_events(limit=self._SAMPLE_LIMIT):
+        for e in events:
             if e.event_type == "baseline" or e.created_at is None or e.timestamp is None:
                 continue
             if e.node_id not in family_by_node:
@@ -718,29 +728,42 @@ class GetDetectionTimingStatsUseCase:
             detect.setdefault(family_by_node[e.node_id], []).append(delta)
 
         enforce: dict[str, list[float]] = {}
+        closed: dict[str, list[float]] = {}
         for r in await self._compliance.find_all_remediations(self._SAMPLE_LIMIT):
             if r.completed_at is None or r.triggered_at is None:
                 continue
             if r.node_id not in family_by_node:
                 continue
+            fam = family_by_node[r.node_id]
             delta = (r.completed_at - r.triggered_at).total_seconds()
-            if delta < 0:
-                continue
-            enforce.setdefault(family_by_node[r.node_id], []).append(delta)
+            if delta >= 0:
+                enforce.setdefault(fam, []).append(delta)
 
-        families = sorted(set(detect) | set(enforce))
+            # Closed loop: observed on the node → successfully corrected.
+            if r.outcome != "success" or not r.detection_event_id:
+                continue
+            ev = event_by_id.get(r.detection_event_id)
+            if ev is None or ev.timestamp is None:
+                continue
+            loop_delta = (r.completed_at - ev.timestamp).total_seconds()
+            if loop_delta >= 0:
+                closed.setdefault(fam, []).append(loop_delta)
+
+        families = sorted(set(detect) | set(enforce) | set(closed))
         return {
             "families": [
                 {
                     "os_family": fam,
                     "detection": self._stats(detect.get(fam, [])),
                     "enforcement": self._stats(enforce.get(fam, [])),
+                    "closed_loop": self._stats(closed.get(fam, [])),
                 }
                 for fam in families
             ],
             "overall": {
                 "detection": self._stats([s for v in detect.values() for s in v]),
                 "enforcement": self._stats([s for v in enforce.values() for s in v]),
+                "closed_loop": self._stats([s for v in closed.values() for s in v]),
             },
         }
 
