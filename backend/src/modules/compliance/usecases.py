@@ -963,6 +963,7 @@ class EnforceReferentialUseCase:
         get_group_uc=None,            # GetNodeGroupUseCase
         notification_repo=None,       # INotificationRepository
         collect_uc=None,              # CollectNodeComplianceUseCase
+        compliance_repo=None,         # IComplianceRepository (suppression window)
     ) -> None:
         self._nodes = node_repo
         self._start = start_job_uc
@@ -972,6 +973,7 @@ class EnforceReferentialUseCase:
         self._get_group = get_group_uc
         self._notifications = notification_repo
         self._collect = collect_uc
+        self._compliance = compliance_repo
         # control_id → puppet class key, cached per profile across a run.
         self._key_maps: dict[str, dict[str, str]] = {}
 
@@ -1028,16 +1030,43 @@ class EnforceReferentialUseCase:
                 skipped += 1
                 continue
 
-            job = await self._start.execute({
-                "type": "enforce_referential",
-                "node_id": nid,
-                "playbook": self.PLAYBOOK,
-                "extra_vars": {
-                    "sabc_module_src": self._module_src,
-                    "sabc_controls": keys,
-                },
-                "on_complete": on_complete or (self._on_complete if notify_on_complete else None),
-            })
+            # Open a remediation window BEFORE the job launches so the
+            # detection feedback-storm guard (rule (a)) suppresses the
+            # enforcement's own corrective writes — puppet apply rewriting
+            # pam.d/sshd_config/sudoers must not surface as adversarial drift,
+            # re-scan mid-apply, and trigger the closed loop against ourselves.
+            # Skipped when the caller passed on_complete: the closed loop's
+            # scoped path already opened (and closes) its own window.
+            rem: RemediationEvent | None = None
+            if on_complete is None and self._compliance is not None:
+                rem = RemediationEvent(
+                    id=str(uuid.uuid4()),
+                    node_id=nid,
+                    puppet_job_id="enforce-referential",
+                    triggered_at=datetime.utcnow(),
+                )
+                await self._compliance.save_remediation(rem)
+
+            base_cb = on_complete or (self._on_complete if notify_on_complete else None)
+            callback = self._close_window_then(rem, base_cb, len(keys)) if rem else base_cb
+
+            try:
+                job = await self._start.execute({
+                    "type": "enforce_referential",
+                    "node_id": nid,
+                    "playbook": self.PLAYBOOK,
+                    "extra_vars": {
+                        "sabc_module_src": self._module_src,
+                        "sabc_controls": keys,
+                    },
+                    "on_complete": callback,
+                })
+            except Exception:
+                # The window must never outlive a job that failed to launch —
+                # left pending it would suppress the node's events forever.
+                if rem is not None:
+                    await self._close_window(rem, "failed", 0)
+                raise
             jobs.append({"node_id": nid, "hostname": node.hostname,
                          "status": "launched", "job_id": job.id,
                          "controls": len(keys)})
@@ -1050,6 +1079,28 @@ class EnforceReferentialUseCase:
             "skipped": skipped,
             "jobs": jobs,
         }
+
+    # ── Suppression window plumbing ───────────────────────────────────────────
+
+    def _close_window_then(self, rem: RemediationEvent, base_cb, control_count: int):
+        """Completion callback that closes the suppression window first (the
+        job runner fires it on every terminal status), then chains the caller's
+        callback (e.g. the Tiers-page notify-and-scan)."""
+        async def _cb(job, node) -> None:
+            outcome = "success" if getattr(job, "status", None) == "success" else "failed"
+            await self._close_window(rem, outcome, control_count if outcome == "success" else 0)
+            if base_cb is not None:
+                await base_cb(job, node)
+        return _cb
+
+    async def _close_window(self, rem: RemediationEvent, outcome: str, fixed: int) -> None:
+        rem.outcome = outcome
+        rem.resources_fixed = fixed
+        rem.completed_at = datetime.utcnow()
+        try:
+            await self._compliance.update_remediation(rem)
+        except Exception as exc:
+            logger.error("Failed to close enforcement window %s: %s", rem.id, exc)
 
     # ── Tiers-page chain: notify when the job lands, then scan + notify ───────
 

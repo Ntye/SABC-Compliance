@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import pytest
@@ -268,6 +268,24 @@ async def test_suppressed_event_does_not_scan() -> None:
     assert result["status"] == "suppressed"
     assert collect.calls == []
     assert remediate.calls == []
+
+
+@pytest.mark.asyncio
+async def test_expired_pending_window_does_not_suppress() -> None:
+    # A window whose job died without closing it (backend restart, SIGKILL)
+    # must not suppress the node's genuine events forever: past the max age
+    # rule (a) ignores it and the event is treated as live drift.
+    stale = RemediationEvent(
+        id="rem-stale", node_id="node-1", puppet_job_id="enforce-referential",
+        triggered_at=datetime.utcnow() - timedelta(hours=3), outcome="pending",
+    )
+    uc, repo, _, bus, _ = make_uc(pending=stale)
+
+    result = await run_and_settle(uc, payload())
+
+    assert result["status"] == "accepted"
+    assert repo.events[0].suppressed is False
+    assert any(name == "compliance.violation_detected" for name, _ in bus.published)
 
 
 # ── Rule (b): puppet_running ──────────────────────────────────────────────────

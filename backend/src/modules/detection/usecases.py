@@ -62,6 +62,11 @@ _VALID_EVENT_TYPES = {"created", "modified", "deleted", "moved", "baseline", "he
 # means disabled — detection observes and scans but never auto-remediates.
 DETECTION_CLOSED_LOOP_CONFIG_KEY = "detection_closed_loop_enabled"
 
+# A remediation window (outcome=pending) older than this is treated as expired
+# by suppression rule (a): a job that died without closing its window (backend
+# restart, SIGKILL) must not suppress the node's genuine events forever.
+REMEDIATION_WINDOW_MAX_AGE_S = 2 * 60 * 60
+
 
 def _as_bool(raw: Any) -> bool:
     return isinstance(raw, str) and raw.strip().lower() in {"true", "1", "yes", "on"}
@@ -298,10 +303,14 @@ class ReceiveDetectionEventUseCase:
 
         # (a) active remediation window?
         pending = await self._compliance.find_pending_remediation(node.id)
+        if pending is not None and self._window_expired(pending):
+            pending = None
         if pending is None and node.id in self._inflight:
             # In-process race guard: a trigger was just scheduled but its
             # RemediationEvent row may not be committed yet.
             pending = await self._compliance.find_pending_remediation(node.id)
+            if pending is not None and self._window_expired(pending):
+                pending = None
             if pending is None:
                 return {"suppressed": True, "reason": "remediation_pending",
                         "remediation_event_id": None}
@@ -319,6 +328,13 @@ class ReceiveDetectionEventUseCase:
 
         # (d) genuine drift.
         return {"suppressed": False, "reason": None}
+
+    @staticmethod
+    def _window_expired(pending: RemediationEvent) -> bool:
+        triggered = getattr(pending, "triggered_at", None)
+        if triggered is None:
+            return False
+        return (datetime.utcnow() - triggered).total_seconds() > REMEDIATION_WINDOW_MAX_AGE_S
 
     # ── Closed-loop gate ──────────────────────────────────────────────────────
 
@@ -602,6 +618,12 @@ class ListDetectionEventsUseCase:
         limit = max(1, min(int(limit or 100), 500))
         events = await self._repo.find_events(node_id=node_id, limit=limit)
         hostnames = {n.id: n.hostname for n in await self._nodes.find_all({})}
+
+        # Events from nodes since removed from the registry stay in the DB as
+        # evidence but are dropped from the operator view: nothing can be done
+        # about them, and left in they show a raw node UUID and inflate the
+        # active-alerts count with alerts no one can act on or resolve.
+        events = [e for e in events if e.node_id in hostnames]
 
         # Map detection_event_id → remediation outcome so a corrected change is
         # not reported as an open alert.

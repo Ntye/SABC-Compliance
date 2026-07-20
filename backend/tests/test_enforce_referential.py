@@ -100,7 +100,16 @@ class FakeCollect:
         ]}
 
 
-def build(nodes, groups=None, group_members=None, notification_repo=None, collect_uc=None):
+class FakeComplianceRepo:
+    """Records the enforcement suppression windows opened and closed."""
+    def __init__(self):
+        self.saved, self.updated = [], []
+    async def save_remediation(self, rem): self.saved.append(rem)
+    async def update_remediation(self, rem): self.updated.append(rem)
+
+
+def build(nodes, groups=None, group_members=None, notification_repo=None,
+          collect_uc=None, compliance_repo=None):
     node_repo = FakeNodeRepo(nodes)
     resolver = ScanPlanResolver(node_repo, FakeGroupRepo(groups or []),
                                 FakeTierRepo(), FakeProfileRepo(),
@@ -111,6 +120,7 @@ def build(nodes, groups=None, group_members=None, notification_repo=None, collec
         profile_repo=FakeProfileRepo(), module_src="/app/puppet/modules/sabc_hardening",
         get_group_uc=FakeGetGroup(group_members or {}),
         notification_repo=notification_repo, collect_uc=collect_uc,
+        compliance_repo=compliance_repo,
     )
     return uc, start
 
@@ -245,6 +255,69 @@ class TestTiersPageNotificationChain:
         assert [n.kind for n in notif.saved] == ["enforcement", "scan"]
         assert notif.saved[1].severity == "error"
         assert "unreachable" in notif.saved[1].message
+
+
+class TestSuppressionWindow:
+    """An enforcement job's own writes on the node (puppet apply rewriting
+    pam.d, sshd_config, sudoers…) must be suppressed by detection rule (a):
+    the use case opens a pending RemediationEvent before the job launches and
+    closes it when the job reaches a terminal state."""
+
+    async def test_window_opened_before_launch_and_closed_on_success(self) -> None:
+        comp = FakeComplianceRepo()
+        uc, start = build([node("n1", "Debian")], compliance_repo=comp)
+
+        result = await uc.execute(node_id="n1")
+
+        assert len(comp.saved) == 1
+        rem = comp.saved[0]
+        assert rem.node_id == "n1" and rem.outcome == "pending"
+        assert comp.updated == []                       # still open while job runs
+
+        cb = start.started[0]["on_complete"]
+        assert cb is not None
+        await cb(Job(id="j1", status="success", exit_code=0, node_id="n1"), None)
+
+        assert len(comp.updated) == 1
+        closed = comp.updated[0]
+        assert closed.outcome == "success" and closed.completed_at is not None
+        assert closed.resources_fixed == result["jobs"][0]["controls"]
+
+    async def test_window_closed_failed_on_job_failure(self) -> None:
+        comp = FakeComplianceRepo()
+        uc, start = build([node("n1", "Debian")], compliance_repo=comp)
+        await uc.execute(node_id="n1")
+
+        await start.started[0]["on_complete"](
+            Job(id="j1", status="failed", exit_code=2, node_id="n1"), None)
+
+        assert comp.updated[0].outcome == "failed"
+        assert comp.updated[0].resources_fixed == 0
+
+    async def test_no_window_when_caller_manages_its_own(self) -> None:
+        # The closed loop's scoped path opens its own window and passes
+        # on_complete to close it — a second one here would be a duplicate.
+        comp = FakeComplianceRepo()
+        uc, start = build([node("n1", "Debian")], compliance_repo=comp)
+
+        async def caller_cb(job, n): ...
+        await uc.execute(node_id="n1", on_complete=caller_cb)
+
+        assert comp.saved == []
+        assert start.started[0]["on_complete"] is caller_cb
+
+    async def test_window_close_chains_the_notify_callback(self) -> None:
+        comp = FakeComplianceRepo()
+        notif = FakeNotificationRepo()
+        uc, start = build([node("n1", "Debian")],
+                          compliance_repo=comp, notification_repo=notif)
+        await uc.execute(node_id="n1", notify_on_complete=True)
+
+        await start.started[0]["on_complete"](
+            Job(id="j1", status="failed", exit_code=2, node_id="n1"), None)
+
+        assert comp.updated[0].outcome == "failed"      # window closed first
+        assert [n.kind for n in notif.saved] == ["enforcement"]  # then notified
 
 
 class TestValidation:

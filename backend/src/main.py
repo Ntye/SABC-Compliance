@@ -439,6 +439,9 @@ async def lifespan(app: FastAPI):
         # a verification scan and notify its outcome (header bell).
         notification_repo=notification_repo,
         collect_uc=collect_uc,
+        # Suppression window: the enforcement job's own writes on the node must
+        # not surface as detection alerts while it runs.
+        compliance_repo=compliance_repo,
     )
     compliance_routes.set_use_cases(
         summary_uc=GetComplianceSummaryUseCase(compliance_repo),
