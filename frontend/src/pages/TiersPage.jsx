@@ -25,6 +25,58 @@ function scopeLabel(tier, t) {
   return t('tiers.level1Only')
 }
 
+// Node-count cell: hovering the number reveals which nodes are on the tier.
+// The popover is portaled to <body> with a fixed position so the table card's
+// overflow-hidden rounding cannot clip it.
+const MAX_POPOVER_NODES = 12
+
+function NodesHoverCell({ count, tierNodes, t }) {
+  const [pos, setPos] = useState(null)
+
+  if (!count) return <span className="text-gray-600">0</span>
+
+  const shown = tierNodes.slice(0, MAX_POPOVER_NODES)
+  const extra = tierNodes.length - shown.length
+
+  return (
+    <>
+      <span
+        onMouseEnter={(e) => {
+          const r = e.currentTarget.getBoundingClientRect()
+          setPos({ x: r.left, y: r.bottom + 6 })
+        }}
+        onMouseLeave={() => setPos(null)}
+        className="text-gray-700 cursor-help underline decoration-dotted decoration-gray-300 underline-offset-2"
+      >
+        {count}
+      </span>
+      {pos && createPortal(
+        <div
+          style={{ position: 'fixed', left: pos.x, top: pos.y }}
+          className="z-50 bg-white rounded-lg border border-gray-200 shadow-lg px-3 py-2.5 min-w-[200px] max-w-[300px] pointer-events-none"
+        >
+          <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+            {t('tiers.nodesOnTier')}
+          </div>
+          <ul className="space-y-1">
+            {shown.map((n) => (
+              <li key={n.id} className="flex items-center gap-2 text-[12px] text-gray-700">
+                <Server size={11} className="text-gray-300 shrink-0" />
+                <span className="truncate font-medium">{n.hostname}</span>
+                {n.os_family && <span className="text-[10px] text-gray-400 shrink-0">{n.os_family}</span>}
+              </li>
+            ))}
+          </ul>
+          {extra > 0 && (
+            <div className="text-[11px] text-gray-400 mt-1.5">{t('tiers.moreNodes', { n: extra })}</div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 // ── Create / edit modal ───────────────────────────────────────────────────────
 
 function TierFormModal({ tier, onClose, onSaved }) {
@@ -179,11 +231,13 @@ export default function TiersPage() {
 
   useEffect(() => { load() }, [])
 
-  const nodeCountByTier = useMemo(() => {
+  // tier_id → member nodes (unassigned nodes default to Tier 1, matching the
+  // backend's enrolment default). Drives both the count and its hover popover.
+  const nodesByTier = useMemo(() => {
     const m = {}
     for (const n of nodes) {
       const tid = n.tier_id || 'tier-1'
-      m[tid] = (m[tid] || 0) + 1
+      ;(m[tid] = m[tid] || []).push(n)
     }
     return m
   }, [nodes])
@@ -335,7 +389,13 @@ export default function TiersPage() {
                       {tier.is_system ? t('tiers.system') : t('tiers.custom')}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{nodeCountByTier[tier.id] || 0}</td>
+                  <td className="px-4 py-3">
+                    <NodesHoverCell
+                      count={(nodesByTier[tier.id] || []).length}
+                      tierNodes={nodesByTier[tier.id] || []}
+                      t={t}
+                    />
+                  </td>
                   <td className="px-4 py-3">
                     {tier.is_system ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-gray-300" title={t('tiers.systemImmutable')}>
